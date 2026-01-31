@@ -252,7 +252,7 @@ export function MarkdownEditor() {
           </ReactFlowProvider>
         </div>
 
-        {/* 右侧面板 - 预览和编辑 */}
+        {/* 右侧面板 - 预览 */}
         <div
           className={`absolute right-0 top-0 bottom-0 border-l transition-all duration-300 ${
             rightCollapsed ? 'w-0 overflow-hidden opacity-0' : 'w-[480px] opacity-100'
@@ -279,25 +279,11 @@ export function MarkdownEditor() {
             </Button>
           )}
 
-          {/* 右侧内容 */}
+          {/* 右侧内容 - Markdown预览 */}
           <div className="flex h-full flex-col">
-            {/* Markdown预览 */}
             <div className="flex-1 overflow-auto">
               <MarkdownPreview />
             </div>
-
-            {/* 节点编辑面板 - 当有选中节点时显示 */}
-            {selectedNodeId && (
-              <div
-                className="border-t"
-                style={{
-                  borderColor: safeThemeConfig.border,
-                  maxHeight: '40%',
-                }}
-              >
-                <NodeEditPanel />
-              </div>
-            )}
           </div>
         </div>
 
@@ -317,6 +303,9 @@ export function MarkdownEditor() {
             <ChevronLeft className="h-3 w-3" />
           </Button>
         )}
+
+        {/* 节点编辑面板 - 独立显示，不受右侧面板折叠影响 */}
+        {selectedNodeId && <NodeEditPanel />}
       </div>
     </div>
   )

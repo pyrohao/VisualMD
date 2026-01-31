@@ -64,6 +64,8 @@ interface FileSystemStore {
   saveFile: (id: string, content: string) => void
   /** 标记文件为已保存 */
   markFileAsSaved: (id: string) => void
+  /** 标记文件为已修改 */
+  markFileAsModified: (id: string) => void
   /** 重命名文件 */
   renameFile: (id: string, newName: string) => void
   /** 删除文件 */
@@ -242,6 +244,15 @@ export const useFileSystemStore = create<FileSystemStore>()(
           set({
             files: files.map(f =>
               f.id === id ? { ...f, isModified: false } : f
+            ),
+          })
+        },
+        
+        markFileAsModified: (id: string) => {
+          const { files } = get()
+          set({
+            files: files.map(f =>
+              f.id === id ? { ...f, isModified: true, updatedAt: Date.now() } : f
             ),
           })
         },

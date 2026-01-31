@@ -376,7 +376,6 @@ export function FileSidebar() {
       {/* 文件列表 */}
       <div className="flex-1 overflow-y-auto px-1">
         {/* 等待客户端挂载完成后再渲染，避免 hydration 不匹配 */}
-        {(() => { console.log('渲染文件列表 - mounted:', mounted, 'folders:', sortedFolderList.length, 'rootFiles:', rootFiles.length); return null; })()}
         {mounted && (
           <>
             {/* 文件夹列表 */}

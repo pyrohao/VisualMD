@@ -149,8 +149,8 @@ function MarkdownNodeComponent(props: MarkdownNodeProps) {
           ? [`#1c3a5f`, `#1c3a5f`, `#064e3b`, `#78350f`, `#4c1d95`, `#7c2d12`, `#374151`][level] || '#1c3a5f'
           : [`#eff6ff`, `#eff6ff`, `#ecfdf5`, `#fffbeb`, `#f5f3ff`, `#fff7ed`, `#f9fafb`][level] || '#eff6ff')
 
-  // 虚拟根节点宽度更宽以容纳元数据
-  const nodeWidth = isVirtual ? 'w-[260px]' : 'w-[180px]'
+  // 统一节点宽度
+  const nodeWidth = 'w-[180px]'
 
   return (
     <div
@@ -181,14 +181,33 @@ function MarkdownNodeComponent(props: MarkdownNodeProps) {
       <div className="px-3 py-2.5">
         {/* 标题行 */}
         <div className="flex items-center gap-2">
-          {/* 虚拟根节点显示文档图标 */}
+          {/* 虚拟根节点显示文档图标和折叠按钮 */}
           {isVirtual ? (
-            <div 
-              className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full"
-              style={{ backgroundColor: borderColor }}
-            >
-              <FileText className="w-3.5 h-3.5 text-white" />
-            </div>
+            <>
+              <div 
+                className="flex-shrink-0 w-5 h-5 flex items-center justify-center rounded-full"
+                style={{ backgroundColor: borderColor }}
+              >
+                <FileText className="w-3 h-3 text-white" />
+              </div>
+              {/* 虚拟根节点也添加折叠按钮 */}
+              {Object.keys(metadata).length > 0 && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setIsContentExpanded(!isContentExpanded)
+                  }}
+                  className="flex-shrink-0 w-5 h-5 flex items-center justify-center rounded hover:bg-black/10 transition-colors"
+                  title={isContentExpanded ? '收起内容' : '展开内容'}
+                >
+                  {isContentExpanded ? (
+                    <ChevronDown className="w-4 h-4" style={{ color: themeConfig.muted }} />
+                  ) : (
+                    <ChevronRight className="w-4 h-4" style={{ color: themeConfig.muted }} />
+                  )}
+                </button>
+              )}
+            </>
           ) : (
             <>
               {/* 序号指示器 - 可点击编辑 */}
@@ -255,51 +274,31 @@ function MarkdownNodeComponent(props: MarkdownNodeProps) {
               )}
             </>
           )}
-          {/* 标题文本 - 虚拟根节点显示更多字符 */}
+          {/* 标题文本 */}
           <h3
-            className={cn(
-              "font-semibold flex-1 truncate",
-              isVirtual ? "text-base" : "text-lg"
-            )}
+            className="font-semibold flex-1 truncate text-lg"
             style={{ color: themeConfig.heading }}
             title={label}
           >
-            {isVirtual 
-              ? (label || '未命名文档')
-              : (label 
-                ? (label.length > 8 ? label.slice(0, 8) + '...' : label)
-                : '未命名')}
+            {label 
+              ? (label.length > 8 ? label.slice(0, 8) + '...' : label)
+              : '未命名'}
           </h3>
         </div>
 
-        {/* 虚拟根节点显示 YAML 元数据 */}
-        {isVirtual && Object.keys(metadata).length > 0 && (
-          <div className="mt-2 space-y-1">
-            {Object.entries(metadata).slice(0, 3).map(([key, value]) => (
-              <div key={key} className="flex items-center gap-1 text-xs">
-                <span 
-                  className="font-medium truncate max-w-[80px]"
-                  style={{ color: themeConfig.muted }}
-                >
-                  {key}:
-                </span>
-                <span 
-                  className="truncate flex-1"
-                  style={{ color: themeConfig.text }}
-                >
-                  {String(value).length > 15 
-                    ? String(value).slice(0, 15) + '...' 
-                    : String(value)}
-                </span>
-              </div>
+        {/* 虚拟根节点显示 YAML 元数据 - 根据展开状态显示 */}
+        {isVirtual && isContentExpanded && Object.keys(metadata).length > 0 && (
+          <div className="mt-1.5 text-xs line-clamp-2 break-words" style={{ color: themeConfig.text }}>
+            {Object.entries(metadata).slice(0, 2).map(([key, value], index, arr) => (
+              <span key={key}>
+                <span style={{ color: themeConfig.muted }}>{key}:</span> {String(value).length > 20 
+                  ? String(value).slice(0, 20) + '...' 
+                  : String(value)}
+                {index < arr.length - 1 && ' | '}
+              </span>
             ))}
-            {Object.keys(metadata).length > 3 && (
-              <div 
-                className="text-xs italic"
-                style={{ color: themeConfig.muted }}
-              >
-                +{Object.keys(metadata).length - 3} 更多字段...
-              </div>
+            {Object.keys(metadata).length > 2 && (
+              <span style={{ color: themeConfig.muted }}> +{Object.keys(metadata).length - 2}</span>
             )}
           </div>
         )}
@@ -323,14 +322,6 @@ function MarkdownNodeComponent(props: MarkdownNodeProps) {
         className="!w-3 !h-3 !border-2 !border-white"
         style={{ backgroundColor: borderColor }}
       />
-
-      {/* 选中指示器 */}
-      {selected && (
-        <div
-          className="absolute -top-1 -right-1 w-3 h-3 rounded-full border-2 border-white"
-          style={{ backgroundColor: themeConfig.accent }}
-        />
-      )}
 
       {/* 断开状态指示器 */}
       {isDetached && (

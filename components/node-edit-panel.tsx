@@ -14,14 +14,15 @@
  * 5. 现代简约UI风格
  */
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { X, Save, Trash2, Type, FileText, Info, FileJson, Plus, Trash } from 'lucide-react'
 import { Button } from './ui/button'
-import { Input } from './ui/input'
-import { Textarea } from './ui/textarea'
-import { ScrollArea } from './ui/scroll-area'
 import { useDocumentStore } from '@/stores/documentStore'
 import { useThemeStore } from '@/stores/themeStore'
+import { useFileSystemStore } from '@/stores/fileSystemStore'
+import { ScrollArea } from './ui/scroll-area'
+import { Input } from './ui/input'
+import { Textarea } from './ui/textarea'
 import { findNodeInTree } from '@/lib/flow-helpers'
 import { toast } from '@/hooks/use-toast'
 import { ConfirmDialog } from './ui/confirm-dialog'
@@ -33,11 +34,13 @@ export function NodeEditPanel() {
     selectNode,
     updateNode,
     deleteNode,
-    updateMetadata
+    updateMetadata,
+    markAsSaved
   } = useDocumentStore()
 
   const { getThemeConfig } = useThemeStore()
   const themeConfig = getThemeConfig()
+  const { markFileAsSaved, currentFileId, markFileAsModified } = useFileSystemStore()
 
   const [title, setTitle] = useState('')
   const [content, setContent] = useState('')
@@ -82,36 +85,119 @@ export function NodeEditPanel() {
     }
   }, [selectedNodeId, selectedNode, document?.metadata])
 
-  // 保存修改
-  const handleSave = useCallback(() => {
+  // 自动保存的定时器引用
+  const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null)
+  // 使用 ref 存储最新的 metadataEntries，避免循环依赖
+  const metadataEntriesRef = useRef(metadataEntries)
+  metadataEntriesRef.current = metadataEntries
+
+  // 执行保存
+  const doSave = useCallback(() => {
     if (!selectedNodeId) return
 
     // 虚拟根节点保存元数据
     if (isVirtualRoot) {
       const metadata: Record<string, string> = {}
-      metadataEntries.forEach(({ key, value }) => {
+      metadataEntriesRef.current.forEach(({ key, value }) => {
         if (key.trim()) {
           metadata[key.trim()] = value
         }
       })
       updateMetadata(metadata)
       updateNode(selectedNodeId, { title: title.trim() || '未命名文档' })
+    } else {
+      // 普通节点保存
+      const trimmedTitle = title.trim()
+      if (trimmedTitle) {
+        updateNode(selectedNodeId, { title: trimmedTitle, content: content || undefined })
+      }
+    }
+
+    // 标记为已保存
+    markAsSaved()
+    // 同时标记文件系统中的文件为已保存
+    if (currentFileId) {
+      markFileAsSaved(currentFileId)
+    }
+  }, [selectedNodeId, title, content, updateNode, isVirtualRoot, updateMetadata, markAsSaved, markFileAsSaved, currentFileId])
+
+  // 使用 ref 追踪上一次的值，用于比较是否真的发生了变化
+  const prevTitleRef = useRef(title)
+  const prevContentRef = useRef(content)
+  const prevMetadataRef = useRef(metadataEntries)
+  const prevNodeIdRef = useRef(selectedNodeId)
+  
+  // 自动保存 - 当输入内容变化时延迟保存
+  useEffect(() => {
+    if (!selectedNodeId) return
+
+    // 如果切换了节点，重置 ref 并跳过本次检查
+    if (selectedNodeId !== prevNodeIdRef.current) {
+      prevNodeIdRef.current = selectedNodeId
+      prevTitleRef.current = title
+      prevContentRef.current = content
+      prevMetadataRef.current = metadataEntries
       return
     }
 
-    // 标题判空验证
-    const trimmedTitle = title.trim()
-    if (!trimmedTitle) {
-      toast({
-        title: '节点标题不能为空',
-        description: '请输入标题内容',
-        variant: 'destructive',
-      })
+    // 检查内容是否真的发生了变化
+    const titleChanged = title !== prevTitleRef.current
+    const contentChanged = content !== prevContentRef.current
+    const metadataChanged = JSON.stringify(metadataEntries) !== JSON.stringify(prevMetadataRef.current)
+    
+    // 更新 ref
+    prevTitleRef.current = title
+    prevContentRef.current = content
+    prevMetadataRef.current = metadataEntries
+    
+    // 如果没有变化，不触发保存
+    if (!titleChanged && !contentChanged && !metadataChanged) {
       return
     }
 
-    updateNode(selectedNodeId, { title: trimmedTitle, content: content || undefined })
-  }, [selectedNodeId, title, content, updateNode, isVirtualRoot, metadataEntries, updateMetadata])
+    // 标记文件为已修改（显示左侧边栏的未保存标记）
+    if (currentFileId) {
+      markFileAsModified(currentFileId)
+    }
+
+    // 清除之前的定时器
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current)
+    }
+
+    // 设置新的定时器，800ms 后自动保存
+    autoSaveTimerRef.current = setTimeout(() => {
+      doSave()
+    }, 800)
+
+    return () => {
+      if (autoSaveTimerRef.current) {
+        clearTimeout(autoSaveTimerRef.current)
+      }
+    }
+  }, [title, content, metadataEntries, selectedNodeId, doSave, currentFileId, markFileAsModified])
+
+  // 组件卸载时立即保存
+  useEffect(() => {
+    return () => {
+      if (autoSaveTimerRef.current) {
+        clearTimeout(autoSaveTimerRef.current)
+        doSave()
+      }
+    }
+  }, [])
+
+  // 手动保存（用于保存按钮）
+  const handleSave = useCallback(() => {
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current)
+    }
+    doSave()
+    toast({
+      title: '已保存',
+      description: '节点内容已更新',
+    })
+  }, [doSave])
   
   // 添加元数据字段
   const handleAddMetadata = useCallback(() => {
