@@ -35,6 +35,8 @@ export interface TreeNode {
     x: number
     y: number
   }
+  /** 文档原始顺序（用于MD渲染排序） */
+  documentOrder?: number
 }
 
 /**

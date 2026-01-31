@@ -41,13 +41,15 @@ export function generateFrontMatter(metadata: DocumentMetadata): string {
 }
 
 /**
- * 步骤2：深度优先遍历生成内容（核心算法）
+ * 步骤2：深度优先遍历生成内容（核心算法）- 优化版本
  * 对应技术文档3.2节 - 步骤2
  * 
- * 算法：DFS生成Markdown
+ * 算法：DFS生成Markdown，子节点按children数组顺序渲染
  * 时间复杂度：O(n)，n为节点数量
  * 
- * 注意：断开的节点（isDetached=true）不会渲染到Markdown中
+ * 注意：
+ * 1. 断开的节点（isDetached=true）不会渲染到Markdown中
+ * 2. 子节点按children数组顺序渲染，用户可通过调整顺序控制MD输出
  * 
  * @param node 当前节点
  * @param currentLevel 当前层级（用于计算#数量）
@@ -73,7 +75,8 @@ export function generateContent(node: TreeNode, currentLevel: number = 1): strin
     }
   }
 
-  // 递归处理每个子节点
+  // 递归处理每个子节点，按children数组顺序
+  // 用户可通过上移/下移节点来调整渲染顺序
   for (const child of node.children) {
     result += generateContent(child, currentLevel + 1)
   }

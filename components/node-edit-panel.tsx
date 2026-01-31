@@ -15,7 +15,7 @@
  */
 
 import { useEffect, useState, useCallback } from 'react'
-import { X, Save, Trash2, Type, FileText, Info } from 'lucide-react'
+import { X, Save, Trash2, Type, FileText, Info, FileJson, Plus, Trash } from 'lucide-react'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Textarea } from './ui/textarea'
@@ -30,7 +30,8 @@ export function NodeEditPanel() {
     selectedNodeId,
     selectNode,
     updateNode,
-    deleteNode
+    deleteNode,
+    updateMetadata
   } = useDocumentStore()
 
   const { getThemeConfig } = useThemeStore()
@@ -39,26 +40,59 @@ export function NodeEditPanel() {
   const [title, setTitle] = useState('')
   const [content, setContent] = useState('')
   const [isVisible, setIsVisible] = useState(false)
+  
+  // YAML 元数据编辑状态
+  const [metadataEntries, setMetadataEntries] = useState<{key: string, value: string}[]>([])
+  const [newKey, setNewKey] = useState('')
+  const [newValue, setNewValue] = useState('')
 
   // 获取当前选中的节点
   const selectedNode = selectedNodeId && document
     ? findNodeInTree(document.root, selectedNodeId)
     : null
+  
+  // 是否为虚拟根节点
+  const isVirtualRoot = selectedNode?.isVirtual || selectedNode?.level === 0
 
   // 当选择节点变化时，加载节点数据
   useEffect(() => {
     if (selectedNode) {
       setTitle(selectedNode.title)
       setContent(selectedNode.content || '')
+      
+      // 加载 YAML 元数据
+      if (document?.metadata) {
+        const entries = Object.entries(document.metadata).map(([key, value]) => ({
+          key,
+          value: String(value)
+        }))
+        setMetadataEntries(entries)
+      } else {
+        setMetadataEntries([])
+      }
+      
       setIsVisible(true)
     } else {
       setIsVisible(false)
     }
-  }, [selectedNodeId, selectedNode])
+  }, [selectedNodeId, selectedNode, document?.metadata])
 
   // 保存修改
   const handleSave = useCallback(() => {
     if (!selectedNodeId) return
+
+    // 虚拟根节点保存元数据
+    if (isVirtualRoot) {
+      const metadata: Record<string, string> = {}
+      metadataEntries.forEach(({ key, value }) => {
+        if (key.trim()) {
+          metadata[key.trim()] = value
+        }
+      })
+      updateMetadata(metadata)
+      updateNode(selectedNodeId, { title: title.trim() || '未命名文档' })
+      return
+    }
 
     // 标题判空验证
     const trimmedTitle = title.trim()
@@ -68,7 +102,28 @@ export function NodeEditPanel() {
     }
 
     updateNode(selectedNodeId, { title: trimmedTitle, content: content || undefined })
-  }, [selectedNodeId, title, content, updateNode])
+  }, [selectedNodeId, title, content, updateNode, isVirtualRoot, metadataEntries, updateMetadata])
+  
+  // 添加元数据字段
+  const handleAddMetadata = useCallback(() => {
+    if (newKey.trim()) {
+      setMetadataEntries([...metadataEntries, { key: newKey.trim(), value: newValue }])
+      setNewKey('')
+      setNewValue('')
+    }
+  }, [newKey, newValue, metadataEntries])
+  
+  // 更新元数据字段
+  const handleUpdateMetadata = useCallback((index: number, key: string, value: string) => {
+    const updated = [...metadataEntries]
+    updated[index] = { key, value }
+    setMetadataEntries(updated)
+  }, [metadataEntries])
+  
+  // 删除元数据字段
+  const handleDeleteMetadata = useCallback((index: number) => {
+    setMetadataEntries(metadataEntries.filter((_, i) => i !== index))
+  }, [metadataEntries])
 
   // 删除节点
   const handleDelete = useCallback(() => {
@@ -108,19 +163,23 @@ export function NodeEditPanel() {
           <div className="flex items-center gap-3">
             <div
               className="w-8 h-8 rounded-lg flex items-center justify-center"
-              style={{ backgroundColor: themeConfig.accent }}
+              style={{ backgroundColor: isVirtualRoot ? '#8b5cf6' : themeConfig.accent }}
             >
-              <Type className="w-4 h-4 text-white" />
+              {isVirtualRoot ? (
+                <FileJson className="w-4 h-4 text-white" />
+              ) : (
+                <Type className="w-4 h-4 text-white" />
+              )}
             </div>
             <div>
               <h2
                 className="text-base font-semibold"
                 style={{ color: themeConfig.heading }}
               >
-                编辑节点
+                {isVirtualRoot ? '文档属性' : '编辑节点'}
               </h2>
               <p className="text-xs" style={{ color: themeConfig.muted }}>
-                H{selectedNode.level} 标题
+                {isVirtualRoot ? 'YAML Front Matter' : `H${selectedNode.level} 标题`}
               </p>
             </div>
           </div>
@@ -152,13 +211,13 @@ export function NodeEditPanel() {
                 className="flex items-center gap-2 text-sm font-medium"
                 style={{ color: themeConfig.heading }}
               >
-                <Type className="w-4 h-4" style={{ color: themeConfig.accent }} />
-                标题
+                <Type className="w-4 h-4" style={{ color: isVirtualRoot ? '#8b5cf6' : themeConfig.accent }} />
+                {isVirtualRoot ? '文档名称' : '标题'}
               </label>
               <Input
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="输入节点标题..."
+                placeholder={isVirtualRoot ? "输入文档名称..." : "输入节点标题..."}
                 className="h-12 text-base border-2 transition-all duration-200"
                 style={{
                   backgroundColor: themeConfig.card,
@@ -166,8 +225,8 @@ export function NodeEditPanel() {
                   color: themeConfig.text,
                 }}
                 onFocus={(e) => {
-                  e.currentTarget.style.borderColor = themeConfig.accent
-                  e.currentTarget.style.boxShadow = `0 0 0 3px ${themeConfig.accent}20`
+                  e.currentTarget.style.borderColor = isVirtualRoot ? '#8b5cf6' : themeConfig.accent
+                  e.currentTarget.style.boxShadow = `0 0 0 3px ${isVirtualRoot ? '#8b5cf620' : themeConfig.accent + '20'}`
                 }}
                 onBlur={(e) => {
                   e.currentTarget.style.borderColor = themeConfig.border
@@ -176,48 +235,157 @@ export function NodeEditPanel() {
               />
             </div>
 
-            {/* 内容编辑 - 固定高度区域 */}
-            <div className="space-y-3">
-              <label
-                className="flex items-center gap-2 text-sm font-medium"
-                style={{ color: themeConfig.heading }}
-              >
-                <FileText className="w-4 h-4" style={{ color: themeConfig.accent }} />
-                内容
-              </label>
-              {/* 固定高度的内容编辑框 */}
-              <div
-                className="rounded-xl border-2 overflow-hidden transition-all duration-200"
-                style={{
-                  backgroundColor: themeConfig.card,
-                  borderColor: themeConfig.border,
-                  height: '360px',
-                }}
-                onFocus={(e) => {
-                  e.currentTarget.style.borderColor = themeConfig.accent
-                  e.currentTarget.style.boxShadow = `0 0 0 3px ${themeConfig.accent}20`
-                }}
-                onBlur={(e) => {
-                  e.currentTarget.style.borderColor = themeConfig.border
-                  e.currentTarget.style.boxShadow = 'none'
-                }}
-              >
-                <Textarea
-                  value={content}
-                  onChange={(e) => setContent(e.target.value)}
-                  placeholder="输入节点内容（可选）...\n\n支持 Markdown 格式"
-                  className="w-full h-full resize-none border-0 font-mono text-sm leading-relaxed p-4 focus:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0"
-                  style={{
-                    backgroundColor: 'transparent',
-                    color: themeConfig.text,
-                  }}
-                />
+            {isVirtualRoot ? (
+              /* YAML 元数据编辑区域 */
+              <div className="space-y-4">
+                <label
+                  className="flex items-center gap-2 text-sm font-medium"
+                  style={{ color: themeConfig.heading }}
+                >
+                  <FileJson className="w-4 h-4" style={{ color: '#8b5cf6' }} />
+                  YAML 元数据
+                </label>
+                
+                {/* 现有元数据列表 */}
+                <div className="space-y-2">
+                  {metadataEntries.map((entry, index) => (
+                    <div key={index} className="flex items-center gap-2">
+                      <Input
+                        value={entry.key}
+                        onChange={(e) => handleUpdateMetadata(index, e.target.value, entry.value)}
+                        placeholder="键"
+                        className="flex-1 h-10 text-sm border-2"
+                        style={{
+                          backgroundColor: themeConfig.card,
+                          borderColor: themeConfig.border,
+                          color: themeConfig.text,
+                        }}
+                      />
+                      <span style={{ color: themeConfig.muted }}>:</span>
+                      <Input
+                        value={entry.value}
+                        onChange={(e) => handleUpdateMetadata(index, entry.key, e.target.value)}
+                        placeholder="值"
+                        className="flex-[2] h-10 text-sm border-2"
+                        style={{
+                          backgroundColor: themeConfig.card,
+                          borderColor: themeConfig.border,
+                          color: themeConfig.text,
+                        }}
+                      />
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleDeleteMetadata(index)}
+                        className="h-10 w-10 shrink-0"
+                        style={{ color: themeConfig.danger }}
+                      >
+                        <Trash className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+                
+                {/* 添加新元数据 */}
+                <div className="flex items-center gap-2 pt-2 border-t" style={{ borderColor: themeConfig.border }}>
+                  <Input
+                    value={newKey}
+                    onChange={(e) => setNewKey(e.target.value)}
+                    placeholder="新键"
+                    className="flex-1 h-10 text-sm border-2"
+                    style={{
+                      backgroundColor: themeConfig.card,
+                      borderColor: themeConfig.border,
+                      color: themeConfig.text,
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && newKey.trim()) {
+                        handleAddMetadata()
+                      }
+                    }}
+                  />
+                  <span style={{ color: themeConfig.muted }}>:</span>
+                  <Input
+                    value={newValue}
+                    onChange={(e) => setNewValue(e.target.value)}
+                    placeholder="值"
+                    className="flex-[2] h-10 text-sm border-2"
+                    style={{
+                      backgroundColor: themeConfig.card,
+                      borderColor: themeConfig.border,
+                      color: themeConfig.text,
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && newKey.trim()) {
+                        handleAddMetadata()
+                      }
+                    }}
+                  />
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={handleAddMetadata}
+                    disabled={!newKey.trim()}
+                    className="h-10 w-10 shrink-0"
+                    style={{ 
+                      borderColor: '#8b5cf6',
+                      color: '#8b5cf6',
+                      opacity: newKey.trim() ? 1 : 0.5
+                    }}
+                  >
+                    <Plus className="w-4 h-4" />
+                  </Button>
+                </div>
+                
+                <p className="text-xs flex items-center gap-1" style={{ color: themeConfig.muted }}>
+                  <Info className="w-3 h-3" />
+                  这些元数据将保存为 YAML Front Matter 格式
+                </p>
               </div>
-              <p className="text-xs flex items-center gap-1" style={{ color: themeConfig.muted }}>
-                <Info className="w-3 h-3" />
-                支持 Markdown 格式，内容将显示在节点下方
-              </p>
-            </div>
+            ) : (
+              /* 普通节点的内容编辑 */
+              <div className="space-y-3">
+                <label
+                  className="flex items-center gap-2 text-sm font-medium"
+                  style={{ color: themeConfig.heading }}
+                >
+                  <FileText className="w-4 h-4" style={{ color: themeConfig.accent }} />
+                  内容
+                </label>
+                {/* 固定高度的内容编辑框 */}
+                <div
+                  className="rounded-xl border-2 overflow-hidden transition-all duration-200"
+                  style={{
+                    backgroundColor: themeConfig.card,
+                    borderColor: themeConfig.border,
+                    height: '360px',
+                  }}
+                  onFocus={(e) => {
+                    e.currentTarget.style.borderColor = themeConfig.accent
+                    e.currentTarget.style.boxShadow = `0 0 0 3px ${themeConfig.accent}20`
+                  }}
+                  onBlur={(e) => {
+                    e.currentTarget.style.borderColor = themeConfig.border
+                    e.currentTarget.style.boxShadow = 'none'
+                  }}
+                >
+                  <Textarea
+                    value={content}
+                    onChange={(e) => setContent(e.target.value)}
+                    placeholder="输入节点内容（可选）...\n\n支持 Markdown 格式"
+                    className="w-full h-full resize-none border-0 font-mono text-sm leading-relaxed p-4 focus:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0"
+                    style={{
+                      backgroundColor: 'transparent',
+                      color: themeConfig.text,
+                    }}
+                  />
+                </div>
+                <p className="text-xs flex items-center gap-1" style={{ color: themeConfig.muted }}>
+                  <Info className="w-3 h-3" />
+                  支持 Markdown 格式，内容将显示在节点下方
+                </p>
+              </div>
+            )}
 
             {/* 子节点信息卡片 */}
             {selectedNode.children.length > 0 && (
@@ -231,7 +399,7 @@ export function NodeEditPanel() {
                 <div className="flex items-center gap-2">
                   <div
                     className="w-2 h-2 rounded-full"
-                    style={{ backgroundColor: themeConfig.accent }}
+                    style={{ backgroundColor: isVirtualRoot ? '#8b5cf6' : themeConfig.accent }}
                   />
                   <p className="text-sm font-medium" style={{ color: themeConfig.text }}>
                     包含 {selectedNode.children.length} 个子节点

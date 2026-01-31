@@ -30,11 +30,11 @@ export interface LayoutConfig {
  * 默认布局配置 - 横向思维导图风格
  */
 export const DEFAULT_LAYOUT_CONFIG: LayoutConfig = {
-  levelWidth: 320,
-  nodeHeight: 100,
-  siblingGap: 16,
-  startX: 80,
-  startY: 50,
+  levelWidth: 240,
+  nodeHeight: 80,
+  siblingGap: 12,
+  startX: 60,
+  startY: 40,
 }
 
 /**

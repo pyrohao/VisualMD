@@ -74,9 +74,10 @@ interface DocumentStore {
    * 添加子节点
    * @param parentId 父节点ID
    * @param title 节点标题
+   * @param insertIndex 插入位置（可选，默认添加到末尾）
    * @returns 新节点ID
    */
-  addChildNode: (parentId: string, title: string) => string | null
+  addChildNode: (parentId: string, title: string, insertIndex?: number) => string | null
 
   /**
    * 断开节点连接
@@ -90,6 +91,20 @@ interface DocumentStore {
    * @param parentId 目标父节点ID
    */
   connectNode: (nodeId: string, parentId: string) => void
+
+  /**
+   * 移动节点顺序（上移/下移/最前/最后）
+   * @param nodeId 要移动的节点ID
+   * @param direction 移动方向：'up' | 'down' | 'first' | 'last'
+   */
+  moveNodeOrder: (nodeId: string, direction: 'up' | 'down' | 'first' | 'last') => void
+
+  /**
+   * 移动节点到指定位置
+   * @param nodeId 要移动的节点ID
+   * @param targetPosition 目标位置（1-based）
+   */
+  moveNodeToPosition: (nodeId: string, targetPosition: number) => void
 
   /**
    * 选择节点
@@ -271,19 +286,27 @@ function collectAllNodeIds(root: TreeNode): string[] {
  * @param root 根节点
  * @param parentId 父节点ID
  * @param newNode 新节点
+ * @param insertIndex 插入位置（可选，默认添加到末尾）
  * @returns 更新后的根节点
  */
-function addChildNodeInTree(root: TreeNode, parentId: string, newNode: TreeNode): TreeNode {
+function addChildNodeInTree(root: TreeNode, parentId: string, newNode: TreeNode, insertIndex?: number): TreeNode {
   if (root.id === parentId) {
+    const newChildren = [...root.children]
+    // 如果指定了插入位置，在指定位置插入；否则添加到末尾
+    if (insertIndex !== undefined && insertIndex >= 0 && insertIndex <= newChildren.length) {
+      newChildren.splice(insertIndex, 0, newNode)
+    } else {
+      newChildren.push(newNode)
+    }
     return {
       ...root,
-      children: [...root.children, newNode]
+      children: newChildren
     }
   }
 
   return {
     ...root,
-    children: root.children.map(child => addChildNodeInTree(child, parentId, newNode))
+    children: root.children.map(child => addChildNodeInTree(child, parentId, newNode, insertIndex))
   }
 }
 
@@ -366,6 +389,18 @@ function collectDetachedNodes(root: TreeNode): TreeNode[] {
 
   traverse(root)
   return detached
+}
+
+/**
+ * 深拷贝树节点
+ * @param node 要拷贝的节点
+ * @returns 新的节点副本
+ */
+function cloneTreeNode(node: TreeNode): TreeNode {
+  return {
+    ...node,
+    children: node.children.map(child => cloneTreeNode(child)),
+  }
 }
 
 /**
@@ -459,7 +494,7 @@ export const useDocumentStore = create<DocumentStore>()(
         })
       },
 
-      addChildNode: (parentId: string, title: string) => {
+      addChildNode: (parentId: string, title: string, insertIndex?: number) => {
         const { document } = get()
         if (!document) return null
 
@@ -483,19 +518,19 @@ export const useDocumentStore = create<DocumentStore>()(
           isCollapsed: false,
         }
 
-        // 添加到树中
-        const newRoot = addChildNodeInTree(document.root, parentId, newNode)
-        
+        // 添加到树中（支持指定插入位置）
+        const newRoot = addChildNodeInTree(document.root, parentId, newNode, insertIndex)
+
         // 自动展开父节点
         const { expandedNodeIds } = get()
         const newExpanded = new Set(expandedNodeIds)
         newExpanded.add(parentId)
 
-        set({ 
-          document: { 
-            ...document, 
-            root: newRoot, 
-            isModified: true 
+        set({
+          document: {
+            ...document,
+            root: newRoot,
+            isModified: true
           },
           expandedNodeIds: newExpanded,
           error: null
@@ -547,7 +582,7 @@ export const useDocumentStore = create<DocumentStore>()(
         // 从 detachedNodes 中找到断开的节点
         const detachedNodes = (document as any).detachedNodes || []
         const detachedNode = detachedNodes.find((n: TreeNode) => n.id === nodeId)
-        
+
         if (!detachedNode) {
           set({ error: '找不到断开的节点' })
           return
@@ -583,16 +618,112 @@ export const useDocumentStore = create<DocumentStore>()(
 
         // 连接节点
         const newRoot = connectNodeToTree(document.root, detachedNode, parentId)
-        
+
         // 从 detachedNodes 中移除
         const newDetachedNodes = detachedNodes.filter((n: TreeNode) => n.id !== nodeId)
 
-        set({ 
-          document: { 
-            ...document, 
+        set({
+          document: {
+            ...document,
             root: newRoot,
             detachedNodes: newDetachedNodes,
-            isModified: true 
+            isModified: true
+          },
+          error: null
+        })
+      },
+
+      moveNodeOrder: (nodeId: string, direction: 'up' | 'down' | 'first' | 'last') => {
+        const { document } = get()
+        if (!document || nodeId === 'root') return
+
+        // 查找节点及其父节点
+        const node = findNodeInTree(document.root, nodeId)
+        if (!node) return
+
+        const parentNode = findParentInTree(document.root, nodeId)
+        if (!parentNode) return
+
+        // 获取当前索引
+        const currentIndex = parentNode.children.findIndex(child => child.id === nodeId)
+        if (currentIndex === -1) return
+
+        // 计算新索引
+        let newIndex = currentIndex
+        switch (direction) {
+          case 'up':
+            newIndex = Math.max(0, currentIndex - 1)
+            break
+          case 'down':
+            newIndex = Math.min(parentNode.children.length - 1, currentIndex + 1)
+            break
+          case 'first':
+            newIndex = 0
+            break
+          case 'last':
+            newIndex = parentNode.children.length - 1
+            break
+        }
+
+        // 如果位置没有变化，直接返回
+        if (newIndex === currentIndex) return
+
+        // 移动节点
+        const newChildren = [...parentNode.children]
+        const [movedNode] = newChildren.splice(currentIndex, 1)
+        newChildren.splice(newIndex, 0, movedNode)
+
+        // 更新父节点的 children
+        parentNode.children = newChildren
+
+        set({
+          document: {
+            ...document,
+            isModified: true
+          },
+          error: null
+        })
+      },
+
+      moveNodeToPosition: (nodeId: string, targetPosition: number) => {
+        const { document } = get()
+        if (!document || nodeId === 'root') return
+
+        // 查找节点及其父节点
+        const node = findNodeInTree(document.root, nodeId)
+        if (!node) return
+
+        const parentNode = findParentInTree(document.root, nodeId)
+        if (!parentNode) return
+
+        // 获取当前索引
+        const currentIndex = parentNode.children.findIndex(child => child.id === nodeId)
+        if (currentIndex === -1) return
+
+        // 验证目标位置是否有效（1-based，转换为 0-based）
+        const newIndex = targetPosition - 1
+        const maxIndex = parentNode.children.length - 1
+
+        if (newIndex < 0 || newIndex > maxIndex || newIndex === currentIndex) {
+          return // 位置无效或没有变化
+        }
+
+        // 移动节点
+        const newChildren = [...parentNode.children]
+        const [movedNode] = newChildren.splice(currentIndex, 1)
+        newChildren.splice(newIndex, 0, movedNode)
+
+        // 更新父节点的 children
+        parentNode.children = newChildren
+
+        // 强制创建新的 document 对象以触发重新渲染
+        const newRoot = cloneTreeNode(document.root)
+
+        set({
+          document: {
+            ...document,
+            root: newRoot,
+            isModified: true
           },
           error: null
         })

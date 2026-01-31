@@ -41,8 +41,12 @@ export function FileSidebar() {
   const [dragOverId, setDragOverId] = useState<string | null>(null)
   const [dragOverPosition, setDragOverPosition] = useState<DropPosition | null>(null)
   
-  // 避免 Hydration 错误 - 等待客户端挂载完成
+  // 客户端挂载状态，用于避免 hydration 不匹配
   const [mounted, setMounted] = useState(false)
+  
+  // 根目录拖放状态
+  const [isRootDragOver, setIsRootDragOver] = useState(false)
+  
   useEffect(() => {
     setMounted(true)
   }, [])
@@ -109,13 +113,14 @@ export function FileSidebar() {
     setDragOverPosition(position)
   }, [])
 
-  // 处理放置
+  // 处理放置（内部拖拽排序）
   const handleDrop = useCallback((e: React.DragEvent, targetId: string, type: 'folder' | 'file') => {
     e.preventDefault()
     e.stopPropagation()
 
     const data = e.dataTransfer.getData('text/plain')
     if (!data) {
+      // 没有内部拖拽数据，可能是外部文件拖拽，不处理
       setDragOverId(null)
       setDragOverPosition(null)
       return
@@ -134,6 +139,37 @@ export function FileSidebar() {
     setDragOverId(null)
     setDragOverPosition(null)
   }, [dragOverPosition, reorderFolders])
+  
+  // 处理根目录外部文件拖拽
+  const handleRootDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.dataTransfer.types.includes('Files')) {
+      setIsRootDragOver(true)
+    }
+  }, [])
+  
+  const handleRootDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsRootDragOver(false)
+  }, [])
+  
+  const handleRootDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsRootDragOver(false)
+    
+    // 处理外部文件拖拽到根目录
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      for (const file of Array.from(e.dataTransfer.files)) {
+        if (file.name.endsWith('.md') || file.name.endsWith('.markdown') || file.name.endsWith('.txt')) {
+          const content = await file.text()
+          importFile(file.name, content, null)
+        }
+      }
+    }
+  }, [importFile])
 
   // 判断是否全部展开
   const isAllExpanded = sortedFolderList.length > 0 && 
@@ -141,11 +177,17 @@ export function FileSidebar() {
 
   return (
     <div
-      className="w-full h-full flex flex-col"
+      className={cn(
+        "w-full h-full flex flex-col",
+        isRootDragOver && "bg-blue-500/10"
+      )}
       style={{ 
-        backgroundColor: themeConfig.background,
+        backgroundColor: isRootDragOver ? undefined : themeConfig.background,
         color: themeConfig.text,
       }}
+      onDragOver={handleRootDragOver}
+      onDragLeave={handleRootDragLeave}
+      onDrop={handleRootDrop}
     >
       {/* 顶部工具栏 - Obsidian 风格 */}
       <div className="flex items-center justify-between px-3 py-2">
@@ -194,7 +236,7 @@ export function FileSidebar() {
 
       {/* 文件列表 */}
       <div className="flex-1 overflow-y-auto px-1">
-        {/* 等待客户端挂载完成后再渲染列表，避免 Hydration 错误 */}
+        {/* 等待客户端挂载完成后再渲染，避免 hydration 不匹配 */}
         {mounted && (
           <>
             {/* 文件夹列表 */}

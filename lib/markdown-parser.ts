@@ -114,7 +114,7 @@ export function buildTree(headings: HeadingNode[], metadata: DocumentMetadata): 
     children: [],
     parentId: null,
     isVirtual: true,
-    isCollapsed: true, // 默认折叠状态
+    isCollapsed: false,
   }
 
   if (headings.length === 0) {

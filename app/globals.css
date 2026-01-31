@@ -362,4 +362,20 @@
   .react-flow__minimap {
     @apply bg-card;
   }
+  
+  /* Custom Controls Theme Override */
+  .custom-controls .react-flow__controls-button {
+    background-color: var(--controls-bg) !important;
+    border-color: var(--controls-border) !important;
+    color: var(--controls-color) !important;
+  }
+  
+  .custom-controls .react-flow__controls-button:hover {
+    background-color: var(--controls-hover) !important;
+  }
+  
+  .custom-controls .react-flow__controls-button svg {
+    fill: var(--controls-color) !important;
+    stroke: var(--controls-color) !important;
+  }
 }

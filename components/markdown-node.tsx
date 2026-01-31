@@ -6,16 +6,18 @@
  * React Flow自定义节点组件，用于显示标题节点
  * 支持横向布局，连接点在左右两侧
  * 点击节点打开右侧编辑面板
+ * 点击序号可修改节点顺序
  *
  * 对应技术文档6.1节
  */
 
-import { memo, useState, useCallback } from 'react'
+import { memo, useState, useCallback, useRef, useEffect } from 'react'
 import { Handle, Position } from '@xyflow/react'
-import { ChevronRight, ChevronDown } from 'lucide-react'
+import { ChevronRight, ChevronDown, FileText } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { getLevelColor, getLevelBgColor, type FlowNodeData } from '@/lib/flow-helpers'
+import { getLevelColor, type FlowNodeData } from '@/lib/flow-helpers'
 import { useThemeStore } from '@/stores/themeStore'
+import { useDocumentStore } from '@/stores/documentStore'
 
 /**
  * Markdown节点组件属性
@@ -34,10 +36,15 @@ interface MarkdownNodeProps {
  * 2. 点击打开编辑面板
  * 3. 展开/收起子节点按钮
  * 4. 左右连接点支持横向布局
+ * 5. 点击序号可修改节点顺序
  */
 function MarkdownNodeComponent(props: MarkdownNodeProps) {
   const { id, data, selected } = props
   const [isHovered, setIsHovered] = useState(false)
+  const [isEditingOrder, setIsEditingOrder] = useState(false)
+  const [orderInputValue, setOrderInputValue] = useState('')
+  const [isContentExpanded, setIsContentExpanded] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
   const { getThemeConfig } = useThemeStore()
   const themeConfig = getThemeConfig()
 
@@ -50,7 +57,15 @@ function MarkdownNodeComponent(props: MarkdownNodeProps) {
     onToggleCollapse,
     onSelect,
     isDetached,
+    isVirtual,
+    orderIndex,
+    siblingsCount,
+    onMoveToPosition,
   } = data
+
+  // 获取文档元数据（用于虚拟根节点）
+  const { document } = useDocumentStore()
+  const metadata = document?.metadata || {}
 
   // 处理展开/收起
   const handleToggleCollapse = useCallback(
@@ -66,20 +81,87 @@ function MarkdownNodeComponent(props: MarkdownNodeProps) {
     onSelect?.(id)
   }, [id, onSelect])
 
+  // 处理点击序号开始编辑
+  const handleOrderClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    // 只要有兄弟节点数量信息（包括只有1个节点的情况），就允许编辑
+    if (siblingsCount !== undefined && siblingsCount >= 1) {
+      setOrderInputValue(orderIndex?.toString() || '1')
+      setIsEditingOrder(true)
+    }
+  }, [orderIndex, siblingsCount])
+
+  // 处理输入框失焦
+  const handleInputBlur = useCallback(() => {
+    if (isEditingOrder) {
+      let newPosition = parseInt(orderInputValue, 10)
+      const maxPosition = siblingsCount || 1
+
+      // 如果输入无效或超出范围，自动调整到边界值
+      if (isNaN(newPosition) || newPosition < 1) {
+        newPosition = 1
+      } else if (newPosition > maxPosition) {
+        newPosition = maxPosition
+      }
+
+      onMoveToPosition?.(id, newPosition)
+      setIsEditingOrder(false)
+    }
+  }, [isEditingOrder, orderInputValue, siblingsCount, id, onMoveToPosition])
+
+  // 处理输入框按键
+  const handleInputKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      let newPosition = parseInt(orderInputValue, 10)
+      const maxPosition = siblingsCount || 1
+
+      // 如果输入无效或超出范围，自动调整到边界值
+      if (isNaN(newPosition) || newPosition < 1) {
+        newPosition = 1
+      } else if (newPosition > maxPosition) {
+        newPosition = maxPosition
+      }
+
+      onMoveToPosition?.(id, newPosition)
+      setIsEditingOrder(false)
+    } else if (e.key === 'Escape') {
+      setIsEditingOrder(false)
+    }
+  }, [orderInputValue, siblingsCount, id, onMoveToPosition])
+
+  // 自动聚焦输入框
+  useEffect(() => {
+    if (isEditingOrder && inputRef.current) {
+      inputRef.current.focus()
+      inputRef.current.select()
+    }
+  }, [isEditingOrder])
+
   // 获取层级颜色
-  const borderColor = isDetached ? '#9ca3af' : getLevelColor(level)
-  const bgColor = isDetached ? '#f3f4f6' : getLevelBgColor(level)
+  const borderColor = isDetached ? '#9ca3af' : (isVirtual ? '#8b5cf6' : getLevelColor(level))
+  // 根据主题使用不同的背景色 - 黑暗主题使用深色背景
+  const bgColor = isDetached
+    ? (themeConfig.card === '#161b22' ? '#21262d' : '#f3f4f6')
+    : isVirtual
+      ? (themeConfig.card === '#161b22' ? '#2d1f4c' : '#f5f3ff')
+      : (themeConfig.card === '#161b22'
+          ? [`#1c3a5f`, `#1c3a5f`, `#064e3b`, `#78350f`, `#4c1d95`, `#7c2d12`, `#374151`][level] || '#1c3a5f'
+          : [`#eff6ff`, `#eff6ff`, `#ecfdf5`, `#fffbeb`, `#f5f3ff`, `#fff7ed`, `#f9fafb`][level] || '#eff6ff')
+
+  // 虚拟根节点宽度更宽以容纳元数据
+  const nodeWidth = isVirtual ? 'w-[260px]' : 'w-[180px]'
 
   return (
     <div
       className={cn(
-        'group relative min-w-[180px] max-w-[300px] rounded-lg border-2 transition-all duration-200',
-        'shadow-sm hover:shadow-md cursor-pointer'
+        'group relative rounded-lg border-2 transition-all duration-200',
+        'shadow-sm hover:shadow-md cursor-pointer',
+        nodeWidth
       )}
       style={{
         backgroundColor: selected ? themeConfig.card : bgColor,
         borderColor: selected ? themeConfig.accent : borderColor,
-        borderLeftWidth: '6px',
+        borderLeftWidth: '5px',
       }}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
@@ -95,50 +177,141 @@ function MarkdownNodeComponent(props: MarkdownNodeProps) {
       />
 
       {/* 节点内容 */}
-      <div className="px-4 py-3">
+      <div className="px-3 py-2.5">
         {/* 标题行 */}
         <div className="flex items-center gap-2">
-          {/* 展开/收起按钮 */}
-          {hasChildren && (
-            <button
-              onClick={handleToggleCollapse}
-              className="flex-shrink-0 w-5 h-5 flex items-center justify-center rounded hover:bg-black/10 transition-colors"
+          {/* 虚拟根节点显示文档图标 */}
+          {isVirtual ? (
+            <div 
+              className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full"
+              style={{ backgroundColor: borderColor }}
             >
-              {isCollapsed ? (
-                <ChevronRight className="w-4 h-4" style={{ color: themeConfig.muted }} />
-              ) : (
-                <ChevronDown className="w-4 h-4" style={{ color: themeConfig.muted }} />
+              <FileText className="w-3.5 h-3.5 text-white" />
+            </div>
+          ) : (
+            <>
+              {/* 序号指示器 - 可点击编辑 */}
+              {orderIndex !== undefined && (
+                <div className="relative">
+                  {isEditingOrder ? (
+                    <input
+                      ref={inputRef}
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      value={orderInputValue}
+                      onChange={(e) => {
+                        const val = e.target.value.replace(/[^0-9]/g, '')
+                        setOrderInputValue(val)
+                      }}
+                      onBlur={handleInputBlur}
+                      onKeyDown={handleInputKeyDown}
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-8 h-6 text-xs font-bold text-center rounded border outline-none"
+                      style={{
+                        borderColor: borderColor,
+                        color: themeConfig.text,
+                        backgroundColor: themeConfig.card,
+                      }}
+                    />
+                  ) : (
+                    <button
+                      onClick={handleOrderClick}
+                      disabled={siblingsCount === undefined || siblingsCount < 1}
+                      className={cn(
+                        'flex-shrink-0 w-5 h-5 flex items-center justify-center text-xs font-bold rounded-full transition-all',
+                        siblingsCount !== undefined && siblingsCount >= 1
+                          ? 'cursor-pointer hover:scale-110 hover:shadow-md'
+                          : 'cursor-default opacity-80'
+                      )}
+                      style={{
+                        backgroundColor: borderColor,
+                        color: '#ffffff',
+                      }}
+                      title={siblingsCount !== undefined && siblingsCount >= 1 ? `点击修改顺序 (1-${siblingsCount})` : undefined}
+                    >
+                      {orderIndex}
+                    </button>
+                  )}
+                </div>
               )}
-            </button>
+
+              {/* 内容展开/收起按钮 - 只在有内容时显示 */}
+              {data.content && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setIsContentExpanded(!isContentExpanded)
+                  }}
+                  className="flex-shrink-0 w-5 h-5 flex items-center justify-center rounded hover:bg-black/10 transition-colors"
+                  title={isContentExpanded ? '收起内容' : '展开内容'}
+                >
+                  {isContentExpanded ? (
+                    <ChevronDown className="w-4 h-4" style={{ color: themeConfig.muted }} />
+                  ) : (
+                    <ChevronRight className="w-4 h-4" style={{ color: themeConfig.muted }} />
+                  )}
+                </button>
+              )}
+            </>
           )}
 
-          {/* 标题文本 */}
+          {/* 标题文本 - 虚拟根节点显示更多字符 */}
           <h3
             className={cn(
-              'font-semibold truncate flex-1',
-              level === 0 && 'text-lg',
-              level === 1 && 'text-base',
-              level >= 2 && 'text-sm'
+              "font-semibold flex-1 truncate",
+              isVirtual ? "text-base" : "text-lg"
             )}
             style={{ color: themeConfig.heading }}
             title={label}
           >
-            {label || '未命名'}
+            {isVirtual 
+              ? (label || '未命名文档')
+              : (label 
+                ? (label.length > 8 ? label.slice(0, 8) + '...' : label)
+                : '未命名')}
           </h3>
         </div>
 
-        {/* 子节点数量指示器 */}
-        {hasChildren && isCollapsed && (
-          <div className="mt-1 text-xs pl-7" style={{ color: themeConfig.muted }}>
-            {childrenCount} 个子节点
+        {/* 虚拟根节点显示 YAML 元数据 */}
+        {isVirtual && Object.keys(metadata).length > 0 && (
+          <div className="mt-2 space-y-1">
+            {Object.entries(metadata).slice(0, 3).map(([key, value]) => (
+              <div key={key} className="flex items-center gap-1 text-xs">
+                <span 
+                  className="font-medium truncate max-w-[80px]"
+                  style={{ color: themeConfig.muted }}
+                >
+                  {key}:
+                </span>
+                <span 
+                  className="truncate flex-1"
+                  style={{ color: themeConfig.text }}
+                >
+                  {String(value).length > 15 
+                    ? String(value).slice(0, 15) + '...' 
+                    : String(value)}
+                </span>
+              </div>
+            ))}
+            {Object.keys(metadata).length > 3 && (
+              <div 
+                className="text-xs italic"
+                style={{ color: themeConfig.muted }}
+              >
+                +{Object.keys(metadata).length - 3} 更多字段...
+              </div>
+            )}
           </div>
         )}
 
-        {/* 内容预览（仅显示前50个字符） */}
-        {data.content && (
-          <div className="mt-2 text-xs line-clamp-2 pl-7" style={{ color: themeConfig.text }}>
-            {data.content.slice(0, 50)}
-            {data.content.length > 50 ? '...' : ''}
+        {/* 内容展示 - 根据展开状态显示，最多两行 */}
+        {!isVirtual && data.content && isContentExpanded && (
+          <div 
+            className="mt-1.5 text-xs line-clamp-2 break-words" 
+            style={{ color: themeConfig.text }}
+          >
+            {data.content}
           </div>
         )}
       </div>

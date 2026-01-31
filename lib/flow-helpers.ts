@@ -23,8 +23,11 @@ export interface FlowNodeData {
   content?: string
   childrenCount: number
   isDetached?: boolean
+  orderIndex?: number // 在父节点中的顺序序号（从1开始）
+  siblingsCount?: number // 兄弟节点总数
   onToggleCollapse?: (id: string) => void
   onSelect?: (id: string) => void
+  onMoveToPosition?: (id: string, position: number) => void // 移动到指定位置
   [key: string]: unknown
 }
 
@@ -33,6 +36,8 @@ export interface FlowNodeData {
  * 
  * @param tree 树结构的根节点
  * @param detachedNodes 断开的节点数组（可选）
+ * @param metadata 文档元数据（用于根节点）
+ * @param fileName 文件名（用于根节点标题）
  * @returns 包含nodes和edges的对象
  */
 export function treeToNodesAndEdges(
@@ -51,9 +56,9 @@ export function treeToNodesAndEdges(
   /**
    * 递归遍历树，创建节点和边
    */
-  function traverse(node: TreeNode, parentId?: string) {
+  function traverse(node: TreeNode, parentId?: string, orderIndex?: number, siblingsCount?: number) {
     const position = positions.get(node.id) || { x: 0, y: 0 }
-    
+
     // 创建React Flow节点
     nodes.push({
       id: node.id,
@@ -67,40 +72,51 @@ export function treeToNodesAndEdges(
         content: node.content,
         childrenCount: node.children.length,
         isDetached: node.isDetached || false,
+        isVirtual: node.isVirtual || false, // 是否为虚拟根节点
+        orderIndex: orderIndex, // 在父节点中的顺序序号
+        siblingsCount: siblingsCount, // 兄弟节点总数
       },
     })
-    
+
     // 创建边（如果不是根节点且节点不是断开的）
-    // 使用直线连接，从父节点右侧连接到子节点左侧
+    // 使用贝塞尔曲线连接，从父节点右侧连接到子节点左侧，带箭头
     if (parentId && !node.isDetached) {
       edges.push({
         id: `${parentId}-${node.id}`,
         source: parentId,
         target: node.id,
-        type: 'straight',
+        type: 'default',
         sourceHandle: 'right',
         targetHandle: 'left',
         animated: true,
         style: {
           stroke: getLevelColor(node.level),
           strokeWidth: 2,
-          cursor: 'pointer', // 表示可以点击删除
+          cursor: 'pointer',
+        },
+        markerEnd: {
+          type: 'arrowclosed',
+          width: 12,
+          height: 12,
+          color: getLevelColor(node.level),
         },
       })
     }
-    
-    // 递归处理子节点
+
+    // 递归处理子节点，传递序号和兄弟节点数量
     if (node.children && !node.isCollapsed) {
-      node.children.forEach((child) => traverse(child, node.id))
+      const childCount = node.children.length
+      node.children.forEach((child, index) => traverse(child, node.id, index + 1, childCount))
     }
   }
-  
-  traverse(tree)
+
+  // 根节点作为唯一的"兄弟"，siblingsCount = 1
+  traverse(tree, undefined, 1, 1)
   
   // 处理断开的节点
-  detachedNodes.forEach((detachedNode) => {
+  detachedNodes.forEach((detachedNode, index) => {
     const position = positions.get(detachedNode.id) || { x: 0, y: 0 }
-    
+
     nodes.push({
       id: detachedNode.id,
       type: 'headingNode',
@@ -113,6 +129,8 @@ export function treeToNodesAndEdges(
         content: detachedNode.content,
         childrenCount: detachedNode.children.length,
         isDetached: true,
+        orderIndex: index + 1,
+        siblingsCount: detachedNodes.length,
       },
     })
     

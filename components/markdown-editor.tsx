@@ -4,22 +4,23 @@
  * Markdown编辑器主组件
  *
  * 整合所有子组件的主编辑器界面
- * 布局：三栏式（大纲视图 | 可视化画布 | 文档预览）
+ * 布局：三栏式（文件管理 | 可视化画布 | 预览）
  *
  * 对应技术文档6.1节 - 主编辑器组件
  */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
 import { EditorToolbar } from './editor-toolbar'
-import { TreeView } from './tree-view'
+import { FileSidebar } from './file-sidebar'
 import { FlowCanvas } from './flow-canvas'
 import { MarkdownPreview } from './markdown-preview'
 import { NodeEditPanel } from './node-edit-panel'
 import { Button } from './ui/button'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useDocumentStore } from '@/stores/documentStore'
-import { initTheme } from '@/stores/themeStore'
+import { useFileSystemStore } from '@/stores/fileSystemStore'
+import { initTheme, useThemeStore, themeConfigs } from '@/stores/themeStore'
 
 /**
  * 默认示例Markdown内容
@@ -97,82 +98,216 @@ export function MarkdownEditor() {
   // 面板收起状态
   const [leftCollapsed, setLeftCollapsed] = useState(false)
   const [rightCollapsed, setRightCollapsed] = useState(false)
+  // 客户端挂载状态，用于避免 hydration 不匹配
+  const [mounted, setMounted] = useState(false)
 
-  // 获取Store中的加载文档方法
-  const { loadDocument, document, selectedNodeId } = useDocumentStore()
+  // 获取Store
+  const { loadDocument, document, selectedNodeId, getCurrentMarkdown, getIsModified } = useDocumentStore()
+  const { currentFileId, files, saveFile, markFileAsSaved } = useFileSystemStore()
+  const currentMarkdown = getCurrentMarkdown()
+  const isModified = getIsModified()
+  
+  // 计算当前文件
+  const currentFile = files.find(f => f.id === currentFileId) || null
 
-  // 初始化加载默认文档和主题
+  // 获取主题配置
+  const { getThemeConfig } = useThemeStore()
+  const themeConfig = getThemeConfig()
+
+  // 初始化加载
   useEffect(() => {
-    // 初始化主题
+    setMounted(true)
     initTheme()
 
-    if (!document) {
-      loadDocument(defaultMarkdown, 'example.md')
+    // 如果没有文件，创建默认示例文件
+    if (files.length === 0) {
+      const { importFile } = useFileSystemStore.getState()
+      importFile('欢迎使用.md', defaultMarkdown, null)
     }
-  }, [document, loadDocument])
+  }, [files.length])
+  
+  // 当切换文件时，加载文档到编辑器
+  useEffect(() => {
+    if (currentFile) {
+      loadDocument(currentFile.content, currentFile.name)
+    }
+  }, [currentFileId, loadDocument])
+
+  // 当文档内容变化时，保存到文件系统
+  useEffect(() => {
+    if (currentFile && isModified) {
+      const timeoutId = setTimeout(() => {
+        saveFile(currentFile.id, currentMarkdown)
+      }, 1000) // 防抖 1 秒
+      return () => clearTimeout(timeoutId)
+    }
+  }, [currentMarkdown, currentFile, isModified, saveFile])
+
+  // 处理保存
+  const handleSave = useCallback(() => {
+    if (currentFile) {
+      saveFile(currentFile.id, currentMarkdown)
+      markFileAsSaved(currentFile.id)
+    }
+  }, [currentFile, currentMarkdown, saveFile, markFileAsSaved])
+
+  // 监听 Ctrl+S 保存
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault()
+        handleSave()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [handleSave])
+
+  // 服务端渲染时使用默认 light 主题，避免 hydration 不匹配
+  const safeThemeConfig = mounted ? themeConfig : themeConfigs.light
 
   return (
-    <div className="flex h-screen flex-col bg-slate-50">
+    <div className="flex h-screen flex-col" style={{ backgroundColor: safeThemeConfig.background }}>
       {/* 工具栏 */}
       <EditorToolbar
         onToggleLeft={() => setLeftCollapsed(!leftCollapsed)}
         onToggleRight={() => setRightCollapsed(!rightCollapsed)}
         leftCollapsed={leftCollapsed}
         rightCollapsed={rightCollapsed}
+        onSave={handleSave}
       />
 
       {/* 主内容区 */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* 左侧面板 - 大纲视图 */}
+      <div className="relative flex flex-1 overflow-hidden">
+        {/* 左侧面板 - 文件管理 */}
         <div
-          className={`border-r border-slate-200 bg-white transition-all duration-300 ${
-            leftCollapsed ? 'w-0 overflow-hidden' : 'w-80'
+          className={`relative border-r transition-all duration-300 ${
+            leftCollapsed ? 'w-0 overflow-hidden opacity-0' : 'w-64 opacity-100'
           }`}
+          style={{
+            backgroundColor: safeThemeConfig.card,
+            borderColor: safeThemeConfig.border,
+            flexShrink: 0,
+          }}
         >
-          <TreeView />
+          <FileSidebar />
+
+          {/* 左侧面板收起按钮 */}
+          {!leftCollapsed && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="absolute -right-3 top-1/2 z-20 h-8 w-6 -translate-y-1/2 rounded-l-none rounded-r-md border p-0 shadow-sm transition-all hover:shadow-md"
+              style={{
+                backgroundColor: safeThemeConfig.card,
+                borderColor: safeThemeConfig.border,
+                color: safeThemeConfig.text,
+              }}
+              onClick={() => setLeftCollapsed(true)}
+            >
+              <ChevronLeft className="h-3 w-3" />
+            </Button>
+          )}
         </div>
 
-        {/* 左侧面板收起按钮 */}
-        <Button
-          variant="ghost"
-          size="icon"
-          className="absolute left-0 top-1/2 z-10 h-12 w-6 -translate-y-1/2 rounded-l-none rounded-r-md border border-l-0 border-slate-200 bg-white hover:bg-slate-100"
-          onClick={() => setLeftCollapsed(!leftCollapsed)}
-        >
-          {leftCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
-        </Button>
+        {/* 左侧面板展开按钮 */}
+        {leftCollapsed && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="absolute left-0 top-1/2 z-20 h-8 w-5 -translate-y-1/2 rounded-l-none rounded-r-md border p-0 shadow-sm transition-all hover:shadow-md"
+            style={{
+              backgroundColor: safeThemeConfig.card,
+              borderColor: safeThemeConfig.border,
+              color: safeThemeConfig.text,
+            }}
+            onClick={() => setLeftCollapsed(false)}
+          >
+            <ChevronRight className="h-3 w-3" />
+          </Button>
+        )}
 
         {/* 中间面板 - React Flow画布 */}
-        <div className="flex-1 bg-slate-50">
+        <div
+          className="absolute inset-y-0"
+          style={{
+            left: leftCollapsed ? 0 : 256,
+            right: rightCollapsed ? 0 : 480,
+            backgroundColor: safeThemeConfig.background,
+            transition: 'left 0.3s ease, right 0.3s ease',
+          }}
+        >
           <ReactFlowProvider>
             <FlowCanvas />
           </ReactFlowProvider>
         </div>
 
-        {/* 右侧面板收起按钮 */}
-        <Button
-          variant="ghost"
-          size="icon"
-          className="absolute right-0 top-1/2 z-10 h-12 w-6 -translate-y-1/2 rounded-l-md rounded-r-none border border-r-0 border-slate-200 bg-white hover:bg-slate-100"
-          onClick={() => setRightCollapsed(!rightCollapsed)}
-        >
-          {rightCollapsed ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-        </Button>
-
-        {/* 右侧面板 - 文档预览（全屏） */}
+        {/* 右侧面板 - 预览和编辑 */}
         <div
-          className={`border-l border-slate-200 bg-white transition-all duration-300 ${
-            rightCollapsed ? 'w-0 overflow-hidden' : 'w-[560px]'
+          className={`absolute right-0 top-0 bottom-0 border-l transition-all duration-300 ${
+            rightCollapsed ? 'w-0 overflow-hidden opacity-0' : 'w-[480px] opacity-100'
           }`}
+          style={{
+            backgroundColor: safeThemeConfig.card,
+            borderColor: safeThemeConfig.border,
+          }}
         >
-          <MarkdownPreview />
+          {/* 右侧面板收起按钮 */}
+          {!rightCollapsed && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="absolute -left-3 top-1/2 z-20 h-8 w-6 -translate-y-1/2 rounded-l-md rounded-r-none border p-0 shadow-sm transition-all hover:shadow-md"
+              style={{
+                backgroundColor: safeThemeConfig.card,
+                borderColor: safeThemeConfig.border,
+                color: safeThemeConfig.text,
+              }}
+              onClick={() => setRightCollapsed(true)}
+            >
+              <ChevronRight className="h-3 w-3" />
+            </Button>
+          )}
+
+          {/* 右侧内容 */}
+          <div className="flex h-full flex-col">
+            {/* Markdown预览 */}
+            <div className="flex-1 overflow-auto">
+              <MarkdownPreview />
+            </div>
+
+            {/* 节点编辑面板 - 当有选中节点时显示 */}
+            {selectedNodeId && (
+              <div
+                className="border-t"
+                style={{
+                  borderColor: safeThemeConfig.border,
+                  maxHeight: '40%',
+                }}
+              >
+                <NodeEditPanel />
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* 节点编辑面板 - 从右侧滑出 */}
-        <NodeEditPanel />
+        {/* 右侧面板展开按钮 */}
+        {rightCollapsed && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="absolute right-0 top-1/2 z-20 h-8 w-5 -translate-y-1/2 rounded-l-md rounded-r-none border p-0 shadow-sm transition-all hover:shadow-md"
+            style={{
+              backgroundColor: safeThemeConfig.card,
+              borderColor: safeThemeConfig.border,
+              color: safeThemeConfig.text,
+            }}
+            onClick={() => setRightCollapsed(false)}
+          >
+            <ChevronLeft className="h-3 w-3" />
+          </Button>
+        )}
       </div>
     </div>
   )
 }
-
-export default MarkdownEditor
