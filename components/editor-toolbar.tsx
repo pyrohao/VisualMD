@@ -20,9 +20,11 @@ import {
 } from 'lucide-react'
 import { Button } from './ui/button'
 import { useDocumentStore } from '@/stores/documentStore'
+import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useThemeStore } from '@/stores/themeStore'
 import { openFile, saveFile, exportAsHTML } from '@/lib/file-system'
 import { ThemeToggle } from './theme-toggle'
+import { toast } from '@/hooks/use-toast'
 
 interface EditorToolbarProps {
   onToggleLeft: () => void
@@ -41,6 +43,7 @@ export function EditorToolbar({
 }: EditorToolbarProps) {
   const { document, loadDocument, getCurrentMarkdown } =
     useDocumentStore()
+  const { importFile } = useFileSystemStore()
   const { getThemeConfig } = useThemeStore()
   const themeConfig = getThemeConfig()
   const [isLoading, setIsLoading] = useState(false)
@@ -50,16 +53,21 @@ export function EditorToolbar({
     setIsLoading(true)
     try {
       const result = await openFile()
-      if (result.success && result.content) {
+      if (result.success && result.content && result.fileName) {
+        // 先导入到文件系统，然后再加载到编辑器
+        importFile(result.fileName, result.content, null)
         loadDocument(result.content, result.fileName)
       }
     } catch (error) {
       console.error('Failed to open file:', error)
-      alert('打开文件失败')
+      toast({
+        title: '打开文件失败',
+        variant: 'destructive',
+      })
     } finally {
       setIsLoading(false)
     }
-  }, [loadDocument])
+  }, [loadDocument, importFile])
 
   // 处理保存
   const handleSaveClick = useCallback(async () => {
@@ -77,11 +85,16 @@ export function EditorToolbar({
       const markdown = getCurrentMarkdown()
       const success = await saveFile(markdown, document.fileName)
       if (success) {
-        alert('保存成功')
+        toast({
+          title: '保存成功',
+        })
       }
     } catch (error) {
       console.error('Failed to save file:', error)
-      alert('保存文件失败')
+      toast({
+        title: '保存文件失败',
+        variant: 'destructive',
+      })
     } finally {
       setIsLoading(false)
     }
@@ -96,11 +109,16 @@ export function EditorToolbar({
       const markdown = getCurrentMarkdown()
       const success = await exportAsHTML(markdown, document.fileName)
       if (success) {
-        alert('导出成功')
+        toast({
+          title: '导出成功',
+        })
       }
     } catch (error) {
       console.error('Failed to export file:', error)
-      alert('导出文件失败')
+      toast({
+        title: '导出文件失败',
+        variant: 'destructive',
+      })
     } finally {
       setIsLoading(false)
     }

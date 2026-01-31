@@ -12,6 +12,8 @@ import { cn } from '@/lib/utils'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useThemeStore } from '@/stores/themeStore'
 import type { MarkdownFile } from '@/types/file-system'
+import { ConfirmDialog } from '../ui/confirm-dialog'
+import { toast } from '@/hooks/use-toast'
 
 interface FileItemProps {
   file: MarkdownFile
@@ -24,6 +26,7 @@ export function FileItem({ file, isActive, isModified, onClick }: FileItemProps)
   const [isEditing, setIsEditing] = useState(false)
   const [editName, setEditName] = useState(file.name)
   const [showContextMenu, setShowContextMenu] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   const { getThemeConfig } = useThemeStore()
@@ -48,9 +51,16 @@ export function FileItem({ file, isActive, isModified, onClick }: FileItemProps)
 
   // 处理删除
   const handleDelete = () => {
-    if (confirm(`确定要删除文件 "${file.name}" 吗？`)) {
-      deleteFile(file.id)
-    }
+    setShowDeleteConfirm(true)
+    setShowContextMenu(false)
+  }
+
+  // 确认删除
+  const handleConfirmDelete = () => {
+    deleteFile(file.id)
+    toast({
+      title: '文件已删除',
+    })
   }
 
   // 处理导出
@@ -177,6 +187,18 @@ export function FileItem({ file, isActive, isModified, onClick }: FileItemProps)
           </button>
         </div>
       )}
+
+      {/* 删除确认对话框 */}
+      <ConfirmDialog
+        isOpen={showDeleteConfirm}
+        onClose={() => setShowDeleteConfirm(false)}
+        onConfirm={handleConfirmDelete}
+        title="删除文件"
+        description={`确定要删除文件 "${file.name}" 吗？`}
+        confirmText="删除"
+        cancelText="取消"
+        variant="destructive"
+      />
     </>
   )
 }

@@ -118,13 +118,23 @@ export function MarkdownEditor() {
   useEffect(() => {
     setMounted(true)
     initTheme()
+  }, [])
 
-    // 如果没有文件，创建默认示例文件
-    if (files.length === 0) {
-      const { importFile } = useFileSystemStore.getState()
-      importFile('欢迎使用.md', defaultMarkdown, null)
-    }
-  }, [files.length])
+  // 创建默认文件（只在客户端挂载后且确实没有文件时执行一次）
+  useEffect(() => {
+    if (!mounted) return
+    
+    // 延迟执行，确保 persist 中间件已完成数据恢复
+    const timer = setTimeout(() => {
+      const { files } = useFileSystemStore.getState()
+      if (files.length === 0) {
+        const { importFile } = useFileSystemStore.getState()
+        importFile('欢迎使用.md', defaultMarkdown, null)
+      }
+    }, 100)
+    
+    return () => clearTimeout(timer)
+  }, [mounted])
   
   // 当切换文件时，加载文档到编辑器
   useEffect(() => {

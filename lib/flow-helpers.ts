@@ -15,7 +15,7 @@ import { calculateTreeLayout, DEFAULT_LAYOUT_CONFIG } from './layout-engine'
 /**
  * 节点数据类型
  */
-export interface FlowNodeData {
+export interface FlowNodeData extends Record<string, unknown> {
   label: string
   level: number
   isCollapsed: boolean
@@ -23,12 +23,13 @@ export interface FlowNodeData {
   content?: string
   childrenCount: number
   isDetached?: boolean
+  isVirtual?: boolean // 是否为虚拟根节点
   orderIndex?: number // 在父节点中的顺序序号（从1开始）
   siblingsCount?: number // 兄弟节点总数
   onToggleCollapse?: (id: string) => void
   onSelect?: (id: string) => void
   onMoveToPosition?: (id: string, position: number) => void // 移动到指定位置
-  [key: string]: unknown
+  metadata?: Record<string, string> // YAML 元数据（用于虚拟根节点）
 }
 
 /**

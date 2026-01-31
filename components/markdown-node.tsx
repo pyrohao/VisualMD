@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils'
 import { getLevelColor, type FlowNodeData } from '@/lib/flow-helpers'
 import { useThemeStore } from '@/stores/themeStore'
 import { useDocumentStore } from '@/stores/documentStore'
+import type { DocumentMetadata } from '@/types/tree'
 
 /**
  * Markdown节点组件属性
@@ -65,7 +66,7 @@ function MarkdownNodeComponent(props: MarkdownNodeProps) {
 
   // 获取文档元数据（用于虚拟根节点）
   const { document } = useDocumentStore()
-  const metadata = document?.metadata || {}
+  const metadata: DocumentMetadata = document?.metadata || {}
 
   // 处理展开/收起
   const handleToggleCollapse = useCallback(
@@ -235,7 +236,6 @@ function MarkdownNodeComponent(props: MarkdownNodeProps) {
                   )}
                 </div>
               )}
-
               {/* 内容展开/收起按钮 - 只在有内容时显示 */}
               {data.content && (
                 <button
@@ -255,7 +255,6 @@ function MarkdownNodeComponent(props: MarkdownNodeProps) {
               )}
             </>
           )}
-
           {/* 标题文本 - 虚拟根节点显示更多字符 */}
           <h3
             className={cn(

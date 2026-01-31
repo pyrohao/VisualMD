@@ -13,6 +13,9 @@ import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useThemeStore } from '@/stores/themeStore'
 import type { Folder as FolderType, MarkdownFile } from '@/types/file-system'
 import { FileItem } from './file-item'
+import { ConfirmDialog } from '../ui/confirm-dialog'
+import { PromptDialog } from '../ui/prompt-dialog'
+import { toast } from '@/hooks/use-toast'
 
 interface FolderItemProps {
   folder: FolderType
@@ -42,6 +45,8 @@ export function FolderItem({
   const [isEditing, setIsEditing] = useState(false)
   const [editName, setEditName] = useState(folder.name)
   const [showContextMenu, setShowContextMenu] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [showFilePrompt, setShowFilePrompt] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   const { getThemeConfig } = useThemeStore()
@@ -59,16 +64,31 @@ export function FolderItem({
 
   // 处理删除
   const handleDelete = () => {
-    if (confirm(`确定要删除文件夹 "${folder.name}" 吗？\n文件夹内的所有文件也将被删除。`)) {
-      deleteFolder(folder.id)
-    }
+    setShowDeleteConfirm(true)
+    setShowContextMenu(false)
+  }
+
+  // 确认删除
+  const handleConfirmDelete = () => {
+    deleteFolder(folder.id)
+    toast({
+      title: '文件夹已删除',
+    })
   }
 
   // 处理新建文件
   const handleCreateFile = () => {
-    const name = prompt('请输入文件名：', '未命名.md')
-    if (name) {
-      createFile(name, folder.id)
+    setShowFilePrompt(true)
+    setShowContextMenu(false)
+  }
+
+  // 确认创建文件
+  const handleConfirmCreateFile = (name: string) => {
+    if (name.trim()) {
+      createFile(name.trim(), folder.id)
+      toast({
+        title: '文件创建成功',
+      })
     }
   }
 
@@ -292,6 +312,31 @@ export function FolderItem({
       {showDragLineAfter && (
         <div className="h-0.5 bg-blue-500 rounded-full my-0.5" />
       )}
+
+      {/* 删除确认对话框 */}
+      <ConfirmDialog
+        isOpen={showDeleteConfirm}
+        onClose={() => setShowDeleteConfirm(false)}
+        onConfirm={handleConfirmDelete}
+        title="删除文件夹"
+        description={`确定要删除文件夹 "${folder.name}" 吗？文件夹内的所有文件也将被删除。`}
+        confirmText="删除"
+        cancelText="取消"
+        variant="destructive"
+      />
+
+      {/* 新建文件对话框 */}
+      <PromptDialog
+        isOpen={showFilePrompt}
+        onClose={() => setShowFilePrompt(false)}
+        onConfirm={handleConfirmCreateFile}
+        title="新建文件"
+        description="请输入文件名："
+        defaultValue="未命名.md"
+        confirmText="创建"
+        cancelText="取消"
+        placeholder="文件名"
+      />
     </div>
   )
 }

@@ -23,6 +23,8 @@ import { ScrollArea } from './ui/scroll-area'
 import { useDocumentStore } from '@/stores/documentStore'
 import { useThemeStore } from '@/stores/themeStore'
 import { findNodeInTree } from '@/lib/flow-helpers'
+import { toast } from '@/hooks/use-toast'
+import { ConfirmDialog } from './ui/confirm-dialog'
 
 export function NodeEditPanel() {
   const {
@@ -45,6 +47,9 @@ export function NodeEditPanel() {
   const [metadataEntries, setMetadataEntries] = useState<{key: string, value: string}[]>([])
   const [newKey, setNewKey] = useState('')
   const [newValue, setNewValue] = useState('')
+  
+  // 确认对话框状态
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
   // 获取当前选中的节点
   const selectedNode = selectedNodeId && document
@@ -97,7 +102,11 @@ export function NodeEditPanel() {
     // 标题判空验证
     const trimmedTitle = title.trim()
     if (!trimmedTitle) {
-      alert('节点标题不能为空，请输入标题内容')
+      toast({
+        title: '节点标题不能为空',
+        description: '请输入标题内容',
+        variant: 'destructive',
+      })
       return
     }
 
@@ -127,9 +136,17 @@ export function NodeEditPanel() {
 
   // 删除节点
   const handleDelete = useCallback(() => {
-    if (selectedNodeId && confirm('确定要删除这个节点吗？')) {
+    setShowDeleteConfirm(true)
+  }, [])
+  
+  // 确认删除
+  const handleConfirmDelete = useCallback(() => {
+    if (selectedNodeId) {
       deleteNode(selectedNodeId)
       selectNode(null)
+      toast({
+        title: '节点已删除',
+      })
     }
   }, [selectedNodeId, deleteNode, selectNode])
 
@@ -474,6 +491,18 @@ export function NodeEditPanel() {
           </div>
         </div>
       </div>
+      
+      {/* 删除确认对话框 */}
+      <ConfirmDialog
+        isOpen={showDeleteConfirm}
+        onClose={() => setShowDeleteConfirm(false)}
+        onConfirm={handleConfirmDelete}
+        title="删除节点"
+        description="确定要删除这个节点吗？此操作不可撤销。"
+        confirmText="删除"
+        cancelText="取消"
+        variant="destructive"
+      />
     </div>
   )
 }

@@ -39,6 +39,7 @@ import { calculateTreeLayout } from '@/lib/layout-engine'
 import { useDocumentStore } from '@/stores/documentStore'
 import type { TreeNode } from '@/types/tree'
 import { useThemeStore } from '@/stores/themeStore'
+import { toast } from '@/hooks/use-toast'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -224,7 +225,11 @@ export function FlowCanvas() {
 
       // 检查层级限制
       if (parentNode.level >= 6) {
-        alert('已达到最大层级限制（6级），无法继续添加子节点')
+        toast({
+          title: '已达到最大层级限制',
+          description: '无法继续添加子节点（最大6级）',
+          variant: 'destructive',
+        })
         // 重置连接状态
         connectingNodeId.current = null
         connectingHandleId.current = null
@@ -359,7 +364,11 @@ export function FlowCanvas() {
       // 检查层级关系：只能连接到大一级的节点
       const expectedLevel = sourceNode.level + 1
       if (targetNode.level !== expectedLevel) {
-        alert(`层级不匹配：H${targetNode.level} 节点不能连接到 H${sourceNode.level} 节点下。只能连接 H${expectedLevel} 节点。`)
+        toast({
+          title: '层级不匹配',
+          description: `H${targetNode.level} 节点不能连接到 H${sourceNode.level} 节点下。只能连接 H${expectedLevel} 节点。`,
+          variant: 'destructive',
+        })
         return
       }
 
@@ -471,8 +480,12 @@ export function FlowCanvas() {
   // 监听错误并自动清除
   useEffect(() => {
     if (error) {
-      // 显示错误提示（使用 alert 或 toast）
-      alert(error)
+      // 显示错误提示
+      toast({
+        title: '错误',
+        description: error,
+        variant: 'destructive',
+      })
       // 清除错误
       clearError()
     }
