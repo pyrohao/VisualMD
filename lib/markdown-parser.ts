@@ -81,12 +81,25 @@ export function extractHeadings(content: string): HeadingNode[] {
 }
 
 /**
- * 步骤3：构建树结构（核心算法）
+ * 步骤3：构建树结构（核心算法）- 优化版本
  * 对应技术文档3.1节 - 步骤3
  *
- * 算法：基于栈的树构建算法
- * 时间复杂度：O(n)，n为标题数量
- * 空间复杂度：O(h)，h为树的最大深度
+ * 算法优化：
+ * 1. 层级优先查找：先确定文档中存在的最大标题层级
+ * 2. 虚拟根节点：连接所有最大层级的标题（同级标题）
+ * 3. 孤立节点处理：无父节点的标题作为孤立节点，不连接任何节点
+ * 4. 栈结构构建：O(n)时间复杂度构建树
+ *
+ * 示例：
+ * #### 四级标题A
+ * # 一级A
+ * ## 二级A1
+ * #### 四级标题B
+ *
+ * 处理结果：
+ * - 最大层级为1（存在一级标题）
+ * - 一级A → 二级A1（正常层级关系）
+ * - 四级标题A、四级标题B为孤立节点（无父节点）
  *
  * @param headings 标题节点数组（按文档顺序）
  * @param metadata 文档元数据（用于根节点标题）
@@ -101,40 +114,109 @@ export function buildTree(headings: HeadingNode[], metadata: DocumentMetadata): 
     children: [],
     parentId: null,
     isVirtual: true,
-    isCollapsed: false,
+    isCollapsed: true, // 默认折叠状态
   }
 
   if (headings.length === 0) {
     return root
   }
 
-  // 初始化栈，将根节点入栈
-  const stack: TreeNode[] = [root]
-
-  for (const heading of headings) {
-    // 弹出层级 >= 当前节点的
-    while (stack.length > 0 && stack[stack.length - 1].level >= heading.level) {
-      stack.pop()
+  // 步骤1：确定最大标题层级
+  // 从1到6查找，找到存在的最高层级
+  let maxLevel = 6
+  for (let level = 1; level <= 6; level++) {
+    if (headings.some(h => h.level === level)) {
+      maxLevel = level
+      break
     }
+  }
 
-    // 此时栈顶节点即为当前节点的父节点
-    const parent = stack[stack.length - 1]
+  // 步骤2：分类标题
+  // - 顶级标题：层级等于maxLevel的标题
+  // - 普通标题：其他层级的标题
+  const topLevelHeadings = headings.filter(h => h.level === maxLevel)
+  const normalHeadings = headings.filter(h => h.level > maxLevel)
 
-    // 创建新节点
+  // 步骤3：构建节点映射
+  const nodeMap = new Map<string, TreeNode>()
+
+  // 创建所有标题对应的节点，并分配文档顺序
+  const allNodes: TreeNode[] = []
+  for (let i = 0; i < headings.length; i++) {
+    const heading = headings[i]
     const node: TreeNode = {
       id: generateId(),
       level: heading.level,
       title: heading.title,
       children: [],
-      parentId: parent.id,
+      parentId: null, // 初始为null，后续根据关系设置
       isCollapsed: false,
+      documentOrder: i, // 分配文档原始顺序
+      // 记录原始位置信息，用于后续处理
+      _headingIndex: i,
+    } as TreeNode & { _headingIndex: number }
+
+    nodeMap.set(node.id, node)
+    allNodes.push(node)
+  }
+
+  // 步骤4：使用栈结构构建树关系
+  // 按文档顺序处理标题，维护一个层级栈
+  const stack: TreeNode[] = [root]
+
+  for (const node of allNodes) {
+    // 如果是顶级标题（最大层级），连接到虚拟根节点
+    if (node.level === maxLevel) {
+      node.parentId = root.id
+      root.children.push(node)
+      // 更新栈：弹出所有层级 >= 当前节点的，然后入栈当前节点
+      while (stack.length > 1 && stack[stack.length - 1].level >= node.level) {
+        stack.pop()
+      }
+      stack.push(node)
+      continue
     }
 
-    // 将当前节点添加到父节点的children数组
-    parent.children.push(node)
+    // 对于非顶级标题，查找父节点
+    // 策略：向前查找最近的、层级小于当前节点的标题
+    let parentFound = false
 
-    // 将当前节点入栈
-    stack.push(node)
+    // 从栈中查找合适的父节点
+    while (stack.length > 1) {
+      const potentialParent = stack[stack.length - 1]
+      // 父节点必须满足：层级 < 当前节点层级
+      if (potentialParent.level < node.level) {
+        node.parentId = potentialParent.id
+        potentialParent.children.push(node)
+        parentFound = true
+        break
+      }
+      // 如果不满足，弹出栈顶
+      stack.pop()
+    }
+
+    // 如果没找到父节点（孤立节点），保持parentId为null
+    // 这些节点不会连接到树中，但会保留在文档中
+    if (!parentFound) {
+      // 标记为孤立节点
+      ;(node as TreeNode & { _isOrphan: boolean })._isOrphan = true
+    }
+
+    // 将当前节点入栈（如果找到了父节点）
+    if (parentFound) {
+      stack.push(node)
+    }
+  }
+
+  // 步骤5：收集孤立节点到根节点的特殊children中（用于前端展示）
+  // 这些节点在MD渲染时不显示，但在可视化中可以显示为未连接节点
+  const orphanNodes = allNodes.filter(
+    node => (node as TreeNode & { _isOrphan?: boolean })._isOrphan
+  )
+
+  if (orphanNodes.length > 0) {
+    // 将孤立节点存储在根节点的元数据中
+    ;(root as TreeNode & { orphanNodes?: TreeNode[] }).orphanNodes = orphanNodes
   }
 
   return root
