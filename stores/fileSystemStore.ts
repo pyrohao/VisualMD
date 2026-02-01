@@ -16,6 +16,48 @@ import { nanoid } from 'nanoid'
 import type { Folder, MarkdownFile, Workspace, DropPosition } from '@/types/file-system'
 
 /**
+ * 生成唯一的文件名（处理重复）
+ * 类似于 Windows 的命名规则：文件名 (1).md, 文件名 (2).md
+ */
+function generateUniqueFileName(
+  files: MarkdownFile[],
+  fileName: string,
+  folderId: string | null = null
+): string {
+  // 检查是否有同名文件
+  const existingFile = files.find(
+    (f) => f.name === fileName && f.folderId === folderId
+  )
+
+  if (!existingFile) {
+    return fileName
+  }
+
+  // 提取基础名称和扩展名
+  const baseName = fileName.replace(/\.md$/, '')
+  const ext = '.md'
+
+  // 查找最大的序号
+  let maxIndex = 0
+  const regex = new RegExp(`^${baseName}\\s*\\((\\d+)\\)\\.md$`)
+
+  files.forEach((f) => {
+    if (f.folderId === folderId) {
+      const match = f.name.match(regex)
+      if (match) {
+        const index = parseInt(match[1], 10)
+        if (index > maxIndex) {
+          maxIndex = index
+        }
+      }
+    }
+  })
+
+  // 生成新的文件名
+  return `${baseName} (${maxIndex + 1})${ext}`
+}
+
+/**
  * 文件系统 Store 接口
  */
 interface FileSystemStore {
@@ -109,7 +151,7 @@ export const useFileSystemStore = create<FileSystemStore>()(
         expandedFolderIds: new Set(),
         
         // ==================== 计算属性 ====================
-        
+
         sortedFolders: () => {
           const { folders } = get()
           return [...folders].sort((a, b) => a.order - b.order)
@@ -185,13 +227,36 @@ export const useFileSystemStore = create<FileSystemStore>()(
         createFile: (name: string, folderId: string | null = null) => {
           const { files } = get()
           const now = Date.now()
+
+          // 确保文件名以 .md 结尾
+          let fileName = name.trim() || '未命名文档.md'
+          if (!fileName.endsWith('.md')) {
+            fileName = fileName + '.md'
+          }
+
+          // 处理文件名重复
+          fileName = generateUniqueFileName(files, fileName, folderId)
+
+          // 提取文档名称（去掉 .md 后缀）
+          const docName = fileName.replace(/\.md$/, '')
+
+          // 生成带 YAML front matter 的内容
+          const content = `---
+name: ${docName}
+description: 
+---
+
+# 新节点
+
+开始编辑...`
+
           const newFile: MarkdownFile = {
             id: nanoid(),
             type: 'file',
-            name: name.trim() || '未命名文档.md',
+            name: fileName,
             folderId,
             order: getMaxOrder(files.filter(f => f.folderId === folderId)) + 1,
-            content: `# ${name.trim().replace(/\.md$/, '') || '未命名文档'}\n\n开始编辑...`,
+            content,
             isModified: false,
             lastOpenedAt: now,
             createdAt: now,

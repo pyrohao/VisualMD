@@ -40,6 +40,7 @@ import { useDocumentStore } from '@/stores/documentStore'
 import type { TreeNode } from '@/types/tree'
 import { useThemeStore } from '@/stores/themeStore'
 import { toast } from '@/hooks/use-toast'
+import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -64,10 +65,24 @@ export function FlowCanvas() {
     connectNode,
     error,
     clearError,
+    markAsSaved,
   } = useDocumentStore()
 
   const { getThemeConfig } = useThemeStore()
   const themeConfig = getThemeConfig()
+
+  // 启用键盘快捷键
+  useKeyboardShortcuts({
+    enableUndoRedo: true,
+    enableSave: true,
+    onSave: () => {
+      markAsSaved()
+      toast({
+        title: '已保存',
+        description: '文档已保存',
+      })
+    },
+  })
 
   // 将树结构转换为React Flow节点和边
   const { nodes: initialNodes, edges: initialEdges } = useMemo(() => {

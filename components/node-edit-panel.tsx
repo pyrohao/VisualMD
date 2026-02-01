@@ -106,10 +106,32 @@ export function NodeEditPanel() {
         }
       })
       updateMetadata(metadata)
-      updateNode(selectedNodeId, { title: title.trim() || '未命名文档' })
+      updateNode(selectedNodeId, { title: String(title || '').trim() || '未命名文档' })
+      
+      // 同步更新文件系统中的文件名（如果标题变化）
+      const newTitle = String(title || '').trim() || '未命名文档'
+      if (currentFileId) {
+        const { files } = useFileSystemStore.getState()
+        const currentFile = files.find(f => f.id === currentFileId)
+        if (currentFile) {
+          // 提取当前文件名（去掉 .md 后缀）
+          const currentNameWithoutExt = currentFile.name.replace(/\.md$/, '')
+          // 只有当标题真正改变时才更新文件名
+          if (currentNameWithoutExt !== newTitle) {
+            const newFileName = newTitle.endsWith('.md') ? newTitle : `${newTitle}.md`
+            useFileSystemStore.setState((state) => ({
+              files: state.files.map(f =>
+                f.id === currentFileId
+                  ? { ...f, name: newFileName, updatedAt: Date.now() }
+                  : f
+              ),
+            }))
+          }
+        }
+      }
     } else {
       // 普通节点保存
-      const trimmedTitle = title.trim()
+      const trimmedTitle = String(title || '').trim()
       if (trimmedTitle) {
         updateNode(selectedNodeId, { title: trimmedTitle, content: content || undefined })
       }

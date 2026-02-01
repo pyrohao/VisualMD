@@ -16,6 +16,7 @@ import { nanoid } from 'nanoid'
 import type { TreeNode, DocumentState, DocumentMetadata } from '@/types/tree'
 import { parseMarkdown } from '@/lib/markdown-parser'
 import { generateFromState, generateMarkdown } from '@/lib/markdown-generator'
+import { useHistoryStore, injectGetDocumentState } from './historyStore'
 
 /**
  * 文档Store状态接口
@@ -173,6 +174,26 @@ interface DocumentStore {
    * @param nodeId 节点ID
    */
   findNodeById: (nodeId: string) => TreeNode | null
+
+  /**
+   * 撤销操作
+   */
+  undo: () => void
+
+  /**
+   * 重做操作
+   */
+  redo: () => void
+
+  /**
+   * 是否可以撤销
+   */
+  canUndo: () => boolean
+
+  /**
+   * 是否可以重做
+   */
+  canRedo: () => boolean
 }
 
 /**
@@ -408,63 +429,73 @@ function cloneTreeNode(node: TreeNode): TreeNode {
  */
 export const useDocumentStore = create<DocumentStore>()(
   devtools(
-    (set, get) => ({
-      // ==================== 初始状态 ====================
-      document: null,
-      selectedNodeId: null,
-      expandedNodeIds: new Set(['root']),
-      isLoading: false,
-      error: null,
-
-      // ==================== 操作实现 ====================
-      
-      loadDocument: (content: string, fileName?: string) => {
-        try {
-          const document = parseMarkdown(content, fileName)
-          // 默认展开所有节点
-          const allIds = collectAllNodeIds(document.root)
-          set({ 
-            document, 
-            expandedNodeIds: new Set(allIds),
-            selectedNodeId: null,
-            error: null 
-          })
-        } catch (error) {
-          set({ 
-            error: error instanceof Error ? error.message : 'Failed to load document' 
-          })
+    (set, get) => {
+      // 注入获取文档状态的函数到historyStore
+      injectGetDocumentState(() => {
+        const { document } = get()
+        if (!document) return null
+        return {
+          root: document.root,
+          metadata: document.metadata
         }
-      },
+      })
 
-      markAsSaved: () => {
-        const { document } = get()
-        if (document) {
-          set({ 
-            document: { ...document, isModified: false } 
+      return {
+        // ==================== 初始状态 ====================
+        document: null,
+        selectedNodeId: null,
+        expandedNodeIds: new Set(['root']),
+        isLoading: false,
+        error: null,
+
+        // ==================== 操作实现 ====================
+        
+        loadDocument: (content: string, fileName?: string) => {
+          try {
+            const document = parseMarkdown(content, fileName)
+            // 默认展开所有节点
+            const allIds = collectAllNodeIds(document.root)
+            set({ 
+              document, 
+              expandedNodeIds: new Set(allIds),
+              selectedNodeId: null,
+              error: null 
+            })
+            // 清空历史记录
+            useHistoryStore.getState().clear()
+          } catch (error) {
+            set({ 
+              error: error instanceof Error ? error.message : 'Failed to load document' 
+            })
+          }
+        },
+
+        markAsSaved: () => {
+          const { document } = get()
+          if (document) {
+            set({ 
+              document: { ...document, isModified: false } 
+            })
+          }
+        },
+
+        updateNode: (nodeId: string, updates: Partial<TreeNode>) => {
+          const { document } = get()
+          if (!document) return
+
+          // 查找节点获取标题用于描述
+          const node = findNodeInTree(document.root, nodeId)
+          const description = updates.title 
+            ? `修改标题: "${node?.title || ''}" → "${updates.title}"`
+            : `更新节点: ${node?.title || nodeId}`
+          
+          // 添加历史记录
+          useHistoryStore.getState().addHistory({
+            type: 'updateNode',
+            description,
           })
-        }
-      },
-
-      updateNode: (nodeId: string, updates: Partial<TreeNode>) => {
-        const { document } = get()
-        if (!document) return
-        
-        const newRoot = updateNodeInTree(document.root, nodeId, updates)
-        set({ 
-          document: { 
-            ...document, 
-            root: newRoot, 
-            isModified: true 
-          } 
-        })
-      },
-
-      moveNode: (nodeId: string, newParentId: string, index: number) => {
-        const { document } = get()
-        if (!document) return
-        
-        try {
-          const newRoot = moveNodeInTree(document.root, nodeId, newParentId, index)
+          
+          const newRoot = updateNodeInTree(document.root, nodeId, updates)
           set({ 
             document: { 
               ...document, 
@@ -472,353 +503,455 @@ export const useDocumentStore = create<DocumentStore>()(
               isModified: true 
             } 
           })
-        } catch (error) {
-          set({ 
-            error: error instanceof Error ? error.message : 'Failed to move node' 
-          })
-        }
-      },
+        },
 
-      deleteNode: (nodeId: string) => {
-        const { document, selectedNodeId } = get()
-        if (!document || nodeId === 'root') return
-        
-        const newRoot = deleteNodeFromTree(document.root, nodeId)
-        set({ 
-          document: { 
-            ...document, 
-            root: newRoot, 
-            isModified: true 
-          },
-          selectedNodeId: selectedNodeId === nodeId ? null : selectedNodeId
-        })
-      },
+        moveNode: (nodeId: string, newParentId: string, index: number) => {
+          const { document } = get()
+          if (!document) return
+          
+          try {
+            // 添加历史记录
+            const node = findNodeInTree(document.root, nodeId)
+            const newParent = findNodeInTree(document.root, newParentId)
+            useHistoryStore.getState().addHistory({
+              type: 'moveNode',
+              description: `移动节点: "${node?.title || nodeId}" → "${newParent?.title || newParentId}"`,
+            })
 
-      addChildNode: (parentId: string, title: string, insertIndex?: number) => {
-        const { document } = get()
-        if (!document) return null
-
-        // 查找父节点
-        const parentNode = findNodeInTree(document.root, parentId)
-        if (!parentNode) return null
-
-        // 检查层级限制（最大6级）
-        if (parentNode.level >= 6) {
-          set({ error: '已达到最大层级限制（6级），无法继续添加子节点' })
-          return null
-        }
-
-        // 创建新节点
-        const newNode: TreeNode = {
-          id: nanoid(10),
-          level: parentNode.level + 1,
-          title: title || '新节点',
-          children: [],
-          parentId: parentId,
-          isCollapsed: false,
-        }
-
-        // 添加到树中（支持指定插入位置）
-        const newRoot = addChildNodeInTree(document.root, parentId, newNode, insertIndex)
-
-        // 自动展开父节点
-        const { expandedNodeIds } = get()
-        const newExpanded = new Set(expandedNodeIds)
-        newExpanded.add(parentId)
-
-        set({
-          document: {
-            ...document,
-            root: newRoot,
-            isModified: true
-          },
-          expandedNodeIds: newExpanded,
-          error: null
-        })
-
-        return newNode.id
-      },
-
-      detachNode: (nodeId: string) => {
-        const { document } = get()
-        if (!document || nodeId === 'root') return
-
-        // 查找节点
-        const node = findNodeInTree(document.root, nodeId)
-        if (!node) return
-
-        // 检查是否是虚拟根节点的直接子节点（一级节点）
-        if (node.parentId === 'root') {
-          set({ error: '一级节点不能断开连接，它是文档的根结构' })
-          return
-        }
-
-        // 断开节点
-        const { root: newRoot, detachedNode } = detachNodeFromTree(document.root, nodeId)
-        
-        if (!detachedNode) {
-          set({ error: '断开节点失败' })
-          return
-        }
-
-        // 将断开的节点存储在文档的 detachedNodes 中
-        const detachedNodes = (document as any).detachedNodes || []
-        
-        set({ 
-          document: { 
-            ...document, 
-            root: newRoot,
-            detachedNodes: [...detachedNodes, detachedNode],
-            isModified: true 
-          },
-          error: null
-        })
-      },
-
-      connectNode: (nodeId: string, parentId: string) => {
-        const { document } = get()
-        if (!document) return
-
-        // 从 detachedNodes 中找到断开的节点
-        const detachedNodes = (document as any).detachedNodes || []
-        const detachedNode = detachedNodes.find((n: TreeNode) => n.id === nodeId)
-
-        if (!detachedNode) {
-          set({ error: '找不到断开的节点' })
-          return
-        }
-
-        // 查找目标父节点
-        const parentNode = findNodeInTree(document.root, parentId)
-        if (!parentNode) {
-          set({ error: '找不到目标父节点' })
-          return
-        }
-
-        // 验证层级关系：只能连接到大一级的节点
-        const expectedLevel = parentNode.level + 1
-        if (detachedNode.level !== expectedLevel) {
-          if (detachedNode.level < expectedLevel) {
-            set({ error: `不能将 H${detachedNode.level} 节点连接到 H${parentNode.level} 节点下，目标父节点层级太高` })
-          } else {
-            set({ error: `不能将 H${detachedNode.level} 节点连接到 H${parentNode.level} 节点下，目标父节点层级太低` })
+            const newRoot = moveNodeInTree(document.root, nodeId, newParentId, index)
+            set({ 
+              document: { 
+                ...document, 
+                root: newRoot, 
+                isModified: true 
+              } 
+            })
+          } catch (error) {
+            set({ 
+              error: error instanceof Error ? error.message : 'Failed to move node' 
+            })
           }
-          return
-        }
+        },
 
-        // 检查是否会导致循环引用
-        let currentParent = findParentInTree(document.root, parentId)
-        while (currentParent) {
-          if (currentParent.id === nodeId) {
-            set({ error: '不能将节点连接到其自身的后代节点下' })
+        deleteNode: (nodeId: string) => {
+          const { document, selectedNodeId } = get()
+          if (!document || nodeId === 'root') return
+          
+          // 添加历史记录
+          const node = findNodeInTree(document.root, nodeId)
+          useHistoryStore.getState().addHistory({
+            type: 'deleteNode',
+            description: `删除节点: "${node?.title || nodeId}"`,
+          })
+
+          const newRoot = deleteNodeFromTree(document.root, nodeId)
+          set({ 
+            document: { 
+              ...document, 
+              root: newRoot, 
+              isModified: true 
+            },
+            selectedNodeId: selectedNodeId === nodeId ? null : selectedNodeId
+          })
+        },
+
+        addChildNode: (parentId: string, title: string, insertIndex?: number) => {
+          const { document } = get()
+          if (!document) return null
+
+          // 查找父节点
+          const parentNode = findNodeInTree(document.root, parentId)
+          if (!parentNode) return null
+
+          // 检查层级限制（最大6级）
+          if (parentNode.level >= 6) {
+            set({ error: '已达到最大层级限制（6级），无法继续添加子节点' })
+            return null
+          }
+
+          // 创建新节点
+          const newNode: TreeNode = {
+            id: nanoid(10),
+            level: parentNode.level + 1,
+            title: title || '新节点',
+            children: [],
+            parentId: parentId,
+            isCollapsed: false,
+          }
+
+          // 添加历史记录
+          useHistoryStore.getState().addHistory({
+            type: 'addChildNode',
+            description: `添加节点: "${newNode.title}" 到 "${parentNode.title}"`,
+          })
+
+          // 添加到树中（支持指定插入位置）
+          const newRoot = addChildNodeInTree(document.root, parentId, newNode, insertIndex)
+
+          // 自动展开父节点
+          const { expandedNodeIds } = get()
+          const newExpanded = new Set(expandedNodeIds)
+          newExpanded.add(parentId)
+
+          set({
+            document: {
+              ...document,
+              root: newRoot,
+              isModified: true
+            },
+            expandedNodeIds: newExpanded,
+            error: null
+          })
+
+          return newNode.id
+        },
+
+        detachNode: (nodeId: string) => {
+          const { document } = get()
+          if (!document || nodeId === 'root') return
+
+          // 查找节点
+          const node = findNodeInTree(document.root, nodeId)
+          if (!node) return
+
+          // 检查是否是虚拟根节点的直接子节点（一级节点）
+          if (node.parentId === 'root') {
+            set({ error: '一级节点不能断开连接，它是文档的根结构' })
             return
           }
-          currentParent = findParentInTree(document.root, currentParent.id)
-        }
 
-        // 连接节点
-        const newRoot = connectNodeToTree(document.root, detachedNode, parentId)
+          // 断开节点
+          const { root: newRoot, detachedNode } = detachNodeFromTree(document.root, nodeId)
+          
+          if (!detachedNode) {
+            set({ error: '断开节点失败' })
+            return
+          }
 
-        // 从 detachedNodes 中移除
-        const newDetachedNodes = detachedNodes.filter((n: TreeNode) => n.id !== nodeId)
-
-        set({
-          document: {
-            ...document,
-            root: newRoot,
-            detachedNodes: newDetachedNodes,
-            isModified: true
-          },
-          error: null
-        })
-      },
-
-      moveNodeOrder: (nodeId: string, direction: 'up' | 'down' | 'first' | 'last') => {
-        const { document } = get()
-        if (!document || nodeId === 'root') return
-
-        // 查找节点及其父节点
-        const node = findNodeInTree(document.root, nodeId)
-        if (!node) return
-
-        const parentNode = findParentInTree(document.root, nodeId)
-        if (!parentNode) return
-
-        // 获取当前索引
-        const currentIndex = parentNode.children.findIndex(child => child.id === nodeId)
-        if (currentIndex === -1) return
-
-        // 计算新索引
-        let newIndex = currentIndex
-        switch (direction) {
-          case 'up':
-            newIndex = Math.max(0, currentIndex - 1)
-            break
-          case 'down':
-            newIndex = Math.min(parentNode.children.length - 1, currentIndex + 1)
-            break
-          case 'first':
-            newIndex = 0
-            break
-          case 'last':
-            newIndex = parentNode.children.length - 1
-            break
-        }
-
-        // 如果位置没有变化，直接返回
-        if (newIndex === currentIndex) return
-
-        // 移动节点
-        const newChildren = [...parentNode.children]
-        const [movedNode] = newChildren.splice(currentIndex, 1)
-        newChildren.splice(newIndex, 0, movedNode)
-
-        // 更新父节点的 children
-        parentNode.children = newChildren
-
-        set({
-          document: {
-            ...document,
-            isModified: true
-          },
-          error: null
-        })
-      },
-
-      moveNodeToPosition: (nodeId: string, targetPosition: number) => {
-        const { document } = get()
-        if (!document || nodeId === 'root') return
-
-        // 查找节点及其父节点
-        const node = findNodeInTree(document.root, nodeId)
-        if (!node) return
-
-        const parentNode = findParentInTree(document.root, nodeId)
-        if (!parentNode) return
-
-        // 获取当前索引
-        const currentIndex = parentNode.children.findIndex(child => child.id === nodeId)
-        if (currentIndex === -1) return
-
-        // 验证目标位置是否有效（1-based，转换为 0-based）
-        const newIndex = targetPosition - 1
-        const maxIndex = parentNode.children.length - 1
-
-        if (newIndex < 0 || newIndex > maxIndex || newIndex === currentIndex) {
-          return // 位置无效或没有变化
-        }
-
-        // 移动节点
-        const newChildren = [...parentNode.children]
-        const [movedNode] = newChildren.splice(currentIndex, 1)
-        newChildren.splice(newIndex, 0, movedNode)
-
-        // 更新父节点的 children
-        parentNode.children = newChildren
-
-        // 强制创建新的 document 对象以触发重新渲染
-        const newRoot = cloneTreeNode(document.root)
-
-        set({
-          document: {
-            ...document,
-            root: newRoot,
-            isModified: true
-          },
-          error: null
-        })
-      },
-
-      selectNode: (nodeId: string | null) => {
-        set({ selectedNodeId: nodeId })
-      },
-
-      toggleNode: (nodeId: string) => {
-        const { expandedNodeIds } = get()
-        const newExpanded = new Set(expandedNodeIds)
-        if (newExpanded.has(nodeId)) {
-          newExpanded.delete(nodeId)
-        } else {
-          newExpanded.add(nodeId)
-        }
-        set({ expandedNodeIds: newExpanded })
-      },
-
-      expandAll: () => {
-        const { document } = get()
-        if (!document) return
-        
-        const allIds = collectAllNodeIds(document.root)
-        set({ expandedNodeIds: new Set(allIds) })
-      },
-
-      collapseAll: () => {
-        set({ expandedNodeIds: new Set(['root']) })
-      },
-
-      updateMetadata: (metadata: Partial<DocumentMetadata>) => {
-        const { document } = get()
-        if (!document) return
-        
-        set({ 
-          document: { 
-            ...document, 
-            metadata: { ...document.metadata, ...metadata },
-            isModified: true 
-          } 
-        })
-      },
-
-      updateFromMarkdown: (markdown: string) => {
-        const { document } = get()
-        if (!document) return
-        
-        try {
-          const newDocument = parseMarkdown(markdown, document.fileName)
+          // 将断开的节点存储在文档的 detachedNodes 中
+          const detachedNodes = (document as any).detachedNodes || []
+          
           set({ 
-            document: { ...newDocument, isModified: true },
-            error: null 
+            document: { 
+              ...document, 
+              root: newRoot,
+              detachedNodes: [...detachedNodes, detachedNode],
+              isModified: true 
+            },
+            error: null
           })
-        } catch (error) {
+        },
+
+        connectNode: (nodeId: string, parentId: string) => {
+          const { document } = get()
+          if (!document) return
+
+          // 从 detachedNodes 中找到断开的节点
+          const detachedNodes = (document as any).detachedNodes || []
+          const detachedNode = detachedNodes.find((n: TreeNode) => n.id === nodeId)
+
+          if (!detachedNode) {
+            set({ error: '找不到断开的节点' })
+            return
+          }
+
+          // 查找目标父节点
+          const parentNode = findNodeInTree(document.root, parentId)
+          if (!parentNode) {
+            set({ error: '找不到目标父节点' })
+            return
+          }
+
+          // 验证层级关系：只能连接到大一级的节点
+          const expectedLevel = parentNode.level + 1
+          if (detachedNode.level !== expectedLevel) {
+            if (detachedNode.level < expectedLevel) {
+              set({ error: `不能将 H${detachedNode.level} 节点连接到 H${parentNode.level} 节点下，目标父节点层级太高` })
+            } else {
+              set({ error: `不能将 H${detachedNode.level} 节点连接到 H${parentNode.level} 节点下，目标父节点层级太低` })
+            }
+            return
+          }
+
+          // 检查是否会导致循环引用
+          let currentParent = findParentInTree(document.root, parentId)
+          while (currentParent) {
+            if (currentParent.id === nodeId) {
+              set({ error: '不能将节点连接到其自身的后代节点下' })
+              return
+            }
+            currentParent = findParentInTree(document.root, currentParent.id)
+          }
+
+          // 连接节点
+          const newRoot = connectNodeToTree(document.root, detachedNode, parentId)
+
+          // 从 detachedNodes 中移除
+          const newDetachedNodes = detachedNodes.filter((n: TreeNode) => n.id !== nodeId)
+
+          set({
+            document: {
+              ...document,
+              root: newRoot,
+              detachedNodes: newDetachedNodes,
+              isModified: true
+            },
+            error: null
+          })
+        },
+
+        moveNodeOrder: (nodeId: string, direction: 'up' | 'down' | 'first' | 'last') => {
+          const { document } = get()
+          if (!document || nodeId === 'root') return
+
+          // 查找节点及其父节点
+          const node = findNodeInTree(document.root, nodeId)
+          if (!node) return
+
+          const parentNode = findParentInTree(document.root, nodeId)
+          if (!parentNode) return
+
+          // 获取当前索引
+          const currentIndex = parentNode.children.findIndex(child => child.id === nodeId)
+          if (currentIndex === -1) return
+
+          // 计算新索引
+          let newIndex = currentIndex
+          switch (direction) {
+            case 'up':
+              newIndex = Math.max(0, currentIndex - 1)
+              break
+            case 'down':
+              newIndex = Math.min(parentNode.children.length - 1, currentIndex + 1)
+              break
+            case 'first':
+              newIndex = 0
+              break
+            case 'last':
+              newIndex = parentNode.children.length - 1
+              break
+          }
+
+          // 如果位置没有变化，直接返回
+          if (newIndex === currentIndex) return
+
+          // 添加历史记录
+          useHistoryStore.getState().addHistory({
+            type: 'moveNodeOrder',
+            description: `调整顺序: "${node.title}" ${direction === 'up' ? '上移' : direction === 'down' ? '下移' : direction === 'first' ? '置顶' : '置底'}`,
+          })
+
+          // 移动节点
+          const newChildren = [...parentNode.children]
+          const [movedNode] = newChildren.splice(currentIndex, 1)
+          newChildren.splice(newIndex, 0, movedNode)
+
+          // 更新父节点的 children
+          parentNode.children = newChildren
+
+          set({
+            document: {
+              ...document,
+              isModified: true
+            },
+            error: null
+          })
+        },
+
+        moveNodeToPosition: (nodeId: string, targetPosition: number) => {
+          const { document } = get()
+          if (!document || nodeId === 'root') return
+
+          // 查找节点及其父节点
+          const node = findNodeInTree(document.root, nodeId)
+          if (!node) return
+
+          const parentNode = findParentInTree(document.root, nodeId)
+          if (!parentNode) return
+
+          // 获取当前索引
+          const currentIndex = parentNode.children.findIndex(child => child.id === nodeId)
+          if (currentIndex === -1) return
+
+          // 验证目标位置是否有效（1-based，转换为 0-based）
+          const newIndex = targetPosition - 1
+          const maxIndex = parentNode.children.length - 1
+
+          if (newIndex < 0 || newIndex > maxIndex || newIndex === currentIndex) {
+            return // 位置无效或没有变化
+          }
+
+          // 添加历史记录
+          useHistoryStore.getState().addHistory({
+            type: 'moveNodeOrder',
+            description: `移动位置: "${node.title}" 到第 ${targetPosition} 位`,
+          })
+
+          // 移动节点
+          const newChildren = [...parentNode.children]
+          const [movedNode] = newChildren.splice(currentIndex, 1)
+          newChildren.splice(newIndex, 0, movedNode)
+
+          // 更新父节点的 children
+          parentNode.children = newChildren
+
+          // 强制创建新的 document 对象以触发重新渲染
+          const newRoot = cloneTreeNode(document.root)
+
+          set({
+            document: {
+              ...document,
+              root: newRoot,
+              isModified: true
+            },
+            error: null
+          })
+        },
+
+        selectNode: (nodeId: string | null) => {
+          set({ selectedNodeId: nodeId })
+        },
+
+        toggleNode: (nodeId: string) => {
+          const { expandedNodeIds } = get()
+          const newExpanded = new Set(expandedNodeIds)
+          if (newExpanded.has(nodeId)) {
+            newExpanded.delete(nodeId)
+          } else {
+            newExpanded.add(nodeId)
+          }
+          set({ expandedNodeIds: newExpanded })
+        },
+
+        expandAll: () => {
+          const { document } = get()
+          if (!document) return
+          
+          const allIds = collectAllNodeIds(document.root)
+          set({ expandedNodeIds: new Set(allIds) })
+        },
+
+        collapseAll: () => {
+          set({ expandedNodeIds: new Set(['root']) })
+        },
+
+        updateMetadata: (metadata: Partial<DocumentMetadata>) => {
+          const { document } = get()
+          if (!document) return
+
+          // 添加历史记录
+          const changedKeys = Object.keys(metadata).join(', ')
+          useHistoryStore.getState().addHistory({
+            type: 'updateMetadata',
+            description: `更新元数据: ${changedKeys}`,
+          })
+          
           set({ 
-            error: error instanceof Error ? error.message : 'Failed to parse markdown' 
+            document: { 
+              ...document, 
+              metadata: { ...document.metadata, ...metadata },
+              isModified: true 
+            } 
           })
+        },
+
+        updateFromMarkdown: (markdown: string) => {
+          const { document } = get()
+          if (!document) return
+          
+          try {
+            const newDocument = parseMarkdown(markdown, document.fileName)
+            set({ 
+              document: { ...newDocument, isModified: true },
+              error: null 
+            })
+          } catch (error) {
+            set({ 
+              error: error instanceof Error ? error.message : 'Failed to parse markdown' 
+            })
+          }
+        },
+
+        setError: (error: string | null) => {
+          set({ error })
+        },
+
+        clearError: () => {
+          set({ error: null })
+        },
+
+        // ==================== 计算属性实现 ====================
+        
+        getCurrentMarkdown: () => {
+          const { document } = get()
+          if (!document) return ''
+          return generateFromState(document)
+        },
+
+        getIsModified: () => {
+          const { document } = get()
+          return document?.isModified ?? false
+        },
+
+        getSelectedNode: () => {
+          const { document, selectedNodeId } = get()
+          if (!document || !selectedNodeId) return null
+          return findNodeInTree(document.root, selectedNodeId)
+        },
+
+        findNodeById: (nodeId: string) => {
+          const { document } = get()
+          if (!document) return null
+          return findNodeInTree(document.root, nodeId)
+        },
+
+        undo: () => {
+          const historyState = useHistoryStore.getState()
+          const result = historyState.undo()
+          
+          if (result) {
+            const { document } = get()
+            if (document) {
+              set({
+                document: {
+                  ...document,
+                  root: result.root,
+                  metadata: result.metadata,
+                  isModified: true
+                }
+              })
+            }
+          }
+        },
+
+        redo: () => {
+          const historyState = useHistoryStore.getState()
+          const result = historyState.redo()
+          
+          if (result) {
+            const { document } = get()
+            if (document) {
+              set({
+                document: {
+                  ...document,
+                  root: result.root,
+                  metadata: result.metadata,
+                  isModified: true
+                }
+              })
+            }
+          }
+        },
+
+        canUndo: () => {
+          return useHistoryStore.getState().canUndo()
+        },
+
+        canRedo: () => {
+          return useHistoryStore.getState().canRedo()
         }
-      },
-
-      setError: (error: string | null) => {
-        set({ error })
-      },
-
-      clearError: () => {
-        set({ error: null })
-      },
-
-      // ==================== 计算属性实现 ====================
-      
-      getCurrentMarkdown: () => {
-        const { document } = get()
-        if (!document) return ''
-        return generateFromState(document)
-      },
-
-      getIsModified: () => {
-        const { document } = get()
-        return document?.isModified ?? false
-      },
-
-      getSelectedNode: () => {
-        const { document, selectedNodeId } = get()
-        if (!document || !selectedNodeId) return null
-        return findNodeInTree(document.root, selectedNodeId)
-      },
-
-      findNodeById: (nodeId: string) => {
-        const { document } = get()
-        if (!document) return null
-        return findNodeInTree(document.root, nodeId)
       }
-    }),
+    },
     {
       name: 'document-store'
     }
