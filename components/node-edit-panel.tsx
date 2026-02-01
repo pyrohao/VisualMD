@@ -20,6 +20,7 @@ import { Button } from './ui/button'
 import { useDocumentStore } from '@/stores/documentStore'
 import { useThemeStore } from '@/stores/themeStore'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
+import { useSidebarStore } from '@/stores/sidebarStore'
 import { ScrollArea } from './ui/scroll-area'
 import { Input } from './ui/input'
 import { Textarea } from './ui/textarea'
@@ -41,6 +42,7 @@ export function NodeEditPanel() {
   const { getThemeConfig } = useThemeStore()
   const themeConfig = getThemeConfig()
   const { markFileAsSaved, currentFileId, markFileAsModified } = useFileSystemStore()
+  const { editingTemplateId, isTemplateModified, markTemplateAsSaved } = useSidebarStore()
 
   const [title, setTitle] = useState('')
   const [content, setContent] = useState('')
@@ -115,11 +117,34 @@ export function NodeEditPanel() {
 
     // 标记为已保存
     markAsSaved()
-    // 同时标记文件系统中的文件为已保存
-    if (currentFileId) {
-      markFileAsSaved(currentFileId)
+
+    // 同时保存到文件系统或模板 - 获取最新的 markdown 内容并保存
+    const { getCurrentMarkdown } = useDocumentStore.getState()
+    const latestContent = getCurrentMarkdown()
+    const { currentFileId: latestFileId } = useFileSystemStore.getState()
+    const { editingTemplateId: latestEditingTemplateId } = useSidebarStore.getState()
+
+    if (latestFileId) {
+      // 保存到文件
+      useFileSystemStore.setState((state) => ({
+        files: state.files.map(f =>
+          f.id === latestFileId
+            ? { ...f, content: latestContent, isModified: false, updatedAt: Date.now() }
+            : f
+        ),
+      }))
+    } else if (latestEditingTemplateId) {
+      // 保存到模板
+      useSidebarStore.setState((state) => ({
+        templates: state.templates.map(t =>
+          t.id === latestEditingTemplateId
+            ? { ...t, content: latestContent, updatedAt: Date.now() }
+            : t
+        ),
+        isTemplateModified: false,
+      }))
     }
-  }, [selectedNodeId, title, content, updateNode, isVirtualRoot, updateMetadata, markAsSaved, markFileAsSaved, currentFileId])
+  }, [selectedNodeId, title, content, updateNode, isVirtualRoot, updateMetadata, markAsSaved])
 
   // 使用 ref 追踪上一次的值，用于比较是否真的发生了变化
   const prevTitleRef = useRef(title)

@@ -47,6 +47,12 @@ interface ThemeConfig {
   buttonSecondaryBg: string
   /** 危险按钮颜色 */
   danger: string
+  /** 侧边栏背景 */
+  sidebar: string
+  /** 主要强调色 */
+  primary: string
+  /** 次要文字颜色（用于描述、提示等） */
+  textMuted: string
 }
 
 /**
@@ -69,6 +75,9 @@ export const themeConfigs: Record<ThemeMode, ThemeConfig> = {
     buttonText: '#ffffff',
     buttonSecondaryBg: '#f6f8fa',
     danger: '#cf222e',
+    sidebar: '#f6f8fa',
+    primary: '#0969da',
+    textMuted: '#656d76',
   },
   dark: {
     // GitHub Dark / VS Code Dark+ 风格
@@ -85,6 +94,9 @@ export const themeConfigs: Record<ThemeMode, ThemeConfig> = {
     buttonText: '#ffffff',
     buttonSecondaryBg: '#21262d',
     danger: '#f85149',
+    sidebar: '#161b22',
+    primary: '#58a6ff',
+    textMuted: '#8b949e',
   },
   reading: {
     // Kindle/Apple Books 护眼风格
@@ -101,6 +113,9 @@ export const themeConfigs: Record<ThemeMode, ThemeConfig> = {
     buttonText: '#ffffff',
     buttonSecondaryBg: '#ebe5d8',
     danger: '#b35900',
+    sidebar: '#ebe5d8',
+    primary: '#8b7355',
+    textMuted: '#6b6550',
   },
 }
 

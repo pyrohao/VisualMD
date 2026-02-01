@@ -13,7 +13,7 @@ import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useThemeStore } from '@/stores/themeStore'
 import type { Folder as FolderType, MarkdownFile } from '@/types/file-system'
 import { FileItem } from './file-item'
-import { ConfirmDialog } from '../ui/confirm-dialog'
+import { DeleteConfirmDialog } from '../delete-confirm-dialog'
 import { PromptDialog } from '../ui/prompt-dialog'
 import { toast } from '@/hooks/use-toast'
 
@@ -104,112 +104,124 @@ export function FolderItem({
     document.addEventListener('click', closeMenu)
   }
 
-  // 处理文件拖放到文件夹（内部拖拽 + 外部文件拖拽）
-  const handleFolderDrop = async (e: React.DragEvent) => {
+  // 处理拖拽开始
+  const handleDragStart = (e: React.DragEvent) => {
+    onDragStart(e, folder.id, 'folder')
+  }
+
+  // 处理拖拽经过
+  const handleDragOver = (e: React.DragEvent) => {
+    onDragOver(e, folder.id, 'folder')
+  }
+
+  // 处理放置
+  const handleDrop = (e: React.DragEvent) => {
+    onDrop(e, folder.id, 'folder')
+  }
+
+  // 处理文件夹拖拽放置（将文件拖入文件夹）
+  const [isDragOverExternal, setIsDragOverExternal] = useState(false)
+
+  const handleExternalDragOver = (e: React.DragEvent) => {
     e.preventDefault()
+    e.stopPropagation()
+    
+    // 检查是否是内部拖拽（文件排序）
+    const data = e.dataTransfer.getData('text/plain')
+    if (data) {
+      try {
+        const { type } = JSON.parse(data)
+        if (type === 'file') {
+          setIsDragOverExternal(true)
+        }
+      } catch {
+        // 忽略解析错误
+      }
+    }
+  }
+
+  const handleExternalDragLeave = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOverExternal(false)
+  }
+
+  const handleFolderDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
     setIsDragOverExternal(false)
 
-    // 1. 处理外部文件拖拽（从操作系统拖拽文件）
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      e.stopPropagation() // 只有实际处理文件时才阻止冒泡
-      for (const file of Array.from(e.dataTransfer.files)) {
-        if (file.name.endsWith('.md') || file.name.endsWith('.markdown') || file.name.endsWith('.txt')) {
-          const content = await file.text()
-          importFile(file.name, content, folder.id)
-        }
-      }
-      return
-    }
-
-    // 2. 处理内部拖拽（从其他文件夹移动文件）
     const data = e.dataTransfer.getData('text/plain')
     if (!data) return
 
-    e.stopPropagation() // 处理内部拖拽时阻止冒泡
     try {
-      const { id, type } = JSON.parse(data)
+      const { id: draggedId, type } = JSON.parse(data)
       if (type === 'file') {
-        moveFileToFolder(id, folder.id)
+        moveFileToFolder(draggedId, folder.id)
       }
     } catch {
       // 忽略解析错误
     }
   }
 
-  // 处理外部文件拖拽经过（显示视觉反馈）
-  const [isDragOverExternal, setIsDragOverExternal] = useState(false)
-  
-  const handleExternalDragOver = (e: React.DragEvent) => {
+  // 处理外部文件拖拽导入
+  const handleExternalDrop = async (e: React.DragEvent) => {
     e.preventDefault()
-    // 检查是否有外部文件
-    if (e.dataTransfer.types.includes('Files')) {
-      setIsDragOverExternal(true)
+    e.stopPropagation()
+    setIsDragOverExternal(false)
+
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      for (const file of Array.from(e.dataTransfer.files)) {
+        if (file.name.endsWith('.md') || file.name.endsWith('.markdown') || file.name.endsWith('.txt')) {
+          const content = await file.text()
+          importFile(file.name, content, folder.id)
+        }
+      }
     }
   }
 
-  const handleExternalDragLeave = (e: React.DragEvent) => {
-    setIsDragOverExternal(false)
-  }
-
-  const isDragOver = dragOverId === folder.id
-  const showDragLineBefore = isDragOver && dragOverPosition === 'before'
-  const showDragLineAfter = isDragOver && dragOverPosition === 'after'
+  // 判断是否显示拖拽指示线
+  const showDragLineBefore = dragOverId === folder.id && dragOverPosition === 'before'
+  const showDragLineAfter = dragOverId === folder.id && dragOverPosition === 'after'
 
   return (
-    <div className="select-none">
+    <div>
       {/* 拖拽指示线 - 上方 */}
       {showDragLineBefore && (
         <div className="h-0.5 bg-blue-500 rounded-full my-0.5" />
       )}
-      
-      {/* 文件夹头部 - 支持外部文件拖拽 */}
+
+      {/* 文件夹头部 */}
       <div
         draggable
-        onDragStart={(e) => onDragStart(e, folder.id, 'folder')}
-        onDragOver={(e) => {
-          onDragOver(e, folder.id, 'folder')
-          handleExternalDragOver(e)
-        }}
-        onDragLeave={handleExternalDragLeave}
-        onDrop={(e) => {
-          onDrop(e, folder.id, 'folder')
-          handleFolderDrop(e)
-        }}
+        onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+        onClick={onToggle}
         onContextMenu={handleContextMenu}
         className={cn(
-          'group flex items-center gap-1 px-2 py-1 rounded cursor-pointer',
-          'hover:bg-white/5 transition-colors',
-          isDragOverExternal && 'bg-blue-500/20 ring-1 ring-blue-500/50'
+          'group flex items-center gap-2 px-2 py-1 rounded cursor-pointer',
+          'transition-colors duration-150',
+          'hover:bg-white/5'
         )}
         style={{ color: themeConfig.text }}
-        title={isDragOverExternal ? '释放以导入文件到文件夹' : ''}
       >
-        {/* 展开/折叠箭头 */}
-        <div
-          onClick={(e) => {
-            e.stopPropagation()
-            onToggle()
-          }}
-          className="p-0.5 rounded hover:bg-white/10 transition-colors cursor-pointer"
-        >
-          <ChevronRight 
-            className={cn(
-              'w-4 h-4 transition-transform duration-150',
-              isExpanded && 'rotate-90'
-            )} 
-          />
-        </div>
+        {/* 展开/折叠图标 */}
+        <ChevronRight 
+          className={cn(
+            'w-4 h-4 shrink-0 transition-transform duration-150',
+            isExpanded && 'rotate-90'
+          )} 
+        />
 
         {/* 文件夹图标 */}
-        <span className="text-yellow-500/80">
-          {isExpanded ? (
-            <FolderOpen className="w-4 h-4" />
-          ) : (
-            <Folder className="w-4 h-4" />
-          )}
-        </span>
+        {isExpanded ? (
+          <FolderOpen className="w-4 h-4 shrink-0 opacity-80" />
+        ) : (
+          <Folder className="w-4 h-4 shrink-0 opacity-60" />
+        )}
 
-        {/* 文件夹名称 */}
+        {/* 文件夹名 */}
         {isEditing ? (
           <input
             ref={inputRef}
@@ -223,25 +235,20 @@ export function FolderItem({
                 setIsEditing(false)
               }
             }}
+            onClick={(e) => e.stopPropagation()}
             className="flex-1 px-1 py-0 text-sm bg-transparent border border-blue-500/50 rounded outline-none"
             autoFocus
-            onClick={(e) => e.stopPropagation()}
           />
         ) : (
-          <span
-            className="flex-1 text-sm truncate"
-            onDoubleClick={() => setIsEditing(true)}
-          >
+          <span className="flex-1 text-sm truncate">
             {folder.name}
           </span>
         )}
 
         {/* 文件数量 */}
-        {files.length > 0 && !isEditing && (
-          <span className="text-xs opacity-40">
-            {files.length}
-          </span>
-        )}
+        <span className="text-xs opacity-40">
+          {files.length}
+        </span>
       </div>
 
       {/* 右键菜单 */}
@@ -254,12 +261,6 @@ export function FolderItem({
           }}
         >
           <button
-            onClick={handleCreateFile}
-            className="w-full px-4 py-1.5 text-left text-sm hover:bg-white/10 transition-colors"
-          >
-            新建文件
-          </button>
-          <button
             onClick={() => {
               setIsEditing(true)
               setShowContextMenu(false)
@@ -267,6 +268,14 @@ export function FolderItem({
             className="w-full px-4 py-1.5 text-left text-sm hover:bg-white/10 transition-colors"
           >
             重命名
+          </button>
+          <button
+            onClick={() => {
+              handleCreateFile()
+            }}
+            className="w-full px-4 py-1.5 text-left text-sm hover:bg-white/10 transition-colors"
+          >
+            新建文件
           </button>
           <div className="my-1 border-t" style={{ borderColor: themeConfig.border }} />
           <button
@@ -314,15 +323,13 @@ export function FolderItem({
       )}
 
       {/* 删除确认对话框 */}
-      <ConfirmDialog
-        isOpen={showDeleteConfirm}
-        onClose={() => setShowDeleteConfirm(false)}
-        onConfirm={handleConfirmDelete}
+      <DeleteConfirmDialog
+        open={showDeleteConfirm}
+        onOpenChange={setShowDeleteConfirm}
+        itemName={folder.name}
         title="删除文件夹"
         description={`确定要删除文件夹 "${folder.name}" 吗？文件夹内的所有文件也将被删除。`}
-        confirmText="删除"
-        cancelText="取消"
-        variant="destructive"
+        onConfirm={handleConfirmDelete}
       />
 
       {/* 新建文件对话框 */}

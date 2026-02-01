@@ -12,7 +12,7 @@ import { cn } from '@/lib/utils'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useThemeStore } from '@/stores/themeStore'
 import type { MarkdownFile } from '@/types/file-system'
-import { ConfirmDialog } from '../ui/confirm-dialog'
+import { DeleteConfirmDialog } from '../delete-confirm-dialog'
 import { toast } from '@/hooks/use-toast'
 
 interface FileItemProps {
@@ -189,15 +189,12 @@ export function FileItem({ file, isActive, isModified, onClick }: FileItemProps)
       )}
 
       {/* 删除确认对话框 */}
-      <ConfirmDialog
-        isOpen={showDeleteConfirm}
-        onClose={() => setShowDeleteConfirm(false)}
-        onConfirm={handleConfirmDelete}
+      <DeleteConfirmDialog
+        open={showDeleteConfirm}
+        onOpenChange={setShowDeleteConfirm}
+        itemName={file.name}
         title="删除文件"
-        description={`确定要删除文件 "${file.name}" 吗？`}
-        confirmText="删除"
-        cancelText="取消"
-        variant="destructive"
+        onConfirm={handleConfirmDelete}
       />
     </>
   )

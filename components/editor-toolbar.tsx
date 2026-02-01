@@ -14,6 +14,7 @@ import {
   FolderOpen,
   Save,
   Download,
+  Search,
   ChevronLeft,
   ChevronRight,
   FileText,
@@ -32,6 +33,7 @@ interface EditorToolbarProps {
   leftCollapsed: boolean
   rightCollapsed: boolean
   onSave?: () => void
+  onSearch?: () => void
 }
 
 export function EditorToolbar({
@@ -40,6 +42,7 @@ export function EditorToolbar({
   leftCollapsed,
   rightCollapsed,
   onSave,
+  onSearch,
 }: EditorToolbarProps) {
   const { document, loadDocument, getCurrentMarkdown } =
     useDocumentStore()
@@ -193,6 +196,27 @@ export function EditorToolbar({
           }}
         >
           <Download className="h-5 w-5" />
+        </Button>
+
+        {/* 搜索按钮 */}
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onSearch}
+          className="transition-colors"
+          style={{
+            color: themeConfig.muted,
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = themeConfig.text
+            e.currentTarget.style.backgroundColor = themeConfig.hover
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = themeConfig.muted
+            e.currentTarget.style.backgroundColor = 'transparent'
+          }}
+        >
+          <Search className="h-5 w-5" />
         </Button>
 
         <div
