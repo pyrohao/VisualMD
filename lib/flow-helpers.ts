@@ -135,42 +135,52 @@ export function treeToNodesAndEdges(
       },
     })
     
-    // 断开的节点不创建边，但递归处理其子节点
+    // 断开的节点不创建边，但递归处理其子节点（包括所有层级）
+    const traverseDetached = (parentNode: TreeNode, parentId: string) => {
+      if (parentNode.children && !parentNode.isCollapsed) {
+        parentNode.children.forEach((child) => {
+          const childPosition = positions.get(child.id) || { x: 0, y: 0 }
+
+          nodes.push({
+            id: child.id,
+            type: 'headingNode',
+            position: childPosition,
+            data: {
+              label: child.title || '未命名',
+              level: child.level,
+              isCollapsed: child.isCollapsed || false,
+              hasChildren: child.children.length > 0,
+              content: child.content,
+              childrenCount: child.children.length,
+              isDetached: true,
+            },
+          })
+
+          // 子节点之间创建边（保持内部结构）
+          edges.push({
+            id: `${parentId}-${child.id}`,
+            source: parentId,
+            target: child.id,
+            type: 'straight',
+            sourceHandle: 'right',
+            targetHandle: 'left',
+            animated: true,
+            style: {
+              stroke: '#9ca3af', // 灰色表示断开状态
+              strokeWidth: 2,
+              strokeDasharray: '5,5', // 虚线表示断开
+            },
+          })
+
+          // 递归处理子节点的子节点
+          traverseDetached(child, child.id)
+        })
+      }
+    }
+
+    // 开始递归处理断开节点的子节点
     if (detachedNode.children && !detachedNode.isCollapsed) {
-      detachedNode.children.forEach((child) => {
-        const childPosition = positions.get(child.id) || { x: 0, y: 0 }
-        
-        nodes.push({
-          id: child.id,
-          type: 'headingNode',
-          position: childPosition,
-          data: {
-            label: child.title || '未命名',
-            level: child.level,
-            isCollapsed: child.isCollapsed || false,
-            hasChildren: child.children.length > 0,
-            content: child.content,
-            childrenCount: child.children.length,
-            isDetached: true,
-          },
-        })
-        
-        // 子节点之间创建边（保持内部结构）
-        edges.push({
-          id: `${detachedNode.id}-${child.id}`,
-          source: detachedNode.id,
-          target: child.id,
-          type: 'straight',
-          sourceHandle: 'right',
-          targetHandle: 'left',
-          animated: true,
-          style: {
-            stroke: '#9ca3af', // 灰色表示断开状态
-            strokeWidth: 2,
-            strokeDasharray: '5,5', // 虚线表示断开
-          },
-        })
-      })
+      traverseDetached(detachedNode, detachedNode.id)
     }
   })
   

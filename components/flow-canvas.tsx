@@ -83,6 +83,9 @@ export function FlowCanvas() {
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges)
   const { fitView, setNodes: setFlowNodes, screenToFlowPosition } = useReactFlow()
 
+  // 用于跟踪拖拽状态
+  const dragStartPositions = useRef<Map<string, { x: number; y: number }>>(new Map())
+
   // 用于跟踪连接起始节点
   const connectingNodeId = useRef<string | null>(null)
   const connectingHandleId = useRef<string | null>(null)
@@ -154,6 +157,142 @@ export function FlowCanvas() {
       }))
     )
   }, [selectedNodeId, setNodes])
+
+  // 获取节点的所有子节点ID（递归）- 从文档树和 edges 中查找
+  const getAllChildNodeIds = useCallback((nodeId: string): string[] => {
+    if (!document) return []
+
+    const childIds: string[] = []
+    const visited = new Set<string>()
+
+    // 从文档树中查找子节点
+    const findChildrenInTree = (root: TreeNode, targetId: string): boolean => {
+      if (root.id === targetId) {
+        const collectChildren = (node: TreeNode) => {
+          for (const child of node.children) {
+            if (!visited.has(child.id)) {
+              childIds.push(child.id)
+              visited.add(child.id)
+              collectChildren(child)
+            }
+          }
+        }
+        collectChildren(root)
+        return true
+      }
+      for (const child of root.children) {
+        if (findChildrenInTree(child, targetId)) return true
+      }
+      return false
+    }
+
+    findChildrenInTree(document.root, nodeId)
+
+    // 从 edges 中查找子节点（包括断开的节点）
+    const findChildrenInEdges = (parentId: string) => {
+      const directChildren = edges
+        .filter((edge) => edge.source === parentId)
+        .map((edge) => edge.target)
+
+      for (const childId of directChildren) {
+        if (!visited.has(childId)) {
+          childIds.push(childId)
+          visited.add(childId)
+          // 递归查找子节点的子节点
+          findChildrenInEdges(childId)
+        }
+      }
+    }
+
+    findChildrenInEdges(nodeId)
+
+    return childIds
+  }, [document, edges])
+
+  // 自定义节点变化处理，支持拖拽时子节点跟随移动
+  const handleNodesChange = useCallback(
+    (changes: any[]) => {
+      // 处理位置变化
+      const positionChanges = changes.filter(
+        (change) => change.type === 'position' && change.position
+      )
+
+      if (positionChanges.length > 0) {
+        // 检查是否是拖拽开始
+        const dragStartChange = positionChanges.find(
+          (change) => change.dragging === true && !dragStartPositions.current.has(change.id)
+        )
+
+        if (dragStartChange) {
+          // 记录拖拽开始时的位置
+          const node = nodes.find((n) => n.id === dragStartChange.id)
+          if (node) {
+            dragStartPositions.current.set(dragStartChange.id, {
+              x: node.position.x,
+              y: node.position.y,
+            })
+          }
+        }
+
+        // 检查是否是拖拽结束
+        const dragEndChange = positionChanges.find(
+          (change) => change.dragging === false && dragStartPositions.current.has(change.id)
+        )
+
+        if (dragEndChange) {
+          // 清除拖拽开始位置记录
+          dragStartPositions.current.delete(dragEndChange.id)
+        }
+
+        // 处理正在拖拽的节点及其子节点
+        const draggingChange = positionChanges.find((change) => change.dragging === true)
+
+        if (draggingChange) {
+          const draggedNodeId = draggingChange.id
+          const startPos = dragStartPositions.current.get(draggedNodeId)
+
+          if (startPos) {
+            // 计算位移
+            const deltaX = draggingChange.position.x - startPos.x
+            const deltaY = draggingChange.position.y - startPos.y
+
+            // 获取所有子节点ID
+            const childNodeIds = getAllChildNodeIds(draggedNodeId)
+
+            if (childNodeIds.length > 0) {
+              // 创建新的变化数组，包含子节点的位置变化
+              const additionalChanges = childNodeIds
+                .map((childId) => {
+                  const childNode = nodes.find((n) => n.id === childId)
+                  if (!childNode) return null
+
+                  return {
+                    type: 'position' as const,
+                    id: childId,
+                    position: {
+                      x: childNode.position.x + deltaX,
+                      y: childNode.position.y + deltaY,
+                    },
+                    dragging: false,
+                  }
+                })
+                .filter(Boolean)
+
+              // 合并所有变化
+              changes = [...changes, ...additionalChanges]
+            }
+
+            // 更新拖拽开始位置为当前位置
+            dragStartPositions.current.set(draggedNodeId, draggingChange.position)
+          }
+        }
+      }
+
+      // 调用原始的 onNodesChange
+      onNodesChange(changes)
+    },
+    [nodes, onNodesChange, getAllChildNodeIds]
+  )
 
   // 处理连接开始
   const onConnectStart: OnConnectStart = useCallback(
@@ -514,7 +653,7 @@ export function FlowCanvas() {
       <ReactFlow
         nodes={nodes}
         edges={edges}
-        onNodesChange={onNodesChange}
+        onNodesChange={handleNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         onConnectStart={onConnectStart}
