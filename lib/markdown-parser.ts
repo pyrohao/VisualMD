@@ -32,7 +32,10 @@ export function extractFrontMatter(content: string): {
   remainingContent: string
 } {
   // 使用正则表达式匹配Front Matter
-  const frontMatterRegex = /^---\n([\s\S]*?)\n---/
+  // 支持两种格式：
+  // 1. --- 后面直接跟换行符 (---\n)
+  // 2. --- 在行首，后面可能有空白字符再跟换行符 (^---\s*\n)
+  const frontMatterRegex = /^---\s*\n([\s\S]*?)\n---/
   const match = content.match(frontMatterRegex)
 
   if (!match) {
