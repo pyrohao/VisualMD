@@ -7,7 +7,7 @@
  * 设计参考 Obsidian 的左侧边栏
  */
 
-import { FolderOpen, LayoutTemplate, Sparkles, Settings } from 'lucide-react'
+import { FolderOpen, LayoutTemplate, Sparkles, Settings, ListTree, HelpCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useSidebarStore, type SidebarPanel } from '@/stores/sidebarStore'
 import { useThemeStore } from '@/stores/themeStore'
@@ -22,11 +22,13 @@ interface IconItem {
 
 const ICONS: IconItem[] = [
   { id: 'files', icon: FolderOpen, label: '文件', shortcut: 'Ctrl+1' },
-  { id: 'templates', icon: LayoutTemplate, label: '模板', shortcut: 'Ctrl+2' },
-  { id: 'ai', icon: Sparkles, label: 'AI生成', shortcut: 'Ctrl+3' },
+  { id: 'outline', icon: ListTree, label: '大纲', shortcut: 'Ctrl+2' },
+  { id: 'templates', icon: LayoutTemplate, label: '模板', shortcut: 'Ctrl+3' },
+  { id: 'ai', icon: Sparkles, label: 'AI生成', shortcut: 'Ctrl+4' },
 ]
 
 const BOTTOM_ICONS: IconItem[] = [
+  { id: 'help', icon: HelpCircle, label: '帮助', shortcut: '' },
   { id: 'settings', icon: Settings, label: '设置', shortcut: '' },
 ]
 

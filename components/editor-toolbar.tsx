@@ -12,7 +12,6 @@
 import { useCallback, useState } from 'react'
 import {
   FolderOpen,
-  Save,
   Download,
   Search,
   ChevronLeft,
@@ -24,21 +23,19 @@ import { Button } from './ui/button'
 import { useDocumentStore } from '@/stores/documentStore'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useThemeStore } from '@/stores/themeStore'
-import { openFile, saveFile, exportAsHTML } from '@/lib/file-system'
+import { openFile, exportAsHTML } from '@/lib/file-system'
 import { ThemeToggle } from './theme-toggle'
 import { toast } from '@/hooks/use-toast'
 
 interface EditorToolbarProps {
   onToggleRight: () => void
   rightCollapsed: boolean
-  onSave?: () => void
   onSearch?: () => void
 }
 
 export function EditorToolbar({
   onToggleRight,
   rightCollapsed,
-  onSave,
   onSearch,
 }: EditorToolbarProps) {
   const { document, loadDocument, getCurrentMarkdown } =
@@ -69,37 +66,6 @@ export function EditorToolbar({
       setIsLoading(false)
     }
   }, [loadDocument, importFile])
-
-  // 处理保存
-  const handleSaveClick = useCallback(async () => {
-    // 优先使用传入的 onSave 回调（新文件系统）
-    if (onSave) {
-      onSave()
-      return
-    }
-
-    // 兼容旧版文件系统
-    if (!document) return
-
-    setIsLoading(true)
-    try {
-      const markdown = getCurrentMarkdown()
-      const success = await saveFile(markdown, document.fileName)
-      if (success) {
-        toast({
-          title: '保存成功',
-        })
-      }
-    } catch (error) {
-      console.error('Failed to save file:', error)
-      toast({
-        title: '保存文件失败',
-        variant: 'destructive',
-      })
-    } finally {
-      setIsLoading(false)
-    }
-  }, [document, getCurrentMarkdown, onSave])
 
   // 处理导出
   const handleExport = useCallback(async () => {
@@ -184,26 +150,6 @@ export function EditorToolbar({
           }}
         >
           <FolderOpen className="h-5 w-5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={handleSaveClick}
-          disabled={isLoading || (!document && !onSave)}
-          className="transition-colors"
-          style={{
-            color: themeConfig.muted,
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.color = themeConfig.text
-            e.currentTarget.style.backgroundColor = themeConfig.hover
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.color = themeConfig.muted
-            e.currentTarget.style.backgroundColor = 'transparent'
-          }}
-        >
-          <Save className="h-5 w-5" />
         </Button>
         <Button
           variant="ghost"

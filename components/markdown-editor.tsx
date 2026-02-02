@@ -387,7 +387,6 @@ export function MarkdownEditor() {
       <EditorToolbar
         onToggleRight={() => setRightCollapsed(!rightCollapsed)}
         rightCollapsed={rightCollapsed}
-        onSave={handleSave}
         onSearch={() => setSearchDialogOpen(true)}
       />
 

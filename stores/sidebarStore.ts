@@ -10,7 +10,7 @@ import { create } from 'zustand'
 import { devtools, persist } from 'zustand/middleware'
 import { nanoid } from 'nanoid'
 
-export type SidebarPanel = 'files' | 'templates' | 'ai' | 'settings'
+export type SidebarPanel = 'files' | 'outline' | 'templates' | 'ai' | 'settings' | 'help'
 
 export interface Template {
   id: string
@@ -76,6 +76,8 @@ interface SidebarStore {
   markTemplateAsModified: () => void
   /** 标记模板为已保存 */
   markTemplateAsSaved: () => void
+  /** 重置所有模板数据 */
+  resetTemplates: () => void
 }
 
 /**
@@ -83,10 +85,34 @@ interface SidebarStore {
  */
 const BUILT_IN_TEMPLATES = [
   {
-    id: 'template-skill',
-    name: '技能模板',
-    description: '用于创建技能文档的模板',
-    fileName: 'SKILL.md',
+    id: 'template-capability',
+    name: 'Capability Skill',
+    description: '能力技能模板',
+    fileName: 'Capability Skill.md',
+  },
+  {
+    id: 'template-constraint',
+    name: 'Constraint Skill',
+    description: '约束技能模板',
+    fileName: 'Constraint Skill.md',
+  },
+  {
+    id: 'template-decision',
+    name: 'Decision Skill',
+    description: '决策技能模板',
+    fileName: 'Decision Skill.md',
+  },
+  {
+    id: 'template-procedural',
+    name: 'Procedural Skill',
+    description: '程序技能模板',
+    fileName: 'Procedural Skill.md',
+  },
+  {
+    id: 'template-prompt',
+    name: 'Prompt Template',
+    description: '提示词模板',
+    fileName: 'Prompt Template.md',
   },
 ]
 
@@ -264,16 +290,25 @@ export const useSidebarStore = create<SidebarStore>()(
         markTemplateAsSaved: () => {
           set({ isTemplateModified: false })
         },
+
+        // 重置所有模板数据（用于清除缓存）
+        resetTemplates: () => {
+          set({
+            templates: [],
+            builtInTemplatesInitialized: false,
+            selectedTemplateId: null,
+          })
+        },
       }),
       {
-        name: 'sidebar-store',
+        name: 'sidebar-store-v2', // 修改存储名称以清除旧缓存
         partialize: (state) => ({
           activePanel: state.activePanel,
           isPanelExpanded: state.isPanelExpanded,
           panelWidth: state.panelWidth,
-          templates: state.templates, // 所有模板都持久化（包括内置模板）
+          templates: state.templates.filter(t => !t.isBuiltIn), // 只持久化自定义模板
           selectedTemplateId: state.selectedTemplateId,
-          builtInTemplatesInitialized: state.builtInTemplatesInitialized, // 持久化初始化标志
+          builtInTemplatesInitialized: false, // 每次重新加载内置模板
         }),
       }
     ),

@@ -63,7 +63,7 @@ export function NodeContentEditor({
           style={{
             backgroundColor: themeConfig.card,
             borderColor: themeConfig.border,
-            height: '300px',
+            height: '370px',
           }}
         >
           <Textarea

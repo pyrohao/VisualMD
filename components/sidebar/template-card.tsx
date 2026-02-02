@@ -41,14 +41,6 @@ export function TemplateCard({
   const { getThemeConfig } = useThemeStore()
   const themeConfig = getThemeConfig()
 
-  // 获取模板内容预览（前100个字符）
-  const getPreview = (content: string) => {
-    // 移除 front matter
-    const withoutFrontMatter = content.replace(/^---[\s\S]*?---\n*/, '')
-    // 取前100个字符
-    return withoutFrontMatter.slice(0, 100).replace(/\n/g, ' ') + '...'
-  }
-
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -65,18 +57,7 @@ export function TemplateCard({
             ...(isSelected && { ringColor: themeConfig.primary }),
           }}
         >
-          {/* 模板类型标识 */}
-          {template.isBuiltIn && (
-            <span
-              className="absolute top-2 right-2 text-[10px] px-1.5 py-0.5 rounded-full"
-              style={{
-                backgroundColor: themeConfig.primary + '20',
-                color: themeConfig.primary,
-              }}
-            >
-              内置
-            </span>
-          )}
+
 
           {/* 图标和标题 */}
           <div className="flex items-start gap-3 mb-2">
@@ -105,38 +86,6 @@ export function TemplateCard({
             </div>
           </div>
 
-          {/* 内容预览 */}
-          <p
-            className="text-xs line-clamp-2 mt-2"
-            style={{ color: themeConfig.textMuted }}
-          >
-            {getPreview(template.content)}
-          </p>
-
-          {/* 底部信息 */}
-          <div
-            className="flex items-center justify-between mt-3 pt-2 border-t text-[10px]"
-            style={{
-              borderColor: themeConfig.border,
-              color: themeConfig.textMuted,
-            }}
-          >
-            <span>
-              {template.isBuiltIn
-                ? '系统模板'
-                : new Date(template.updatedAt).toLocaleDateString()}
-            </span>
-            <div className="flex items-center gap-2">
-              {isModified && (
-                <span 
-                  className="w-1.5 h-1.5 rounded-full"
-                  style={{ backgroundColor: themeConfig.primary }}
-                  title="有未保存的修改"
-                />
-              )}
-              <span>{template.content.length} 字符</span>
-            </div>
-          </div>
         </div>
       </ContextMenuTrigger>
 
@@ -147,15 +96,19 @@ export function TemplateCard({
           <span>使用模板</span>
         </ContextMenuItem>
 
-        <ContextMenuSeparator />
+        {!template.isBuiltIn && (
+          <>
+            <ContextMenuSeparator />
 
-        <ContextMenuItem
-          onClick={onDelete}
-          className="gap-2 text-red-500 focus:text-red-500"
-        >
-          <Trash2 className="w-4 h-4" />
-          <span>删除模板</span>
-        </ContextMenuItem>
+            <ContextMenuItem
+              onClick={onDelete}
+              className="gap-2 text-red-500 focus:text-red-500"
+            >
+              <Trash2 className="w-4 h-4" />
+              <span>删除模板</span>
+            </ContextMenuItem>
+          </>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   )
