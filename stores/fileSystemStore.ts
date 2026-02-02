@@ -250,6 +250,9 @@ description:
 
 开始编辑...`
 
+          // 更新虚拟根节点标题为 Front Matter（通过修改 root.title）
+          // 注意：这个标题仅用于显示，实际保存时虚拟根节点固定显示为 Front Matter
+
           const newFile: MarkdownFile = {
             id: nanoid(),
             type: 'file',

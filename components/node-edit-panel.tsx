@@ -41,7 +41,7 @@ export function NodeEditPanel() {
 
   const { getThemeConfig } = useThemeStore()
   const themeConfig = getThemeConfig()
-  const { markFileAsSaved, currentFileId, markFileAsModified } = useFileSystemStore()
+  const { currentFileId, markFileAsModified } = useFileSystemStore()
   const { editingTemplateId, isTemplateModified, markTemplateAsSaved } = useSidebarStore()
 
   const [title, setTitle] = useState('')
@@ -106,29 +106,7 @@ export function NodeEditPanel() {
         }
       })
       updateMetadata(metadata)
-      updateNode(selectedNodeId, { title: String(title || '').trim() || '未命名文档' })
-      
-      // 同步更新文件系统中的文件名（如果标题变化）
-      const newTitle = String(title || '').trim() || '未命名文档'
-      if (currentFileId) {
-        const { files } = useFileSystemStore.getState()
-        const currentFile = files.find(f => f.id === currentFileId)
-        if (currentFile) {
-          // 提取当前文件名（去掉 .md 后缀）
-          const currentNameWithoutExt = currentFile.name.replace(/\.md$/, '')
-          // 只有当标题真正改变时才更新文件名
-          if (currentNameWithoutExt !== newTitle) {
-            const newFileName = newTitle.endsWith('.md') ? newTitle : `${newTitle}.md`
-            useFileSystemStore.setState((state) => ({
-              files: state.files.map(f =>
-                f.id === currentFileId
-                  ? { ...f, name: newFileName, updatedAt: Date.now() }
-                  : f
-              ),
-            }))
-          }
-        }
-      }
+      // 虚拟根节点标题固定为 "Front Matter"，不修改文件名
     } else {
       // 普通节点保存
       const trimmedTitle = String(title || '').trim()
@@ -326,10 +304,10 @@ export function NodeEditPanel() {
                 className="text-base font-semibold"
                 style={{ color: themeConfig.heading }}
               >
-                {isVirtualRoot ? '文档属性' : '编辑节点'}
+                {isVirtualRoot ? 'Front Matter' : '编辑节点'}
               </h2>
               <p className="text-xs" style={{ color: themeConfig.muted }}>
-                {isVirtualRoot ? 'YAML Front Matter' : `H${selectedNode.level} 标题`}
+                {isVirtualRoot ? 'YAML 元数据' : `H${selectedNode.level} 标题`}
               </p>
             </div>
           </div>
@@ -355,35 +333,37 @@ export function NodeEditPanel() {
         {/* 编辑区域 - 可滚动 */}
         <ScrollArea className="flex-1">
           <div className="p-6 space-y-6">
-            {/* 标题编辑 */}
-            <div className="space-y-3">
-              <label
-                className="flex items-center gap-2 text-sm font-medium"
-                style={{ color: themeConfig.heading }}
-              >
-                <Type className="w-4 h-4" style={{ color: isVirtualRoot ? '#8b5cf6' : themeConfig.accent }} />
-                {isVirtualRoot ? '文档名称' : '标题'}
-              </label>
-              <Input
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder={isVirtualRoot ? "输入文档名称..." : "输入节点标题..."}
-                className="h-12 text-base border-2 transition-all duration-200"
-                style={{
-                  backgroundColor: themeConfig.card,
-                  borderColor: themeConfig.border,
-                  color: themeConfig.text,
-                }}
-                onFocus={(e) => {
-                  e.currentTarget.style.borderColor = isVirtualRoot ? '#8b5cf6' : themeConfig.accent
-                  e.currentTarget.style.boxShadow = `0 0 0 3px ${isVirtualRoot ? '#8b5cf620' : themeConfig.accent + '20'}`
-                }}
-                onBlur={(e) => {
-                  e.currentTarget.style.borderColor = themeConfig.border
-                  e.currentTarget.style.boxShadow = 'none'
-                }}
-              />
-            </div>
+            {/* 标题编辑 - 仅普通节点显示 */}
+            {!isVirtualRoot && (
+              <div className="space-y-3">
+                <label
+                  className="flex items-center gap-2 text-sm font-medium"
+                  style={{ color: themeConfig.heading }}
+                >
+                  <Type className="w-4 h-4" style={{ color: themeConfig.accent }} />
+                  标题
+                </label>
+                <Input
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="输入节点标题..."
+                  className="h-12 text-base border-2 transition-all duration-200"
+                  style={{
+                    backgroundColor: themeConfig.card,
+                    borderColor: themeConfig.border,
+                    color: themeConfig.text,
+                  }}
+                  onFocus={(e) => {
+                    e.currentTarget.style.borderColor = themeConfig.accent
+                    e.currentTarget.style.boxShadow = `0 0 0 3px ${themeConfig.accent + '20'}`
+                  }}
+                  onBlur={(e) => {
+                    e.currentTarget.style.borderColor = themeConfig.border
+                    e.currentTarget.style.boxShadow = 'none'
+                  }}
+                />
+              </div>
+            )}
 
             {isVirtualRoot ? (
               /* YAML 元数据编辑区域 */

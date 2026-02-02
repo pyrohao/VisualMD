@@ -107,10 +107,11 @@ export function extractHeadings(content: string): HeadingNode[] {
  */
 export function buildTree(headings: HeadingNode[], metadata: DocumentMetadata): TreeNode {
   // 创建虚拟根节点（level=0）
+  // 虚拟根节点标题固定为 'Front Matter'，用于显示
   const root: TreeNode = {
     id: 'root',
     level: 0,
-    title: metadata.name || '未命名文档',
+    title: 'Front Matter',
     children: [],
     parentId: null,
     isVirtual: true,
