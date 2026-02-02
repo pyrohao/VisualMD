@@ -53,6 +53,14 @@ interface ThemeConfig {
   primary: string
   /** 次要文字颜色（用于描述、提示等） */
   textMuted: string
+  /** 成功颜色 */
+  success: string
+  /** 错误颜色 */
+  error: string
+  /** 警告颜色 */
+  warning: string
+  /** 输入框背景 */
+  input: string
 }
 
 /**
@@ -78,6 +86,10 @@ export const themeConfigs: Record<ThemeMode, ThemeConfig> = {
     sidebar: '#f6f8fa',
     primary: '#0969da',
     textMuted: '#656d76',
+    success: '#1a7f37',
+    error: '#cf222e',
+    warning: '#9a6700',
+    input: '#ffffff',
   },
   dark: {
     // GitHub Dark / VS Code Dark+ 风格
@@ -97,6 +109,10 @@ export const themeConfigs: Record<ThemeMode, ThemeConfig> = {
     sidebar: '#161b22',
     primary: '#58a6ff',
     textMuted: '#8b949e',
+    success: '#3fb950',
+    error: '#f85149',
+    warning: '#d29922',
+    input: '#21262d',
   },
   reading: {
     // Kindle/Apple Books 护眼风格
@@ -116,6 +132,10 @@ export const themeConfigs: Record<ThemeMode, ThemeConfig> = {
     sidebar: '#ebe5d8',
     primary: '#8b7355',
     textMuted: '#6b6550',
+    success: '#2d6a4f',
+    error: '#b35900',
+    warning: '#9c6644',
+    input: '#faf8f3',
   },
 }
 

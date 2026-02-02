@@ -327,6 +327,10 @@ export function MarkdownEditor() {
         e.preventDefault()
         useSidebarStore.getState().setActivePanel('templates')
       }
+      if ((e.ctrlKey || e.metaKey) && e.key === '3') {
+        e.preventDefault()
+        useSidebarStore.getState().setActivePanel('ai')
+      }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
@@ -381,9 +385,7 @@ export function MarkdownEditor() {
     <div className="flex h-screen flex-col" style={{ backgroundColor: safeThemeConfig.background }}>
       {/* 工具栏 */}
       <EditorToolbar
-        onToggleLeft={() => {}}
         onToggleRight={() => setRightCollapsed(!rightCollapsed)}
-        leftCollapsed={!isPanelExpanded}
         rightCollapsed={rightCollapsed}
         onSave={handleSave}
         onSearch={() => setSearchDialogOpen(true)}

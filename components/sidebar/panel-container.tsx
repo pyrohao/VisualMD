@@ -12,6 +12,8 @@ import { useSidebarStore, type SidebarPanel } from '@/stores/sidebarStore'
 import { useThemeStore } from '@/stores/themeStore'
 import { FilePanel } from './file-panel'
 import { TemplatePanel } from './template-panel'
+import { AIPanel } from './ai-panel'
+import { SettingsPanel } from './settings-panel'
 
 interface PanelContainerProps {
   onEditTemplate?: (content: string, templateName: string, templateId: string) => void
@@ -21,6 +23,8 @@ interface PanelContainerProps {
 const PANELS: Record<SidebarPanel, React.ComponentType<any>> = {
   files: FilePanel,
   templates: TemplatePanel,
+  ai: AIPanel,
+  settings: SettingsPanel,
 }
 
 export function PanelContainer({ onEditTemplate, onPreviewTemplate }: PanelContainerProps) {
@@ -52,11 +56,12 @@ export function PanelContainer({ onEditTemplate, onPreviewTemplate }: PanelConta
           transition={{ duration: 0.2, ease: 'easeOut' }}
           className="h-full"
         >
-          {activePanel === 'templates' ? (
+          {activePanel === 'templates' && (
             <TemplatePanel onEditTemplate={onEditTemplate} onPreviewTemplate={onPreviewTemplate} />
-          ) : (
-            <FilePanel />
           )}
+          {activePanel === 'files' && <FilePanel />}
+          {activePanel === 'ai' && <AIPanel />}
+          {activePanel === 'settings' && <SettingsPanel />}
         </motion.div>
       </AnimatePresence>
     </motion.div>

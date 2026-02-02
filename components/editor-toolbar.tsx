@@ -19,6 +19,7 @@ import {
   ChevronRight,
   FileText,
 } from 'lucide-react'
+import { useSidebarStore } from '@/stores/sidebarStore'
 import { Button } from './ui/button'
 import { useDocumentStore } from '@/stores/documentStore'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
@@ -28,18 +29,14 @@ import { ThemeToggle } from './theme-toggle'
 import { toast } from '@/hooks/use-toast'
 
 interface EditorToolbarProps {
-  onToggleLeft: () => void
   onToggleRight: () => void
-  leftCollapsed: boolean
   rightCollapsed: boolean
   onSave?: () => void
   onSearch?: () => void
 }
 
 export function EditorToolbar({
-  onToggleLeft,
   onToggleRight,
-  leftCollapsed,
   rightCollapsed,
   onSave,
   onSearch,
@@ -48,6 +45,7 @@ export function EditorToolbar({
     useDocumentStore()
   const { importFile } = useFileSystemStore()
   const { getThemeConfig } = useThemeStore()
+  const { isPanelExpanded, togglePanel } = useSidebarStore()
   const themeConfig = getThemeConfig()
   const [isLoading, setIsLoading] = useState(false)
 
@@ -137,6 +135,36 @@ export function EditorToolbar({
     >
       {/* 左侧：文件操作 */}
       <div className="flex items-center gap-2">
+        {/* 展开/收起左侧面板按钮 */}
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={togglePanel}
+          className="transition-colors"
+          style={{
+            color: themeConfig.muted,
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = themeConfig.text
+            e.currentTarget.style.backgroundColor = themeConfig.hover
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = themeConfig.muted
+            e.currentTarget.style.backgroundColor = 'transparent'
+          }}
+        >
+          {isPanelExpanded ? (
+            <ChevronLeft className="h-5 w-5" />
+          ) : (
+            <ChevronRight className="h-5 w-5" />
+          )}
+        </Button>
+
+        <div
+          className="mx-1 h-6 w-px"
+          style={{ backgroundColor: themeConfig.border }}
+        />
+
         <Button
           variant="ghost"
           size="icon"
@@ -244,47 +272,10 @@ export function EditorToolbar({
         </div>
       </div>
 
-      {/* 中间：标题 */}
-      <div className="absolute left-1/2 -translate-x-1/2">
-        <h1
-          className="text-lg font-semibold"
-          style={{ color: themeConfig.heading }}
-        >
-          Markdown 可视化编辑器
-        </h1>
-      </div>
+
 
       {/* 右侧：视图控制和主题切换 */}
       <div className="flex items-center gap-2">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onToggleLeft}
-          className="transition-colors"
-          style={{
-            color: themeConfig.muted,
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.color = themeConfig.text
-            e.currentTarget.style.backgroundColor = themeConfig.hover
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.color = themeConfig.muted
-            e.currentTarget.style.backgroundColor = 'transparent'
-          }}
-        >
-          {leftCollapsed ? (
-            <>
-              <ChevronRight className="mr-1 h-4 w-4" />
-              显示大纲
-            </>
-          ) : (
-            <>
-              <ChevronLeft className="mr-1 h-4 w-4" />
-              隐藏大纲
-            </>
-          )}
-        </Button>
         <Button
           variant="ghost"
           size="sm"
