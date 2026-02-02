@@ -40,6 +40,8 @@ interface SidebarStore {
   selectedTemplateId: string | null
   /** 内置模板是否已初始化（用于判断是否需要加载内置模板） */
   builtInTemplatesInitialized: boolean
+  /** 是否正在加载内置模板（防止并发加载） */
+  isLoadingBuiltInTemplates: boolean
   /** 当前正在编辑的模板ID（用于自动保存状态跟踪） */
   editingTemplateId: string | null
   /** 模板是否被修改（类似于文件的 isModified） */
@@ -120,6 +122,7 @@ export const useSidebarStore = create<SidebarStore>()(
         templates: [],
         selectedTemplateId: null,
         builtInTemplatesInitialized: false,
+        isLoadingBuiltInTemplates: false,
         editingTemplateId: null,
         isTemplateModified: false,
 
@@ -144,7 +147,12 @@ export const useSidebarStore = create<SidebarStore>()(
         // ==================== 模板操作 ====================
 
         loadBuiltInTemplates: async () => {
-          const { builtInTemplatesInitialized, templates: existingTemplates } = get()
+          const { builtInTemplatesInitialized, isLoadingBuiltInTemplates, templates: existingTemplates } = get()
+          
+          // 如果正在加载中，直接返回，防止并发调用
+          if (isLoadingBuiltInTemplates) {
+            return
+          }
           
           // 如果内置模板已经初始化过（加载过），则不再加载
           // 这样用户删除内置模板后，刷新页面也不会恢复
@@ -152,33 +160,52 @@ export const useSidebarStore = create<SidebarStore>()(
             return
           }
           
-          // 加载所有内置模板
-          const templatesToLoad: Template[] = []
+          // 标记为正在加载
+          set({ isLoadingBuiltInTemplates: true })
           
-          for (const builtIn of BUILT_IN_TEMPLATES) {
-            const content = await loadBuiltInTemplateContent(builtIn.fileName)
-            if (content) {
-              templatesToLoad.push({
-                id: builtIn.id,
-                name: builtIn.name,
-                description: builtIn.description,
-                content,
-                isBuiltIn: true,
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
+          try {
+            // 加载所有内置模板（过滤掉已存在的）
+            const templatesToLoad: Template[] = []
+            
+            for (const builtIn of BUILT_IN_TEMPLATES) {
+              // 检查是否已存在相同 id 的模板
+              const exists = existingTemplates.some(t => t.id === builtIn.id)
+              if (exists) {
+                continue
+              }
+              
+              const content = await loadBuiltInTemplateContent(builtIn.fileName)
+              if (content) {
+                templatesToLoad.push({
+                  id: builtIn.id,
+                  name: builtIn.name,
+                  description: builtIn.description,
+                  content,
+                  isBuiltIn: true,
+                  createdAt: Date.now(),
+                  updatedAt: Date.now(),
+                })
+              }
+            }
+
+            // 添加内置模板并标记为已初始化
+            if (templatesToLoad.length > 0) {
+              set((state) => ({
+                templates: [...state.templates, ...templatesToLoad],
+                builtInTemplatesInitialized: true,
+                isLoadingBuiltInTemplates: false,
+              }))
+            } else {
+              // 即使没有加载到模板，也标记为已初始化，避免重复尝试
+              set({ 
+                builtInTemplatesInitialized: true,
+                isLoadingBuiltInTemplates: false,
               })
             }
-          }
-
-          // 添加内置模板并标记为已初始化
-          if (templatesToLoad.length > 0) {
-            set((state) => ({
-              templates: [...state.templates, ...templatesToLoad],
-              builtInTemplatesInitialized: true,
-            }))
-          } else {
-            // 即使没有加载到模板，也标记为已初始化，避免重复尝试
-            set({ builtInTemplatesInitialized: true })
+          } catch (error) {
+            // 发生错误时也要重置加载状态
+            set({ isLoadingBuiltInTemplates: false })
+            console.error('加载内置模板失败:', error)
           }
         },
 

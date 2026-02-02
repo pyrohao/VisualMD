@@ -57,15 +57,21 @@ export function TemplatePanel({ onEditTemplate, onPreviewTemplate }: TemplatePan
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [templateToDelete, setTemplateToDelete] = useState<string | null>(null)
 
-  // 加载内置模板
+  // 加载内置模板 - 使用 ref 确保只执行一次
+  const hasLoadedRef = useRef(false)
   useEffect(() => {
+    if (hasLoadedRef.current) return
+    hasLoadedRef.current = true
+    
     const loadTemplates = async () => {
       setIsLoading(true)
       await loadBuiltInTemplates()
       setIsLoading(false)
     }
     loadTemplates()
-  }, [loadBuiltInTemplates])
+    // 注意：不依赖 loadBuiltInTemplates，确保只执行一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // 生成唯一的文件名
   const generateUniqueFileName = useCallback(
