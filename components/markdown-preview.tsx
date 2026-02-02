@@ -10,7 +10,6 @@
  * 对应技术文档6.1节
  */
 
-import { ScrollArea } from './ui/scroll-area'
 import { useDocumentStore } from '@/stores/documentStore'
 import { useThemeStore, themeConfigs, type ThemeMode } from '@/stores/themeStore'
 import { useMemo } from 'react'
@@ -51,7 +50,7 @@ function getMarkdownStyles(theme: ThemeMode): {
     code: `px-1.5 py-0.5 rounded text-sm font-mono`,
     codeBlock: `p-5 rounded-lg overflow-x-auto my-6`,
     link: `font-medium underline underline-offset-2 hover:opacity-80 transition-opacity`,
-    list: `ml-6 mb-4 space-y-2`,
+    list: `mb-1`,
     blockquote: `border-l-4 pl-5 py-3 my-5 italic`,
     hr: `my-8 border-2`,
   }
@@ -115,8 +114,17 @@ function parseMarkdownToHTML(markdown: string, theme: ThemeMode): string {
     .replace(/<hr \/>><\/p>/g, '<hr />')
     .replace(new RegExp(`<p class="${styles.paragraph}" style="color: ${config.text};"><\/p>`, 'g'), '')
 
-  // 包装列表
-  html = html.replace(/(<li class="[^"]*" style="[^"]*">[\s\S]*?<\/li>)/, `<ul class="list-disc list-inside mb-4 space-y-2">$1</ul>`)
+  // 包装连续的 li 元素为 ul
+  // 首先将所有 li 元素收集并包装
+  const liRegex = /<li class="[^"]*" style="[^"]*">.*?<\/li>/gs
+  const liMatches = html.match(liRegex)
+  
+  if (liMatches && liMatches.length > 0) {
+    // 将连续的 li 包装在 ul 中
+    html = html.replace(/(<li class="[^"]*" style="[^"]*">.*?<\/li>)+/gs, (match) => {
+      return `<ul class="list-disc pl-5 mb-4 space-y-1">${match}</ul>`
+    })
+  }
 
   return html
 }
@@ -160,7 +168,7 @@ export function MarkdownPreview() {
       </div>
 
       {/* 预览内容 */}
-      <ScrollArea className="flex-1 h-[calc(100vh-3.5rem)]">
+      <div className="flex-1 overflow-y-auto">
         <div className="p-8 max-w-none">
           <article
             className="prose max-w-none prose-lg"
@@ -172,7 +180,7 @@ export function MarkdownPreview() {
             dangerouslySetInnerHTML={{ __html: html }}
           />
         </div>
-      </ScrollArea>
+      </div>
     </div>
   )
 }
