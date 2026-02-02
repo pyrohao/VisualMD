@@ -289,12 +289,19 @@ export function extractContentBlocks(
   mapNodeToHeadingIndex(root, 0)
 
   /**
-   * 获取节点的内容范围 - 修复版本
+   * 获取节点的内容范围 - 修正版本
    *
    * 核心逻辑：
-   * 1. 从当前标题的结束位置开始
-   * 2. 找到下一个同级或更高级别标题的位置作为结束
-   * 3. 如果中间有更低级别的标题（子标题），它们的内容不应该包含在当前节点中
+   * 每个节点的内容只包含从当前标题结束位置到**第一个子标题或下一个同级/更高级别标题**之前的内容
+   * 
+   * 示例：
+   * ## 二级标题
+   * 这是二级标题的内容
+   * ### 三级标题
+   * 这是三级标题的内容
+   *
+   * 二级标题节点的内容范围 = 从"## 二级标题"结束位置 到 "### 三级标题"开始位置
+   * （不包含三级标题及其内容）
    *
    * @param nodeId 节点ID
    * @returns 内容范围 {start, end} 或 null
@@ -306,12 +313,14 @@ export function extractContentBlocks(
     const heading = headings[headingIndex]
     const startPos = heading.endPosition
 
-    // 找到结束位置：下一个同级或更高级别标题的位置
+    // 找到结束位置：下一个标题，只要级别 >= 当前节点级别（同级或更高级），或者是任何子标题（级别 > 当前节点级别）
+    // 简单说：找到第一个级别 > 当前节点级别的标题（子标题），或级别 <= 当前节点级别的标题（同级或更高级）
     let endPos = content.length
     for (let i = headingIndex + 1; i < headings.length; i++) {
-      // 关键：只找同级或更高级别的标题
-      // 如果找到更低级别的标题（子标题），跳过它，继续找
-      if (headings[i].level <= heading.level) {
+      // 遇到任何标题都停止：
+      // - 如果是子标题（level > 当前level），这是当前节点的子节点，当前节点内容到此结束
+      // - 如果是同级或更高级别（level <= 当前level），这是兄弟节点或父级节点，当前节点内容到此结束
+      if (headings[i].level > heading.level || headings[i].level <= heading.level) {
         endPos = headings[i].position
         break
       }
@@ -320,63 +329,17 @@ export function extractContentBlocks(
     return { start: startPos, end: endPos }
   }
 
-  /**
-   * 清理内容 - 移除子标题及其内容
-   *
-   * @param rawContent 原始内容
-   * @param nodeLevel 当前节点层级
-   * @returns 清理后的内容
-   */
-  function cleanContent(rawContent: string, nodeLevel: number): string {
-    if (!rawContent) return ''
-
-    // 按行分割
-    const lines = rawContent.split('\n')
-    const result: string[] = []
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i]
-
-      // 检查是否是标题行
-      const headingMatch = line.match(/^(#{1,6})\s+(.+)$/)
-      if (headingMatch) {
-        const headingLevel = headingMatch[1].length
-        // 如果是更低级别的标题（子标题），跳过它和它的内容
-        if (headingLevel > nodeLevel) {
-          // 跳过这个子标题及其所有内容，直到遇到同级或更高级别的内容
-          i++
-          while (i < lines.length) {
-            const nextLine = lines[i]
-            const nextHeadingMatch = nextLine.match(/^(#{1,6})\s+(.+)$/)
-            if (nextHeadingMatch) {
-              const nextHeadingLevel = nextHeadingMatch[1].length
-              // 如果遇到同级或更高级别的标题，回退一行并退出
-              if (nextHeadingLevel <= nodeLevel) {
-                i--
-                break
-              }
-            }
-            i++
-          }
-          continue
-        }
-      }
-
-      result.push(line)
-    }
-
-    return result.join('\n').trim()
-  }
-
   // 填充content字段
   function fillContent(node: TreeNode): TreeNode {
     if (!node.isVirtual) {
       const range = getNodeContentRange(node.id)
       if (range) {
-        // 提取原始内容
+        // 提取内容并清理：
+        // 1. 移除开头的换行符（标题后的空行）
+        // 2. 移除结尾的空白字符
         const rawContent = content.slice(range.start, range.end)
-        // 清理内容，移除子标题及其内容
-        const cleanedContent = cleanContent(rawContent, node.level)
+        // 清理内容：移除开头的一个或多个换行符，然后trim
+        const cleanedContent = rawContent.replace(/^\n+/, '').trim()
         // 如果内容块为空，设置为undefined
         node.content = cleanedContent || undefined
       }
