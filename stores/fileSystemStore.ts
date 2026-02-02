@@ -102,8 +102,10 @@ interface FileSystemStore {
   importFile: (name: string, content: string, folderId?: string | null) => void
   /** 打开文件 */
   openFile: (id: string) => void
-  /** 保存文件 */
+  /** 保存文件（标记为已修改） */
   saveFile: (id: string, content: string) => void
+  /** 保存文件内容并标记为已保存 */
+  saveFileContent: (id: string, content: string) => void
   /** 标记文件为已保存 */
   markFileAsSaved: (id: string) => void
   /** 标记文件为已修改 */
@@ -302,6 +304,17 @@ description:
             files: files.map(f =>
               f.id === id
                 ? { ...f, content, isModified: true, updatedAt: Date.now() }
+                : f
+            ),
+          })
+        },
+
+        saveFileContent: (id: string, content: string) => {
+          const { files } = get()
+          set({
+            files: files.map(f =>
+              f.id === id
+                ? { ...f, content, isModified: false, updatedAt: Date.now() }
                 : f
             ),
           })

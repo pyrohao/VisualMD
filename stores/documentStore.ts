@@ -130,10 +130,10 @@ interface DocumentStore {
   collapseAll: () => void
   
   /**
-   * 更新元数据
+   * 更新元数据（完全替换）
    * @param metadata 新的元数据
    */
-  updateMetadata: (metadata: Partial<DocumentMetadata>) => void
+  updateMetadata: (metadata: Record<string, string>) => void
   
   /**
    * 从Markdown文本更新（用于文本编辑器）
@@ -835,7 +835,7 @@ export const useDocumentStore = create<DocumentStore>()(
           set({ expandedNodeIds: new Set(['root']) })
         },
 
-        updateMetadata: (metadata: Partial<DocumentMetadata>) => {
+        updateMetadata: (metadata: Record<string, string>) => {
           const { document } = get()
           if (!document) return
 
@@ -846,10 +846,11 @@ export const useDocumentStore = create<DocumentStore>()(
             description: `更新元数据: ${changedKeys}`,
           })
           
+          // 完全替换元数据，而不是合并
           set({ 
             document: { 
               ...document, 
-              metadata: { ...document.metadata, ...metadata },
+              metadata,
               isModified: true 
             } 
           })
