@@ -15,7 +15,7 @@ import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useSidebarStore } from '@/stores/sidebarStore'
 import { findNodeInTree } from '@/lib/flow-helpers'
 import { toast } from '@/hooks/use-toast'
-import { ConfirmDialog } from './ui/confirm-dialog'
+import { DeleteConfirmDialog } from './delete-confirm-dialog'
 import { VirtualRootEditor } from './virtual-root-editor'
 import { NodeContentEditor } from './node-content-editor'
 
@@ -195,6 +195,7 @@ export function NodeEditPanel() {
     if (selectedNodeId) {
       deleteNode(selectedNodeId)
       selectNode(null)
+      setShowDeleteConfirm(false)
       toast({ title: '节点已删除' })
     }
   }, [selectedNodeId, deleteNode, selectNode])
@@ -370,15 +371,15 @@ export function NodeEditPanel() {
       </div>
 
       {/* 删除确认对话框 */}
-      <ConfirmDialog
-        isOpen={showDeleteConfirm}
-        onClose={() => setShowDeleteConfirm(false)}
-        onConfirm={handleConfirmDelete}
+      <DeleteConfirmDialog
+        open={showDeleteConfirm}
+        onOpenChange={setShowDeleteConfirm}
+        itemName={selectedNode?.title || '节点'}
         title="删除节点"
-        description="确定要删除这个节点吗？此操作不可撤销。"
+        description={`确定要删除"${selectedNode?.title || '节点'}及其子节点"吗？`}
         confirmText="删除"
         cancelText="取消"
-        variant="destructive"
+        onConfirm={handleConfirmDelete}
       />
     </div>
   )
