@@ -6,11 +6,11 @@
 
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { FileText } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
-import { useThemeStore } from '@/stores/themeStore'
+import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import type { MarkdownFile } from '@/types/file-system'
 import { DeleteConfirmDialog } from '../delete-confirm-dialog'
 import { toast } from '@/hooks/use-toast'
@@ -30,7 +30,12 @@ export function FileItem({ file, isActive, isModified, onClick }: FileItemProps)
   const inputRef = useRef<HTMLInputElement>(null)
 
   const { getThemeConfig } = useThemeStore()
-  const themeConfig = getThemeConfig()
+  const [mounted, setMounted] = useState(false)
+  const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
   
   const { renameFile, deleteFile, exportFile } = useFileSystemStore()
 

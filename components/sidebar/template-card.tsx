@@ -11,8 +11,9 @@
 
 import { FileText, Trash2, Check } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { useThemeStore } from '@/stores/themeStore'
+import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import type { Template } from '@/stores/sidebarStore'
+import { useState, useEffect } from 'react'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -39,7 +40,12 @@ export function TemplateCard({
   onDelete,
 }: TemplateCardProps) {
   const { getThemeConfig } = useThemeStore()
-  const themeConfig = getThemeConfig()
+  const [mounted, setMounted] = useState(false)
+  const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
 
   return (
     <ContextMenu>

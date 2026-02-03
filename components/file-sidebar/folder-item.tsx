@@ -6,11 +6,11 @@
 
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { ChevronRight, Folder, FolderOpen } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
-import { useThemeStore } from '@/stores/themeStore'
+import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import type { Folder as FolderType, MarkdownFile } from '@/types/file-system'
 import { FileItem } from './file-item'
 import { DeleteConfirmDialog } from '../delete-confirm-dialog'
@@ -52,7 +52,12 @@ export function FolderItem({
   const inputRef = useRef<HTMLInputElement>(null)
 
   const { getThemeConfig } = useThemeStore()
-  const themeConfig = getThemeConfig()
+  const [mounted, setMounted] = useState(false)
+  const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
   
   const { renameFolder, deleteFolder, createFile, moveFileToFolder, openFile, importFile } = useFileSystemStore()
 

@@ -10,8 +10,9 @@
 import { FolderOpen, LayoutTemplate, Sparkles, Settings, ListTree, HelpCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useSidebarStore, type SidebarPanel } from '@/stores/sidebarStore'
-import { useThemeStore } from '@/stores/themeStore'
+import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { useState, useEffect } from 'react'
 
 interface IconItem {
   id: SidebarPanel
@@ -35,7 +36,14 @@ const BOTTOM_ICONS: IconItem[] = [
 export function IconSidebar() {
   const { activePanel, setActivePanel } = useSidebarStore()
   const { getThemeConfig } = useThemeStore()
-  const themeConfig = getThemeConfig()
+  const [mounted, setMounted] = useState(false)
+
+  // 使用安全的主题配置，避免 SSR 不匹配
+  const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
 
   const handleIconClick = (panelId: SidebarPanel) => {
     // 切换到新面板

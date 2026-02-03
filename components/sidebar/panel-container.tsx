@@ -9,8 +9,9 @@
 
 import { motion, AnimatePresence } from 'framer-motion'
 import { useSidebarStore, type SidebarPanel } from '@/stores/sidebarStore'
-import { useThemeStore } from '@/stores/themeStore'
+import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { FilePanel } from './file-panel'
+import { useState, useEffect } from 'react'
 import { TemplatePanel } from './template-panel'
 import { AIPanel } from './ai-panel'
 import { SettingsPanel } from './settings-panel'
@@ -34,7 +35,14 @@ const PANELS: Record<SidebarPanel, React.ComponentType<any>> = {
 export function PanelContainer({ onEditTemplate, onPreviewTemplate }: PanelContainerProps) {
   const { activePanel, isPanelExpanded, panelWidth } = useSidebarStore()
   const { getThemeConfig } = useThemeStore()
-  const themeConfig = getThemeConfig()
+  const [mounted, setMounted] = useState(false)
+
+  // 使用安全的主题配置，避免 SSR 不匹配
+  const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
 
   if (!isPanelExpanded) {
     return null

@@ -6,7 +6,7 @@
  * 搜索文件和模板内容
  */
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { Search, FileText, LayoutTemplate, X } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -18,7 +18,8 @@ import {
 import { Input } from '@/components/ui/input'
 import { useSidebarStore } from '@/stores/sidebarStore'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
-import { useThemeStore } from '@/stores/themeStore'
+import { useThemeStore, themeConfigs } from '@/stores/themeStore'
+import { useTabsStore } from '@/stores/tabsStore'
 import { cn } from '@/lib/utils'
 
 interface SearchDialogProps {
@@ -30,7 +31,13 @@ export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
   const { templates } = useSidebarStore()
   const { files, openFile } = useFileSystemStore()
   const { getThemeConfig } = useThemeStore()
-  const themeConfig = getThemeConfig()
+  const { activeTabId, getActiveTab, openFileInCurrentTab, openFileInTab } = useTabsStore()
+  const [mounted, setMounted] = useState(false)
+  const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
 
   const [searchQuery, setSearchQuery] = useState('')
 
@@ -92,7 +99,17 @@ export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
 
   const handleResultClick = (result: { id: string; type: string }) => {
     if (result.type === 'file') {
-      openFile(result.id)
+      const file = files.find((f) => f.id === result.id)
+      if (file) {
+        const activeTab = getActiveTab()
+        // 如果当前是空白标签页，在当前标签打开；否则创建新标签
+        if (activeTab?.isNew && !activeTab?.content?.trim()) {
+          openFileInCurrentTab(activeTabId!, file.name, file.content, file.id)
+        } else {
+          openFileInTab(file.name, file.content, file.id)
+        }
+        openFile(result.id)
+      }
       onOpenChange(false)
     }
     // 模板点击可以切换到模板面板并选中

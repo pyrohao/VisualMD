@@ -11,7 +11,7 @@ import { useState, useCallback, useEffect } from 'react'
 import { FilePlus, FolderPlus, ChevronDown, ChevronRight, ArrowUpDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
-import { useThemeStore } from '@/stores/themeStore'
+import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { useTabsStore } from '@/stores/tabsStore'
 import { FolderItem } from '../file-sidebar/folder-item'
 import { FileItem } from '../file-sidebar/file-item'
@@ -21,7 +21,6 @@ import { toast } from '@/hooks/use-toast'
 
 export function FilePanel() {
   const { getThemeConfig } = useThemeStore()
-  const themeConfig = getThemeConfig()
 
   const {
     folders,
@@ -39,7 +38,7 @@ export function FilePanel() {
     reorderFolders,
   } = useFileSystemStore()
 
-  const { openFileInTab, findTabByFileId } = useTabsStore()
+  const { openFileInTab, findTabByFileId, getActiveTab, activeTabId, openFileInCurrentTab } = useTabsStore()
 
   // 拖拽状态
   const [dragOverId, setDragOverId] = useState<string | null>(null)
@@ -47,6 +46,13 @@ export function FilePanel() {
 
   // 客户端挂载状态，用于避免 hydration 不匹配
   const [mounted, setMounted] = useState(false)
+
+  // 使用安全的主题配置，避免 SSR 不匹配
+  const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
 
   // 根目录拖放状态
   const [isRootDragOver, setIsRootDragOver] = useState(false)
@@ -116,6 +122,14 @@ export function FilePanel() {
     if (existingTab) {
       // 切换到已存在的标签页
       openFileInTab(file.name, file.content, fileId)
+      return
+    }
+
+    // 检查当前是否是空白标签页
+    const activeTab = getActiveTab()
+    if (activeTab?.isNew && !activeTab?.content?.trim()) {
+      // 在当前空白标签页打开
+      openFileInCurrentTab(activeTabId!, file.name, file.content, fileId)
     } else {
       // 在新标签页打开
       openFileInTab(file.name, file.content, fileId)

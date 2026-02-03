@@ -58,6 +58,8 @@ interface TabsStore {
   getActiveTab: () => Tab | null
   /** 获取标签页内容 */
   getTabContent: (tabId: string) => string | null
+  /** 在当前标签页打开文件（用于空白标签页） */
+  openFileInCurrentTab: (tabId: string, fileName: string, content: string, fileId?: string) => void
 }
 
 /**
@@ -180,10 +182,11 @@ export const useTabsStore = create<TabsStore>()(
           let newActiveTabId = activeTabId
           if (activeTabId === tabId) {
             if (newTabs.length > 0) {
-              // 优先切换到右边的标签页，如果没有则切换到左边的
-              const newIndex = Math.min(tabIndex, newTabs.length - 1)
+              // 优先切换到左边的标签页（上一级）
+              const newIndex = Math.max(0, tabIndex - 1)
               newActiveTabId = newTabs[newIndex].id
             } else {
+              // 所有标签都关闭了，不创建新标签，设置为 null
               newActiveTabId = null
             }
           }
@@ -195,6 +198,7 @@ export const useTabsStore = create<TabsStore>()(
         },
 
         closeAllTabs: () => {
+          // 关闭所有标签，不创建新标签
           set({
             tabs: [],
             activeTabId: null,
@@ -264,6 +268,17 @@ export const useTabsStore = create<TabsStore>()(
           const { tabs } = get()
           const tab = tabs.find((t) => t.id === tabId)
           return tab?.content || null
+        },
+
+        openFileInCurrentTab: (tabId: string, fileName: string, content: string, fileId?: string) => {
+          const { tabs } = get()
+          set({
+            tabs: tabs.map((t) =>
+              t.id === tabId
+                ? { ...t, fileName, content, isModified: false, isNew: false, fileId: fileId || null }
+                : t
+            ),
+          })
         },
       }),
       {

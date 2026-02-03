@@ -10,7 +10,7 @@
 
 import { useEffect, useState } from 'react'
 import { ListTree, FileText } from 'lucide-react'
-import { useThemeStore } from '@/stores/themeStore'
+import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { useDocumentStore } from '@/stores/documentStore'
 
 interface Heading {
@@ -21,7 +21,13 @@ interface Heading {
 
 export function OutlinePanel() {
   const { getThemeConfig } = useThemeStore()
-  const themeConfig = getThemeConfig()
+  const [mounted, setMounted] = useState(false)
+  const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+
   const { document, getCurrentMarkdown } = useDocumentStore()
   const [headings, setHeadings] = useState<Heading[]>([])
 

@@ -9,9 +9,9 @@
  * - 独立测试连接状态
  */
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Settings, Key, Globe, Cpu, TestTube, AlertCircle, CheckCircle, Eye, EyeOff } from 'lucide-react'
-import { useThemeStore } from '@/stores/themeStore'
+import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { useSettingsStore, PRESET_PROVIDERS, type AIProvider } from '@/stores/settingsStore'
 import { createAIService } from '@/lib/ai-service'
 import { Button } from '@/components/ui/button'
@@ -21,7 +21,12 @@ import { toast } from '@/hooks/use-toast'
 
 export function SettingsPanel() {
   const { getThemeConfig } = useThemeStore()
-  const themeConfig = getThemeConfig()
+  const [mounted, setMounted] = useState(false)
+  const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
   
   const { 
     activeProvider,

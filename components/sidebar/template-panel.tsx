@@ -13,7 +13,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { cn } from '@/lib/utils'
 import { useSidebarStore } from '@/stores/sidebarStore'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
-import { useThemeStore } from '@/stores/themeStore'
+import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { TemplateCard } from './template-card'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/hooks/use-toast'
@@ -48,7 +48,12 @@ export function TemplatePanel({ onEditTemplate, onPreviewTemplate }: TemplatePan
   } = useSidebarStore()
   const { createFile, importFile, files } = useFileSystemStore()
   const { getThemeConfig } = useThemeStore()
-  const themeConfig = getThemeConfig()
+  const [mounted, setMounted] = useState(false)
+  const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
 
   const [isLoading, setIsLoading] = useState(true)
   const fileInputRef = useRef<HTMLInputElement>(null)

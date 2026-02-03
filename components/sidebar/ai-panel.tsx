@@ -12,7 +12,7 @@
 
 import { useState, useEffect } from 'react'
 import { Sparkles, Send, Loader2, AlertCircle, CheckCircle, Settings } from 'lucide-react'
-import { useThemeStore } from '@/stores/themeStore'
+import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { createAIService } from '@/lib/ai-service'
@@ -22,9 +22,14 @@ import { toast } from '@/hooks/use-toast'
 
 export function AIPanel() {
   const [prompt, setPrompt] = useState('')
+  const [mounted, setMounted] = useState(false)
   
   const { getThemeConfig } = useThemeStore()
-  const themeConfig = getThemeConfig()
+  const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
   
   const { 
     activeProvider,

@@ -356,10 +356,17 @@ export function EditorToolbar({
                     }}
                     className={cn(
                       'p-0.5 rounded mr-1 flex-shrink-0 transition-all duration-150',
-                      'opacity-0 group-hover:opacity-100',
-                      'hover:bg-white/10'
+                      tabs.length === 1 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
                     )}
                     style={{ color: themeConfig.muted }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.color = themeConfig.text
+                      e.currentTarget.style.backgroundColor = themeConfig.hover
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.color = themeConfig.muted
+                      e.currentTarget.style.backgroundColor = 'transparent'
+                    }}
                   >
                     <X className="h-3 w-3" />
                   </button>
@@ -423,10 +430,6 @@ export function EditorToolbar({
             <DropdownMenuItem
               onClick={() => {
                 closeAllTabs()
-                // 关闭后自动创建空白标签页
-                setTimeout(() => {
-                  createTab(undefined, undefined, true)
-                }, 0)
                 toast({
                   title: '已关闭所有标签页',
                 })

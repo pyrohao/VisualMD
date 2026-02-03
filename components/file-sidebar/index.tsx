@@ -11,7 +11,7 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import { FilePlus, FolderPlus, ChevronDown, ChevronRight, ArrowUpDown, MoreHorizontal } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
-import { useThemeStore } from '@/stores/themeStore'
+import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { FolderItem } from './folder-item'
 import { FileItem } from './file-item'
 import type { DropPosition } from '@/types/file-system'
@@ -20,7 +20,12 @@ import { toast } from '@/hooks/use-toast'
 
 export function FileSidebar() {
   const { getThemeConfig } = useThemeStore()
-  const themeConfig = getThemeConfig()
+  const [mounted, setMounted] = useState(false)
+  const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
 
   const {
     folders,
@@ -43,9 +48,6 @@ export function FileSidebar() {
   const [dragOverId, setDragOverId] = useState<string | null>(null)
   const [dragOverPosition, setDragOverPosition] = useState<DropPosition | null>(null)
 
-  // 客户端挂载状态，用于避免 hydration 不匹配
-  const [mounted, setMounted] = useState(false)
-
   // 根目录拖放状态
   const [isRootDragOver, setIsRootDragOver] = useState(false)
 
@@ -57,11 +59,7 @@ export function FileSidebar() {
   // Prompt 对话框状态
   const [showFilePrompt, setShowFilePrompt] = useState(false)
   const [showFolderPrompt, setShowFolderPrompt] = useState(false)
-  
-  useEffect(() => {
-    setMounted(true)
-  }, [])
-  
+
   // 点击外部关闭排序菜单
   useEffect(() => {
     if (!showSortMenu) return

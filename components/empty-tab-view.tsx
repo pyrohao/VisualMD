@@ -8,11 +8,12 @@
  */
 
 import { FilePlus, FolderOpen, X } from 'lucide-react'
-import { useThemeStore } from '@/stores/themeStore'
+import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { useTabsStore } from '@/stores/tabsStore'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { openFile } from '@/lib/file-system'
 import { toast } from '@/hooks/use-toast'
+import { useState, useEffect } from 'react'
 
 interface EmptyTabViewProps {
   tabId: string
@@ -21,18 +22,32 @@ interface EmptyTabViewProps {
 
 export function EmptyTabView({ tabId, onOpenSearch }: EmptyTabViewProps) {
   const { getThemeConfig } = useThemeStore()
-  const themeConfig = getThemeConfig()
-  const { closeTab, openFileInTab } = useTabsStore()
-  const { createFile, openFile: openFileInPanel } = useFileSystemStore()
+  const [mounted, setMounted] = useState(false)
+  const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
+  const { closeTab, openFileInCurrentTab } = useTabsStore()
 
-  // 处理创建新文件 - 在文件面板创建新的未命名文件
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+  const { createFile, files } = useFileSystemStore()
+
+  // 处理创建新文件 - 在当前空白标签页打开新创建的文件
   const handleCreateNewFile = () => {
     // 创建新文件到文件系统
     createFile('未命名文档.md', null)
-    toast({
-      title: '已创建新文件',
-      description: '请在左侧文件面板查看',
-    })
+    
+    // 获取刚创建的文件（最新的文件）
+    const { files: updatedFiles } = useFileSystemStore.getState()
+    const newFile = updatedFiles[updatedFiles.length - 1]
+    
+    if (newFile) {
+      // 在当前空白标签页打开新文件
+      openFileInCurrentTab(tabId, newFile.name, newFile.content, newFile.id)
+      toast({
+        title: '已创建并打开新文件',
+        description: newFile.name,
+      })
+    }
   }
 
   // 处理打开文件 - 调用搜索功能
@@ -50,8 +65,8 @@ export function EmptyTabView({ tabId, onOpenSearch }: EmptyTabViewProps) {
     try {
       const result = await openFile()
       if (result.success && result.content && result.fileName) {
-        // 在当前标签页打开文件内容
-        openFileInTab(result.fileName, result.content)
+        // 在当前空白标签页打开文件内容
+        openFileInCurrentTab(tabId, result.fileName, result.content)
         toast({
           title: '文件已打开',
           description: result.fileName,
@@ -68,7 +83,9 @@ export function EmptyTabView({ tabId, onOpenSearch }: EmptyTabViewProps) {
 
   // 处理关闭标签页
   const handleCloseTab = () => {
-    closeTab(tabId)
+    if (tabId !== 'blank') {
+      closeTab(tabId)
+    }
   }
 
   const menuItems = [

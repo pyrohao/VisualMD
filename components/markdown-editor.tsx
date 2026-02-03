@@ -141,7 +141,7 @@ export function MarkdownEditor() {
 
   // 获取主题配置
   const { getThemeConfig } = useThemeStore()
-  const themeConfig = getThemeConfig()
+  const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
 
   // 初始化加载
   useEffect(() => {
@@ -444,13 +444,16 @@ export function MarkdownEditor() {
             transition: 'left 0.3s ease, right 0.3s ease',
           }}
         >
-          {activeTabId && activeTab?.isNew && !activeTab?.content?.trim() ? (
-            <EmptyTabView tabId={activeTabId} onOpenSearch={() => setSearchDialogOpen(true)} />
-          ) : (
-            <ReactFlowProvider>
-              <FlowCanvas />
-            </ReactFlowProvider>
-          )}
+          {(() => {
+            const showEmptyView = !activeTabId || (activeTab?.isNew && !activeTab?.content?.trim())
+            return showEmptyView ? (
+              <EmptyTabView tabId={activeTabId || 'blank'} onOpenSearch={() => setSearchDialogOpen(true)} />
+            ) : (
+              <ReactFlowProvider>
+                <FlowCanvas />
+              </ReactFlowProvider>
+            )
+          })()}
         </div>
 
         {/* 右侧面板 - 预览 */}
