@@ -58,13 +58,15 @@ export function EditorToolbar({
   const { importFile } = useFileSystemStore()
   const { getThemeConfig } = useThemeStore()
   const { isPanelExpanded, togglePanel } = useSidebarStore()
-  const { tabs, activeTabId, activateTab, closeTab, createTab, openFileInTab, getActiveTab, closeAllTabs } = useTabsStore()
+  const { tabs, activeTabId, activateTab, closeTab, createTab, openFileInTab, getActiveTab, closeAllTabs, reorderTabs } = useTabsStore()
   const [isLoading, setIsLoading] = useState(false)
   const [hoveredTabId, setHoveredTabId] = useState<string | null>(null)
   const tabsContainerRef = useRef<HTMLDivElement>(null)
   const [containerWidth, setContainerWidth] = useState(0)
 
   const [mounted, setMounted] = useState(false)
+  const [draggedTabId, setDraggedTabId] = useState<string | null>(null)
+  const [dragOverTabId, setDragOverTabId] = useState<string | null>(null)
   const activeTab = getActiveTab()
 
   // 使用安全的主题配置，避免 SSR 不匹配
@@ -168,6 +170,72 @@ export function EditorToolbar({
   const handleNewTab = () => {
     createTab(undefined, undefined, true)
   }
+
+  // 处理标签拖拽开始
+  const handleDragStart = useCallback((e: React.DragEvent, tabId: string) => {
+    setDraggedTabId(tabId)
+    e.dataTransfer.effectAllowed = 'move'
+    // 设置拖拽时的透明图像
+    const dragImage = document.createElement('div')
+    dragImage.style.cssText = `
+      position: fixed;
+      top: -1000px;
+      padding: 4px 12px;
+      background: ${themeConfig.card};
+      border: 1px solid ${themeConfig.border};
+      border-radius: 4px;
+      color: ${themeConfig.text};
+      font-size: 12px;
+      pointer-events: none;
+      z-index: 9999;
+    `
+    dragImage.textContent = tabs.find(t => t.id === tabId)?.fileName || ''
+    document.body.appendChild(dragImage)
+    e.dataTransfer.setDragImage(dragImage, 0, 0)
+    setTimeout(() => document.body.removeChild(dragImage), 0)
+  }, [tabs, themeConfig])
+
+  // 处理标签拖拽经过
+  const handleDragOver = useCallback((e: React.DragEvent, tabId: string) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    if (tabId !== draggedTabId) {
+      setDragOverTabId(tabId)
+    }
+  }, [draggedTabId])
+
+  // 处理标签拖拽离开
+  const handleDragLeave = useCallback(() => {
+    setDragOverTabId(null)
+  }, [])
+
+  // 处理标签放置
+  const handleDrop = useCallback((e: React.DragEvent, targetTabId: string) => {
+    e.preventDefault()
+    e.stopPropagation()
+    
+    if (!draggedTabId || draggedTabId === targetTabId) {
+      setDraggedTabId(null)
+      setDragOverTabId(null)
+      return
+    }
+
+    const dragIndex = tabs.findIndex(t => t.id === draggedTabId)
+    const hoverIndex = tabs.findIndex(t => t.id === targetTabId)
+    
+    if (dragIndex !== -1 && hoverIndex !== -1) {
+      reorderTabs(dragIndex, hoverIndex)
+    }
+    
+    setDraggedTabId(null)
+    setDragOverTabId(null)
+  }, [draggedTabId, tabs, reorderTabs])
+
+  // 处理拖拽结束
+  const handleDragEnd = useCallback(() => {
+    setDraggedTabId(null)
+    setDragOverTabId(null)
+  }, [])
 
   return (
     <div
@@ -294,13 +362,21 @@ export function EditorToolbar({
               const width = tabWidths[tab.id] || TAB_CONFIG.normalWidth
               const isActive = tab.id === activeTabId
               const isHovered = tab.id === hoveredTabId
-              
+              const isDragged = tab.id === draggedTabId
+              const isDragOver = tab.id === dragOverTabId
+
               return (
                 <div
                   key={tab.id}
+                  draggable
                   onClick={() => activateTab(tab.id)}
                   onMouseEnter={() => setHoveredTabId(tab.id)}
                   onMouseLeave={() => setHoveredTabId(null)}
+                  onDragStart={(e) => handleDragStart(e, tab.id)}
+                  onDragOver={(e) => handleDragOver(e, tab.id)}
+                  onDragLeave={handleDragLeave}
+                  onDrop={(e) => handleDrop(e, tab.id)}
+                  onDragEnd={handleDragEnd}
                   className={cn(
                     'group relative flex items-center h-7 rounded-md cursor-pointer select-none',
                     'transition-all duration-200 ease-out',
@@ -309,14 +385,20 @@ export function EditorToolbar({
                   style={{
                     width: `${width}px`,
                     marginLeft: index > 0 ? `-${TAB_CONFIG.padding}px` : '0',
-                    backgroundColor: isActive 
-                      ? themeConfig.background 
-                      : themeConfig.card,
-                    border: `1px solid ${isActive ? themeConfig.border : themeConfig.border + '80'}`,
-                    boxShadow: isActive 
-                      ? `0 2px 4px #00000020` 
-                      : 'none',
+                    backgroundColor: isActive
+                      ? themeConfig.background
+                      : isDragOver
+                        ? themeConfig.primary + '20'
+                        : themeConfig.card,
+                    border: `1px solid ${isActive ? themeConfig.border : isDragOver ? themeConfig.primary : themeConfig.border + '80'}`,
+                    boxShadow: isActive
+                      ? `0 2px 4px #00000020`
+                      : isDragOver
+                        ? `0 0 0 2px ${themeConfig.primary}40`
+                        : 'none',
                     zIndex: isActive ? 10 : isHovered ? 5 : tabs.length - index,
+                    opacity: isDragged ? 0.5 : 1,
+                    transform: isDragOver ? 'scale(1.02)' : 'scale(1)',
                   }}
                 >
                   {/* 左侧装饰线（扑克牌堆叠效果） */}

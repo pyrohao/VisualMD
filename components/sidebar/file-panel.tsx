@@ -7,8 +7,8 @@
  * 从原 FileSidebar 迁移而来
  */
 
-import { useState, useCallback, useEffect } from 'react'
-import { FilePlus, FolderPlus, ChevronDown, ChevronRight, ArrowUpDown } from 'lucide-react'
+import { useState, useCallback, useEffect, useRef } from 'react'
+import { FilePlus, FolderPlus, ChevronDown, ChevronRight, ArrowUpDown, FolderOpen } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
@@ -16,8 +16,16 @@ import { useTabsStore } from '@/stores/tabsStore'
 import { FolderItem } from '../file-sidebar/folder-item'
 import { FileItem } from '../file-sidebar/file-item'
 import type { DropPosition } from '@/types/file-system'
-import { PromptDialog } from '../ui/prompt-dialog'
 import { toast } from '@/hooks/use-toast'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 
 export function FilePanel() {
   const { getThemeConfig } = useThemeStore()
@@ -62,9 +70,13 @@ export function FilePanel() {
   const [sortBy, setSortBy] = useState<'name' | 'updatedAt' | 'createdAt'>('name')
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc')
 
-  // Prompt 对话框状态
-  const [showFilePrompt, setShowFilePrompt] = useState(false)
-  const [showFolderPrompt, setShowFolderPrompt] = useState(false)
+  // 对话框状态
+  const [showFileDialog, setShowFileDialog] = useState(false)
+  const [showFolderDialog, setShowFolderDialog] = useState(false)
+  const [fileName, setFileName] = useState('未命名.md')
+  const [folderName, setFolderName] = useState('新建文件夹')
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const folderInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     setMounted(true)
@@ -138,13 +150,15 @@ export function FilePanel() {
 
   // 处理创建文件
   const handleCreateFile = () => {
-    setShowFilePrompt(true)
+    setFileName('未命名.md')
+    setShowFileDialog(true)
   }
 
   // 确认创建文件
-  const handleConfirmCreateFile = (name: string) => {
-    if (name.trim()) {
-      createFile(name.trim(), null)
+  const handleConfirmCreateFile = () => {
+    if (fileName.trim()) {
+      createFile(fileName.trim(), null)
+      setShowFileDialog(false)
       toast({
         title: '文件创建成功',
       })
@@ -153,17 +167,30 @@ export function FilePanel() {
 
   // 处理创建文件夹
   const handleCreateFolder = () => {
-    setShowFolderPrompt(true)
+    setFolderName('新建文件夹')
+    setShowFolderDialog(true)
   }
 
   // 确认创建文件夹
-  const handleConfirmCreateFolder = (name: string) => {
-    if (name.trim()) {
-      createFolder(name.trim())
+  const handleConfirmCreateFolder = () => {
+    if (folderName.trim()) {
+      createFolder(folderName.trim())
+      setShowFolderDialog(false)
       toast({
         title: '文件夹创建成功',
       })
     }
+  }
+
+  // 处理对话框取消
+  const handleCancelFileDialog = () => {
+    setShowFileDialog(false)
+    setFileName('未命名.md')
+  }
+
+  const handleCancelFolderDialog = () => {
+    setShowFolderDialog(false)
+    setFolderName('新建文件夹')
   }
 
   // 处理文件夹展开/折叠
@@ -479,33 +506,140 @@ export function FilePanel() {
       </div>
 
       {/* 创建文件对话框 */}
-      <PromptDialog
-        isOpen={showFilePrompt}
-        onClose={() => setShowFilePrompt(false)}
-        onConfirm={handleConfirmCreateFile}
-        title="新建文件"
-        description="请输入文件名："
-        defaultValue="未命名.md"
-        confirmText="创建"
-        cancelText="取消"
-        placeholder="文件名"
-      />
+      <Dialog open={showFileDialog} onOpenChange={setShowFileDialog}>
+        <DialogContent
+          className="sm:max-w-[400px]"
+          style={{
+            backgroundColor: themeConfig.card,
+            borderColor: themeConfig.border,
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle style={{ color: themeConfig.text }}>
+              新建文件
+            </DialogTitle>
+            <DialogDescription style={{ color: themeConfig.textMuted }}>
+              请输入文件名：
+            </DialogDescription>
+          </DialogHeader>
+          <div className="mt-4">
+            <input
+              ref={fileInputRef}
+              type="text"
+              value={fileName}
+              onChange={(e) => setFileName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handleConfirmCreateFile()
+                }
+                if (e.key === 'Escape') {
+                  handleCancelFileDialog()
+                }
+              }}
+              placeholder="文件名"
+              className="w-full px-3 py-2 rounded-md border text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+              style={{
+                backgroundColor: themeConfig.background,
+                borderColor: themeConfig.border,
+                color: themeConfig.text,
+              }}
+              autoFocus
+            />
+          </div>
+          <DialogFooter className="gap-2 mt-4">
+            <Button
+              variant="outline"
+              onClick={handleCancelFileDialog}
+              style={{
+                borderColor: themeConfig.border,
+                color: themeConfig.text,
+                backgroundColor: 'transparent',
+              }}
+              className="hover:opacity-80"
+            >
+              取消
+            </Button>
+            <Button
+              onClick={handleConfirmCreateFile}
+              style={{
+                backgroundColor: themeConfig.primary,
+                color: '#fff',
+              }}
+              className="hover:opacity-90"
+            >
+              创建
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* 创建文件夹对话框 */}
-      <PromptDialog
-        isOpen={showFolderPrompt}
-        onClose={() => setShowFolderPrompt(false)}
-        onConfirm={handleConfirmCreateFolder}
-        title="新建文件夹"
-        description="请输入文件夹名称："
-        defaultValue="新建文件夹"
-        confirmText="创建"
-        cancelText="取消"
-        placeholder="文件夹名称"
-      />
+      <Dialog open={showFolderDialog} onOpenChange={setShowFolderDialog}>
+        <DialogContent
+          className="sm:max-w-[400px]"
+          style={{
+            backgroundColor: themeConfig.card,
+            borderColor: themeConfig.border,
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle style={{ color: themeConfig.text }}>
+              新建文件夹
+            </DialogTitle>
+            <DialogDescription style={{ color: themeConfig.textMuted }}>
+              请输入文件夹名称：
+            </DialogDescription>
+          </DialogHeader>
+          <div className="mt-4">
+            <input
+              ref={folderInputRef}
+              type="text"
+              value={folderName}
+              onChange={(e) => setFolderName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handleConfirmCreateFolder()
+                }
+                if (e.key === 'Escape') {
+                  handleCancelFolderDialog()
+                }
+              }}
+              placeholder="文件夹名称"
+              className="w-full px-3 py-2 rounded-md border text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+              style={{
+                backgroundColor: themeConfig.background,
+                borderColor: themeConfig.border,
+                color: themeConfig.text,
+              }}
+              autoFocus
+            />
+          </div>
+          <DialogFooter className="gap-2 mt-4">
+            <Button
+              variant="outline"
+              onClick={handleCancelFolderDialog}
+              style={{
+                borderColor: themeConfig.border,
+                color: themeConfig.text,
+                backgroundColor: 'transparent',
+              }}
+              className="hover:opacity-80"
+            >
+              取消
+            </Button>
+            <Button
+              onClick={handleConfirmCreateFolder}
+              style={{
+                backgroundColor: themeConfig.primary,
+                color: '#fff',
+              }}
+              className="hover:opacity-90"
+            >
+              创建
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
-
-// 添加缺失的导入
-import { FolderOpen } from 'lucide-react'

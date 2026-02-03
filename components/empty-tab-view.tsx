@@ -43,10 +43,6 @@ export function EmptyTabView({ tabId, onOpenSearch }: EmptyTabViewProps) {
     if (newFile) {
       // 在当前空白标签页打开新文件
       openFileInCurrentTab(tabId, newFile.name, newFile.content, newFile.id)
-      toast({
-        title: '已创建并打开新文件',
-        description: newFile.name,
-      })
     }
   }
 

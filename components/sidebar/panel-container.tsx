@@ -46,7 +46,7 @@ export function PanelContainer({ onEditTemplate, onPreviewTemplate }: PanelConta
     return null
   }
 
-  const ActivePanel = PANELS[activePanel]
+  // const ActivePanel = PANELS[activePanel]
 
   return (
     <motion.div

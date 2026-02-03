@@ -60,6 +60,8 @@ interface TabsStore {
   getTabContent: (tabId: string) => string | null
   /** 在当前标签页打开文件（用于空白标签页） */
   openFileInCurrentTab: (tabId: string, fileName: string, content: string, fileId?: string) => void
+  /** 重新排序标签页 */
+  reorderTabs: (dragIndex: number, hoverIndex: number) => void
 }
 
 /**
@@ -279,6 +281,14 @@ export const useTabsStore = create<TabsStore>()(
                 : t
             ),
           })
+        },
+
+        reorderTabs: (dragIndex: number, hoverIndex: number) => {
+          const { tabs } = get()
+          const newTabs = [...tabs]
+          const [draggedTab] = newTabs.splice(dragIndex, 1)
+          newTabs.splice(hoverIndex, 0, draggedTab)
+          set({ tabs: newTabs })
         },
       }),
       {
