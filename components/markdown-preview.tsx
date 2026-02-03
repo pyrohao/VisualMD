@@ -185,8 +185,13 @@ function removeYAMLFrontMatter(markdown: string): string {
 export function MarkdownPreview() {
   const { document } = useDocumentStore()
   const { theme, getThemeConfig } = useThemeStore()
-  const themeConfig = getThemeConfig()
-  
+  const [mounted, setMounted] = useState(false)
+  const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+
   const [html, setHtml] = useState('')
 
   // 从Store获取当前Markdown

@@ -434,8 +434,14 @@ export function EditorToolbar({
                   title: '已关闭所有标签页',
                 })
               }}
-              className="cursor-pointer"
+              className="cursor-pointer focus:bg-transparent"
               style={{ color: themeConfig.text }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = themeConfig.hover
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent'
+              }}
             >
               <X className="mr-2 h-4 w-4" style={{ color: themeConfig.muted }} />
               <span>全部关闭</span>

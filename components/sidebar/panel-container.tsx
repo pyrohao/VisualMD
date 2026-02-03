@@ -16,20 +16,18 @@ import { TemplatePanel } from './template-panel'
 import { AIPanel } from './ai-panel'
 import { SettingsPanel } from './settings-panel'
 import { OutlinePanel } from './outline-panel'
-import { HelpPanel } from './help-panel'
 
 interface PanelContainerProps {
   onEditTemplate?: (content: string, templateName: string, templateId: string) => void
   onPreviewTemplate?: (content: string, templateName: string) => void
 }
 
-const PANELS: Record<SidebarPanel, React.ComponentType<any>> = {
+const PANELS: Record<Exclude<SidebarPanel, 'help'>, React.ComponentType<any>> = {
   files: FilePanel,
   outline: OutlinePanel,
   templates: TemplatePanel,
   ai: AIPanel,
   settings: SettingsPanel,
-  help: HelpPanel,
 }
 
 export function PanelContainer({ onEditTemplate, onPreviewTemplate }: PanelContainerProps) {
@@ -75,7 +73,6 @@ export function PanelContainer({ onEditTemplate, onPreviewTemplate }: PanelConta
           {activePanel === 'outline' && <OutlinePanel />}
           {activePanel === 'ai' && <AIPanel />}
           {activePanel === 'settings' && <SettingsPanel />}
-          {activePanel === 'help' && <HelpPanel />}
         </motion.div>
       </AnimatePresence>
     </motion.div>

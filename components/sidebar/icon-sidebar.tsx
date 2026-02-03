@@ -13,6 +13,7 @@ import { useSidebarStore, type SidebarPanel } from '@/stores/sidebarStore'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useState, useEffect } from 'react'
+import { HelpDialog } from '../help-dialog'
 
 interface IconItem {
   id: SidebarPanel
@@ -29,7 +30,6 @@ const ICONS: IconItem[] = [
 ]
 
 const BOTTOM_ICONS: IconItem[] = [
-  { id: 'help', icon: HelpCircle, label: '帮助', shortcut: '' },
   { id: 'settings', icon: Settings, label: '设置', shortcut: '' },
 ]
 
@@ -37,6 +37,7 @@ export function IconSidebar() {
   const { activePanel, setActivePanel } = useSidebarStore()
   const { getThemeConfig } = useThemeStore()
   const [mounted, setMounted] = useState(false)
+  const [helpDialogOpen, setHelpDialogOpen] = useState(false)
 
   // 使用安全的主题配置，避免 SSR 不匹配
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
@@ -48,6 +49,10 @@ export function IconSidebar() {
   const handleIconClick = (panelId: SidebarPanel) => {
     // 切换到新面板
     setActivePanel(panelId)
+  }
+
+  const handleHelpClick = () => {
+    setHelpDialogOpen(true)
   }
 
   return (
@@ -101,6 +106,27 @@ export function IconSidebar() {
 
         {/* 底部图标 */}
         <div className="flex flex-col items-center gap-1">
+          {/* 帮助按钮 - 打开对话框 */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={handleHelpClick}
+                className={cn(
+                  'relative w-9 h-9 rounded-md flex items-center justify-center transition-all duration-200',
+                  'hover:bg-white/10'
+                )}
+                style={{
+                  color: themeConfig.textMuted,
+                }}
+              >
+                <HelpCircle className="w-5 h-5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              <span>帮助</span>
+            </TooltipContent>
+          </Tooltip>
+
           {BOTTOM_ICONS.map((item) => {
             const Icon = item.icon
             const isActive = activePanel === item.id
@@ -138,6 +164,9 @@ export function IconSidebar() {
           })}
         </div>
       </div>
+
+      {/* 帮助对话框 */}
+      <HelpDialog open={helpDialogOpen} onOpenChange={setHelpDialogOpen} />
     </TooltipProvider>
   )
 }
