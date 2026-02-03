@@ -21,8 +21,10 @@ import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useDocumentStore } from '@/stores/documentStore'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useSidebarStore } from '@/stores/sidebarStore'
+import { useTabsStore } from '@/stores/tabsStore'
 import { initTheme, useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { useSidebarStore as useTemplateStore } from '@/stores/sidebarStore'
+import { EmptyTabView } from './empty-tab-view'
 
 /**
  * 默认示例Markdown内容
@@ -115,8 +117,12 @@ export function MarkdownEditor() {
   const { loadDocument, document, selectedNodeId, getCurrentMarkdown, getIsModified, updateNode } = useDocumentStore()
   const { currentFileId, files, saveFile, markFileAsSaved, openFile, createFile } = useFileSystemStore()
   const { isPanelExpanded, panelWidth } = useSidebarStore()
+  const { activeTabId, getActiveTab, tabs } = useTabsStore()
   const currentMarkdown = getCurrentMarkdown()
   const isModified = getIsModified()
+
+  // 获取当前激活的标签页
+  const activeTab = getActiveTab()
 
   // 计算当前文件
   const currentFile = files.find(f => f.id === currentFileId) || null
@@ -142,6 +148,21 @@ export function MarkdownEditor() {
     setMounted(true)
     initTheme()
   }, [])
+
+  // 监听标签页切换，加载对应内容到编辑器
+  useEffect(() => {
+    if (!mounted || !activeTab) return
+
+    // 如果标签页有内容，加载到编辑器
+    if (activeTab.content) {
+      loadDocument(activeTab.content, activeTab.fileName)
+    }
+
+    // 同步文件面板选中状态
+    if (activeTab.fileId) {
+      openFile(activeTab.fileId)
+    }
+  }, [activeTabId, mounted, loadDocument, openFile])
 
   // 创建默认文件（只在客户端挂载后且确实没有文件时执行一次）
   useEffect(() => {
@@ -413,7 +434,7 @@ export function MarkdownEditor() {
           <PanelContainer onEditTemplate={handleEditTemplate} onPreviewTemplate={handlePreviewTemplate} />
         </div>
 
-        {/* 中间面板 - React Flow画布 */}
+        {/* 中间面板 - React Flow画布或空白页 */}
         <div
           className="absolute inset-y-0"
           style={{
@@ -423,9 +444,13 @@ export function MarkdownEditor() {
             transition: 'left 0.3s ease, right 0.3s ease',
           }}
         >
-          <ReactFlowProvider>
-            <FlowCanvas />
-          </ReactFlowProvider>
+          {activeTabId && activeTab?.isNew && !activeTab?.content?.trim() ? (
+            <EmptyTabView tabId={activeTabId} onOpenSearch={() => setSearchDialogOpen(true)} />
+          ) : (
+            <ReactFlowProvider>
+              <FlowCanvas />
+            </ReactFlowProvider>
+          )}
         </div>
 
         {/* 右侧面板 - 预览 */}

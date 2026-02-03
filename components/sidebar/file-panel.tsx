@@ -12,6 +12,7 @@ import { FilePlus, FolderPlus, ChevronDown, ChevronRight, ArrowUpDown } from 'lu
 import { cn } from '@/lib/utils'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useThemeStore } from '@/stores/themeStore'
+import { useTabsStore } from '@/stores/tabsStore'
 import { FolderItem } from '../file-sidebar/folder-item'
 import { FileItem } from '../file-sidebar/file-item'
 import type { DropPosition } from '@/types/file-system'
@@ -36,8 +37,9 @@ export function FilePanel() {
     expandAll,
     collapseAll,
     reorderFolders,
-    openFile,
   } = useFileSystemStore()
+
+  const { openFileInTab, findTabByFileId } = useTabsStore()
 
   // 拖拽状态
   const [dragOverId, setDragOverId] = useState<string | null>(null)
@@ -103,6 +105,22 @@ export function FilePanel() {
   // 获取排序后的文件夹和根目录文件
   const sortedFolderList = sortedFolders()
   const rootFiles = getFilesByFolder(null)
+
+  // 处理文件点击 - 在标签页中打开
+  const handleFileClick = (fileId: string) => {
+    const file = files.find(f => f.id === fileId)
+    if (!file) return
+
+    // 检查是否已经在某个标签页打开
+    const existingTab = findTabByFileId(fileId)
+    if (existingTab) {
+      // 切换到已存在的标签页
+      openFileInTab(file.name, file.content, fileId)
+    } else {
+      // 在新标签页打开
+      openFileInTab(file.name, file.content, fileId)
+    }
+  }
 
   // 处理创建文件
   const handleCreateFile = () => {
@@ -420,6 +438,7 @@ export function FilePanel() {
                 onDrop={handleDrop}
                 dragOverId={dragOverId}
                 dragOverPosition={dragOverPosition}
+                onFileClick={handleFileClick}
               />
             ))}
 
@@ -430,7 +449,7 @@ export function FilePanel() {
                 file={file}
                 isActive={file.id === currentFileId}
                 isModified={file.isModified}
-                onClick={() => openFile(file.id)}
+                onClick={() => handleFileClick(file.id)}
               />
             ))}
 

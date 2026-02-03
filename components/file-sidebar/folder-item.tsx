@@ -28,6 +28,7 @@ interface FolderItemProps {
   onDrop: (e: React.DragEvent, id: string, type: 'folder') => void
   dragOverId: string | null
   dragOverPosition: 'before' | 'after' | null
+  onFileClick?: (fileId: string) => void
 }
 
 export function FolderItem({
@@ -41,6 +42,7 @@ export function FolderItem({
   onDrop,
   dragOverId,
   dragOverPosition,
+  onFileClick,
 }: FolderItemProps) {
   const [isEditing, setIsEditing] = useState(false)
   const [editName, setEditName] = useState(folder.name)
@@ -310,7 +312,7 @@ export function FolderItem({
                 file={file}
                 isActive={file.id === currentFileId}
                 isModified={file.isModified}
-                onClick={() => openFile(file.id)}
+                onClick={() => onFileClick ? onFileClick(file.id) : openFile(file.id)}
               />
             ))
           )}
