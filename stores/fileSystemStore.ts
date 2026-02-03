@@ -14,6 +14,7 @@ import { create } from 'zustand'
 import { devtools, persist } from 'zustand/middleware'
 import { nanoid } from 'nanoid'
 import type { Folder, MarkdownFile, Workspace, DropPosition } from '@/types/file-system'
+import { useDocumentStore } from './documentStore'
 
 /**
  * 生成唯一的文件名（处理重复）
@@ -318,6 +319,14 @@ description:
                 : f
             ),
           })
+          
+          // 同时重置 documentStore 的 isModified 状态
+          const { document } = useDocumentStore.getState()
+          if (document) {
+            useDocumentStore.setState({
+              document: { ...document, isModified: false }
+            })
+          }
         },
         
         markFileAsSaved: (id: string) => {

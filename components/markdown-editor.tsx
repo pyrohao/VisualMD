@@ -216,65 +216,15 @@ export function MarkdownEditor() {
     }
   }, [document?.isModified, templateEditMode.isActive])
 
-  // 当文档内容变化时，自动保存到文件系统
-  // 使用 document 作为依赖，而不是 currentMarkdown
-  useEffect(() => {
-    // 从 store 直接获取最新状态
-    const { document: currentDoc } = useDocumentStore.getState()
-    const isDocModified = currentDoc?.isModified ?? false
-    const isTemplateEdit = templateEditModeRef.current.isActive
-
-    if (isDocModified) {
-      const timeoutId = setTimeout(() => {
-        const latestContent = getCurrentMarkdown()
-        const currentTemplateEditMode = templateEditModeRef.current
-
-        // 如果是模板编辑模式，自动保存到模板
-        if (currentTemplateEditMode.isActive && currentTemplateEditMode.templateId) {
-          const templateId = currentTemplateEditMode.templateId
-
-          // 保存模板内容
-          useTemplateStore.setState((state) => ({
-            templates: state.templates.map(t =>
-              t.id === templateId
-                ? { ...t, content: latestContent, updatedAt: Date.now() }
-                : t
-            ),
-          }))
-
-          // 重置 document 的 isModified 状态，避免重复保存
-          useDocumentStore.setState((state) => ({
-            document: state.document ? { ...state.document, isModified: false } : null
-          }))
-
-          // 标记模板为已保存（类似于文件的 isModified = false）
-          useTemplateStore.setState({ isTemplateModified: false })
-          return
-        }
-
-        // 否则保存到文件
-        const fileId = currentFileIdRef.current
-
-        if (!fileId) {
-          return
-        }
-
-        // 保存编辑器状态（断开节点等）
-        const { markAsSaved } = useDocumentStore.getState()
-        markAsSaved()
-
-        // 直接更新 store
-        useFileSystemStore.setState((state) => ({
-          files: state.files.map(f =>
-            f.id === fileId
-              ? { ...f, content: latestContent, isModified: false, updatedAt: Date.now() }
-              : f
-          ),
-        }))
-      }, 1000) // 防抖 1 秒
-      return () => clearTimeout(timeoutId)
+  // 自动保存逻辑已移至 node-edit-panel.tsx
+  // 这里保留 markAsSaved 用于手动保存（Ctrl+S）
+  const handleAutoSave = useCallback(() => {
+    const { document } = useDocumentStore.getState()
+    if (document?.fileId) {
+      const { markAsSaved } = useDocumentStore.getState()
+      markAsSaved()
     }
-  }, [document, currentFileId, templateEditMode.isActive, templateEditMode.templateId]) // 依赖 document、currentFileId 和 templateEditMode
+  }, [])
 
 
 
@@ -311,7 +261,7 @@ export function MarkdownEditor() {
     }
 
     if (currentFileId) {
-      // 直接更新 store，确保内容正确保存
+      // 先保存文件内容到 store
       useFileSystemStore.setState((state) => ({
         files: state.files.map(f =>
           f.id === currentFileId
@@ -319,6 +269,10 @@ export function MarkdownEditor() {
             : f
         ),
       }))
+
+      // 再保存编辑器状态（断开节点等）
+      const { markAsSaved } = useDocumentStore.getState()
+      markAsSaved()
     }
   }, []) // 空依赖数组，使用 ref 获取最新状态
 

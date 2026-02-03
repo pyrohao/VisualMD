@@ -38,7 +38,7 @@ export function NodeEditPanel() {
 
   const { getThemeConfig } = useThemeStore()
   const themeConfig = getThemeConfig()
-  const { currentFileId, saveFileContent, markFileAsModified } = useFileSystemStore()
+  const { currentFileId, saveFileContent } = useFileSystemStore()
   const { editingTemplateId } = useSidebarStore()
 
   // 本地编辑状态
@@ -76,35 +76,45 @@ export function NodeEditPanel() {
   // ==================== 自动保存逻辑 ====================
   const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const isFirstRender = useRef(true)
+  const lastSavedContentRef = useRef<string>('')
+
+  // 首次渲染标记 - 在组件挂载后设置为 false
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      isFirstRender.current = false
+    }, 100)
+    return () => clearTimeout(timer)
+  }, [])
 
   // 执行保存的函数
-  const doSave = useCallback(() => {
+  const doSave = useCallback(async () => {
     if (!selectedNodeId) return
 
+    // 1. 更新节点
     if (isVirtualRoot) {
-      // 保存元数据
       const metadata: Record<string, string> = {}
       metadataEntries.forEach(({ key, value }) => {
-        if (key.trim()) {
-          metadata[key.trim()] = value
-        }
+        if (key.trim()) metadata[key.trim()] = value
       })
       updateMetadata(metadata)
     } else {
-      // 保存普通节点
       const trimmedTitle = String(title || '').trim()
       if (trimmedTitle) {
         updateNode(selectedNodeId, { title: trimmedTitle, content: content || undefined })
       }
     }
 
-    markAsSaved()
-
-    // 保存到文件系统
+    // 2. 获取最新内容并保存到文件
     const latestContent = getCurrentMarkdown()
     
+    // 避免重复保存相同内容
+    if (latestContent === lastSavedContentRef.current) {
+      return
+    }
+    
+    lastSavedContentRef.current = latestContent
+
     if (currentFileId) {
-      // 保存文件内容并清除修改标记
       saveFileContent(currentFileId, latestContent)
     } else if (editingTemplateId) {
       useSidebarStore.setState((state) => ({
@@ -116,29 +126,12 @@ export function NodeEditPanel() {
         isTemplateModified: false,
       }))
     }
+  }, [selectedNodeId, isVirtualRoot, metadataEntries, title, content, updateMetadata, updateNode, getCurrentMarkdown, currentFileId, editingTemplateId, saveFileContent])
 
-    // 显示保存提示（可选，自动保存时不显示 toast 避免干扰）
-    // toast({ title: '已自动保存', description: '修改已自动保存' })
-  }, [selectedNodeId, isVirtualRoot, metadataEntries, title, content, updateMetadata, updateNode, markAsSaved, getCurrentMarkdown, currentFileId, editingTemplateId, saveFileContent])
-
-  // 内容变化时标记文件为已修改（显示小蓝点）
+  // 自动保存 effect - 当内容变化时触发
   useEffect(() => {
     // 首次渲染不触发
     if (isFirstRender.current) return
-    
-    // 如果有当前文件，标记为已修改
-    if (currentFileId) {
-      markFileAsModified(currentFileId)
-    }
-  }, [metadataEntries, title, content, currentFileId, markFileAsModified])
-
-  // 自动保存 effect
-  useEffect(() => {
-    // 首次渲染不触发自动保存
-    if (isFirstRender.current) {
-      return
-    }
-
     // 没有选中节点不保存
     if (!selectedNodeId) return
 
@@ -152,24 +145,22 @@ export function NodeEditPanel() {
       doSave()
     }, 1000)
 
-    // 清理函数
     return () => {
       if (autoSaveTimeoutRef.current) {
         clearTimeout(autoSaveTimeoutRef.current)
       }
     }
-  }, [metadataEntries, title, content, selectedNodeId, doSave])
+  }, [metadataEntries, title, content, selectedNodeId])
 
   // 组件卸载时立即保存
   useEffect(() => {
     return () => {
       if (autoSaveTimeoutRef.current) {
         clearTimeout(autoSaveTimeoutRef.current)
-        // 如果有待保存的内容，立即保存
         doSave()
       }
     }
-  }, [doSave])
+  }, [])
 
   // 保存处理 - 立即保存（取消自动保存定时器）
   const handleSave = useCallback(() => {
