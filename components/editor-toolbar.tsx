@@ -16,6 +16,8 @@ import {
   ChevronRight,
   Plus,
   X,
+  ChevronDown,
+  FileText,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useSidebarStore } from '@/stores/sidebarStore'
@@ -26,6 +28,13 @@ import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { openFile, exportAsHTML } from '@/lib/file-system'
 import { ThemeToggle } from './theme-toggle'
 import { toast } from '@/hooks/use-toast'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from './ui/dropdown-menu'
 
 interface EditorToolbarProps {
   onToggleRight: () => void
@@ -49,7 +58,7 @@ export function EditorToolbar({
   const { importFile } = useFileSystemStore()
   const { getThemeConfig } = useThemeStore()
   const { isPanelExpanded, togglePanel } = useSidebarStore()
-  const { tabs, activeTabId, activateTab, closeTab, createTab, openFileInTab, getActiveTab } = useTabsStore()
+  const { tabs, activeTabId, activateTab, closeTab, createTab, openFileInTab, getActiveTab, closeAllTabs } = useTabsStore()
   const [isLoading, setIsLoading] = useState(false)
   const [hoveredTabId, setHoveredTabId] = useState<string | null>(null)
   const tabsContainerRef = useRef<HTMLDivElement>(null)
@@ -265,8 +274,16 @@ export function EditorToolbar({
             variant="ghost"
             size="sm"
             onClick={handleNewTab}
-            className="h-7 gap-1 text-xs"
+            className="h-7 gap-1 text-xs transition-colors"
             style={{ color: themeConfig.muted }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = themeConfig.text
+              e.currentTarget.style.backgroundColor = themeConfig.hover
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = themeConfig.muted
+              e.currentTarget.style.backgroundColor = 'transparent'
+            }}
           >
             <Plus className="h-3 w-3" />
             新建文档
@@ -355,8 +372,16 @@ export function EditorToolbar({
               variant="ghost"
               size="icon"
               onClick={handleNewTab}
-              className="h-7 w-7 flex-shrink-0 ml-1"
+              className="h-7 w-7 flex-shrink-0 ml-1 transition-colors"
               style={{ color: themeConfig.muted }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = themeConfig.text
+                e.currentTarget.style.backgroundColor = themeConfig.hover
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = themeConfig.muted
+                e.currentTarget.style.backgroundColor = 'transparent'
+              }}
             >
               <Plus className="h-3.5 w-3.5" />
             </Button>
@@ -364,35 +389,91 @@ export function EditorToolbar({
         )}
       </div>
 
-      {/* 右侧：视图控制和主题切换 */}
+      {/* 右侧：标签页菜单和主题切换 */}
       <div className="flex items-center gap-1 flex-shrink-0">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onToggleRight}
-          className="h-8 transition-colors text-xs"
-          style={{ color: themeConfig.muted }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.color = themeConfig.text
-            e.currentTarget.style.backgroundColor = themeConfig.hover
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.color = themeConfig.muted
-            e.currentTarget.style.backgroundColor = 'transparent'
-          }}
-        >
-          {rightCollapsed ? (
-            <>
-              显示预览
-              <ChevronLeft className="ml-1 h-3 w-3" />
-            </>
-          ) : (
-            <>
-              隐藏预览
-              <ChevronRight className="ml-1 h-3 w-3" />
-            </>
-          )}
-        </Button>
+        {/* 标签页下拉菜单 */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 transition-colors"
+              style={{ color: themeConfig.muted }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = themeConfig.text
+                e.currentTarget.style.backgroundColor = themeConfig.hover
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = themeConfig.muted
+                e.currentTarget.style.backgroundColor = 'transparent'
+              }}
+            >
+              <ChevronDown className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            className="w-56 max-h-[70vh] overflow-y-auto"
+            style={{
+              backgroundColor: themeConfig.card,
+              borderColor: themeConfig.border,
+            }}
+          >
+            {/* 全部关闭 */}
+            <DropdownMenuItem
+              onClick={() => {
+                closeAllTabs()
+                // 关闭后自动创建空白标签页
+                setTimeout(() => {
+                  createTab(undefined, undefined, true)
+                }, 0)
+                toast({
+                  title: '已关闭所有标签页',
+                })
+              }}
+              className="cursor-pointer"
+              style={{ color: themeConfig.text }}
+            >
+              <X className="mr-2 h-4 w-4" style={{ color: themeConfig.muted }} />
+              <span>全部关闭</span>
+            </DropdownMenuItem>
+
+            <DropdownMenuSeparator style={{ backgroundColor: themeConfig.border }} />
+
+            {/* 当前打开的标签页列表 */}
+            {tabs.length === 0 ? (
+              <div
+                className="px-2 py-3 text-sm text-center"
+                style={{ color: themeConfig.muted }}
+              >
+                没有打开的标签页
+              </div>
+            ) : (
+              tabs.map((tab) => (
+                <DropdownMenuItem
+                  key={tab.id}
+                  onClick={() => activateTab(tab.id)}
+                  className="cursor-pointer"
+                  style={{
+                    color: tab.id === activeTabId ? themeConfig.primary : themeConfig.text,
+                    backgroundColor: tab.id === activeTabId ? themeConfig.primary + '15' : 'transparent',
+                  }}
+                >
+                  <FileText
+                    className="mr-2 h-4 w-4 flex-shrink-0"
+                    style={{ color: tab.id === activeTabId ? themeConfig.primary : themeConfig.muted }}
+                  />
+                  <span className="truncate">{tab.fileName}</span>
+                  {tab.isModified && (
+                    <span style={{ color: themeConfig.primary }} className="ml-1">
+                      ●
+                    </span>
+                  )}
+                </DropdownMenuItem>
+              ))
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         <div
           className="mx-1 h-4 w-px"
