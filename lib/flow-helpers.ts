@@ -271,6 +271,46 @@ export function findNodeInTree(tree: TreeNode, nodeId: string): TreeNode | null 
 }
 
 /**
+ * 在断开节点列表中查找节点
+ * 
+ * @param detachedNodes 断开节点数组
+ * @param nodeId 节点ID
+ * @returns 找到的节点或null
+ */
+export function findNodeInDetached(detachedNodes: TreeNode[], nodeId: string): TreeNode | null {
+  for (const node of detachedNodes) {
+    if (node.id === nodeId) {
+      return node
+    }
+    // 递归查找子节点
+    const found = findNodeInDetached(node.children, nodeId)
+    if (found) return found
+  }
+  return null
+}
+
+/**
+ * 在树和断开节点中查找节点
+ * 
+ * @param tree 树结构
+ * @param detachedNodes 断开节点数组
+ * @param nodeId 节点ID
+ * @returns 找到的节点或null
+ */
+export function findNodeInTreeOrDetached(
+  tree: TreeNode,
+  detachedNodes: TreeNode[],
+  nodeId: string
+): TreeNode | null {
+  // 先在树中查找
+  const foundInTree = findNodeInTree(tree, nodeId)
+  if (foundInTree) return foundInTree
+  
+  // 再在断开节点中查找
+  return findNodeInDetached(detachedNodes, nodeId)
+}
+
+/**
  * 在树中查找父节点
  * 
  * @param tree 树结构

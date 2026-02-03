@@ -67,6 +67,8 @@ export interface DocumentState {
   isModified: boolean
   /** 文件名 */
   fileName?: string
+  /** 文件ID（用于关联编辑器状态） */
+  fileId?: string
   /** 断开的节点数组（悬浮状态） */
   detachedNodes?: TreeNode[]
 }

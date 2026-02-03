@@ -34,7 +34,7 @@ import { LayoutGrid, Trash2 } from 'lucide-react'
 import { Button } from './ui/button'
 import { MarkdownNode } from './markdown-node'
 import { CreateNodesDialog } from './create-nodes-dialog'
-import { treeToNodesAndEdges, type FlowNodeData } from '@/lib/flow-helpers'
+import { treeToNodesAndEdges, type FlowNodeData, findNodeInDetached } from '@/lib/flow-helpers'
 import { calculateTreeLayout } from '@/lib/layout-engine'
 import { useDocumentStore } from '@/stores/documentStore'
 import type { TreeNode } from '@/types/tree'
@@ -487,15 +487,61 @@ export function FlowCanvas() {
       const isSourceDetached = detachedNodes.some((n: TreeNode) => n.id === source)
       const isTargetDetached = detachedNodes.some((n: TreeNode) => n.id === target)
 
+      // 获取两个节点的 level
+      const getNodeLevel = (id: string): number => {
+        // 先在树中查找
+        const findInTree = (root: TreeNode): number | null => {
+          if (root.id === id) return root.level
+          for (const child of root.children) {
+            const found = findInTree(child)
+            if (found !== null) return found
+          }
+          return null
+        }
+        const levelInTree = findInTree(document.root)
+        if (levelInTree !== null) return levelInTree
+
+        // 在断开节点中查找
+        const findInDetached = (nodes: TreeNode[]): number | null => {
+          for (const node of nodes) {
+            if (node.id === id) return node.level
+            const found = findInDetached(node.children)
+            if (found !== null) return found
+          }
+          return null
+        }
+        return findInDetached(detachedNodes) || 1
+      }
+
+      const sourceLevel = getNodeLevel(source)
+      const targetLevel = getNodeLevel(target)
+
+      // 智能连接：level 小的作为父节点，level 大的作为子节点
+      // 如果 level 相同，保持拖拽方向（source 作为子节点）
+      let childId: string, parentId: string
+      if (sourceLevel < targetLevel) {
+        // source (level小) 作为父节点，target (level大) 作为子节点
+        childId = target
+        parentId = source
+      } else if (targetLevel < sourceLevel) {
+        // target (level小) 作为父节点，source (level大) 作为子节点
+        childId = source
+        parentId = target
+      } else {
+        // level 相同，保持拖拽方向
+        childId = source
+        parentId = target
+      }
+
       // 如果源节点是断开的，尝试连接到目标节点
       if (isSourceDetached) {
-        connectNode(source, target)
+        connectNode(childId, parentId)
         return
       }
 
       // 如果目标节点是断开的，尝试将目标节点连接到源节点
       if (isTargetDetached) {
-        connectNode(target, source)
+        connectNode(childId, parentId)
         return
       }
 
@@ -556,7 +602,7 @@ export function FlowCanvas() {
 
     const targetId = contextMenuEdge.target
 
-    // 查找目标节点
+    // 查找目标节点（先在树中查找，再在断开节点中查找）
     const findNode = (root: TreeNode, id: string): TreeNode | null => {
       if (root.id === id) return root
       for (const child of root.children) {
@@ -566,7 +612,15 @@ export function FlowCanvas() {
       return null
     }
 
-    const targetNode = findNode(document.root, targetId)
+    let targetNode = findNode(document.root, targetId)
+    let isDetachedEdge = false
+    
+    // 如果不在树中，在断开节点中查找
+    if (!targetNode && document.detachedNodes) {
+      targetNode = findNodeInDetached(document.detachedNodes, targetId)
+      isDetachedEdge = true
+    }
+    
     if (!targetNode) {
       setContextMenuOpen(false)
       setContextMenuEdge(null)
@@ -574,7 +628,6 @@ export function FlowCanvas() {
     }
 
     // 获取当前节点的位置，并计算偏移后的新位置
-    // 方案A：右下方固定偏移 (200, 150)
     const currentNode = nodes.find(n => n.id === targetId)
     const newPosition = currentNode?.position
       ? {

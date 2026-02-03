@@ -153,9 +153,9 @@ export function MarkdownEditor() {
   useEffect(() => {
     if (!mounted || !activeTab) return
 
-    // 如果标签页有内容，加载到编辑器
+    // 如果标签页有内容，加载到编辑器（传入 fileId 以恢复状态）
     if (activeTab.content) {
-      loadDocument(activeTab.content, activeTab.fileName)
+      loadDocument(activeTab.content, activeTab.fileName, activeTab.fileId || undefined)
     }
 
     // 同步文件面板选中状态
@@ -187,11 +187,19 @@ export function MarkdownEditor() {
       if (templateEditMode.isActive) {
         setTemplateEditMode({ isActive: false, content: '', templateName: '', templateId: null })
       }
+      
+      // 保存之前文件的状态（如果有）
+      const previousFileId = currentFileIdRef.current
+      if (previousFileId && previousFileId !== currentFileId) {
+        const { markAsSaved } = useDocumentStore.getState()
+        markAsSaved()
+      }
+      
       // 直接从 store 获取最新的文件内容，而不是使用闭包中的 currentFile
       const { files: latestFiles } = useFileSystemStore.getState()
       const latestFile = latestFiles.find(f => f.id === currentFileId)
       if (latestFile) {
-        loadDocument(latestFile.content, latestFile.name)
+        loadDocument(latestFile.content, latestFile.name, latestFile.id)
       }
     }
   }, [currentFileId, loadDocument, templateEditMode.isActive])
@@ -250,6 +258,10 @@ export function MarkdownEditor() {
         if (!fileId) {
           return
         }
+
+        // 保存编辑器状态（断开节点等）
+        const { markAsSaved } = useDocumentStore.getState()
+        markAsSaved()
 
         // 直接更新 store
         useFileSystemStore.setState((state) => ({

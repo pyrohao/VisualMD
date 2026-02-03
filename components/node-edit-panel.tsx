@@ -13,7 +13,7 @@ import { useDocumentStore } from '@/stores/documentStore'
 import { useThemeStore } from '@/stores/themeStore'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useSidebarStore } from '@/stores/sidebarStore'
-import { findNodeInTree } from '@/lib/flow-helpers'
+import { findNodeInTreeOrDetached } from '@/lib/flow-helpers'
 import { toast } from '@/hooks/use-toast'
 import { DeleteConfirmDialog } from './delete-confirm-dialog'
 import { VirtualRootEditor } from './virtual-root-editor'
@@ -47,9 +47,9 @@ export function NodeEditPanel() {
   const [metadataEntries, setMetadataEntries] = useState<MetadataEntry[]>([])
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
-  // 获取当前选中的节点
+  // 获取当前选中的节点（在树和断开节点中查找）
   const selectedNode = selectedNodeId && document
-    ? findNodeInTree(document.root, selectedNodeId)
+    ? findNodeInTreeOrDetached(document.root, document.detachedNodes || [], selectedNodeId)
     : null
 
   const isVirtualRoot = selectedNode?.isVirtual || selectedNode?.level === 0
