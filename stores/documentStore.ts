@@ -392,6 +392,40 @@ function connectNodeToTree(root: TreeNode, detachedNode: TreeNode, parentId: str
 }
 
 /**
+ * 将断开的节点连接到新的父节点（保持原始层级，支持跨等级连接）
+ * @param root 根节点
+ * @param detachedNode 断开的节点
+ * @param parentId 新的父节点ID
+ * @returns 更新后的根节点
+ */
+function connectNodeToTreeWithOriginalLevel(root: TreeNode, detachedNode: TreeNode, parentId: string): TreeNode {
+  // 找到目标父节点
+  const parentNode = findNodeInTree(root, parentId)
+  if (!parentNode) return root
+
+  // 恢复节点状态，保持原始层级（不强制调整为 parent.level + 1）
+  const connectedNode: TreeNode = {
+    ...detachedNode,
+    isDetached: false,
+    detachedFrom: null,
+    parentId: parentId,
+    // 保持节点原始层级，支持跨等级连接
+    level: detachedNode.level
+  }
+
+  // 不递归更新子节点层级，保持整个子树的原始层级结构
+  const preserveChildrenLevel = (node: TreeNode): TreeNode => ({
+    ...node,
+    children: node.children.map(child => preserveChildrenLevel(child))
+  })
+
+  const finalNode = preserveChildrenLevel(connectedNode)
+
+  // 添加到新父节点
+  return addChildNodeInTree(root, parentId, finalNode)
+}
+
+/**
  * 收集所有断开的节点
  * @param root 根节点
  * @returns 断开的节点数组
@@ -569,10 +603,28 @@ export const useDocumentStore = create<DocumentStore>()(
             return null
           }
 
+          // 确定新节点的层级
+          let newNodeLevel: number
+          
+          if (parentId === 'root') {
+            // 特殊处理：在虚拟根节点下添加节点时，与现有子节点保持相同层级
+            const rootChildrenLevels = document.root.children.map(child => child.level)
+            if (rootChildrenLevels.length > 0) {
+              // 已有子节点，使用相同的层级
+              newNodeLevel = rootChildrenLevels[0]
+            } else {
+              // 没有子节点，默认使用层级 1
+              newNodeLevel = 1
+            }
+          } else {
+            // 非虚拟根节点：层级为父节点 + 1
+            newNodeLevel = parentNode.level + 1
+          }
+
           // 创建新节点
           const newNode: TreeNode = {
             id: nanoid(10),
-            level: parentNode.level + 1,
+            level: newNodeLevel,
             title: title || '新节点',
             children: [],
             parentId: parentId,
@@ -614,13 +666,7 @@ export const useDocumentStore = create<DocumentStore>()(
           const node = findNodeInTree(document.root, nodeId)
           if (!node) return
 
-          // 检查是否是虚拟根节点的直接子节点（一级节点）
-          if (node.parentId === 'root') {
-            set({ error: '一级节点不能断开连接，它是文档的根结构' })
-            return
-          }
-
-          // 断开节点
+          // 断开节点（允许断开一级节点，提供更大的灵活性）
           const { root: newRoot, detachedNode } = detachNodeFromTree(document.root, nodeId)
           
           if (!detachedNode) {
@@ -662,15 +708,26 @@ export const useDocumentStore = create<DocumentStore>()(
             return
           }
 
-          // 验证层级关系：只能连接到大一级的节点
-          const expectedLevel = parentNode.level + 1
-          if (detachedNode.level !== expectedLevel) {
-            if (detachedNode.level < expectedLevel) {
-              set({ error: `不能将 H${detachedNode.level} 节点连接到 H${parentNode.level} 节点下，目标父节点层级太高` })
-            } else {
-              set({ error: `不能将 H${detachedNode.level} 节点连接到 H${parentNode.level} 节点下，目标父节点层级太低` })
+          // 特殊处理：连接到虚拟根节点时的层级检查
+          if (parentId === 'root') {
+            // 获取当前虚拟根节点的所有子节点的层级
+            const rootChildrenLevels = document.root.children.map(child => child.level)
+            
+            if (rootChildrenLevels.length > 0) {
+              // 虚拟根节点已有子节点，检查层级是否匹配
+              const expectedLevel = rootChildrenLevels[0]
+              if (detachedNode.level !== expectedLevel) {
+                set({ error: `虚拟根节点只能连接 H${expectedLevel} 层级的节点，当前节点是 H${detachedNode.level}` })
+                return
+              }
             }
-            return
+            // 如果虚拟根节点没有子节点，允许连接任意层级的节点（成为新的基准层级）
+          } else {
+            // 非虚拟根节点：验证层级关系，父节点层级必须小于子节点层级
+            if (parentNode.level >= detachedNode.level) {
+              set({ error: `不能将 H${detachedNode.level} 节点连接到 H${parentNode.level} 节点下，父节点层级必须小于子节点层级` })
+              return
+            }
           }
 
           // 检查是否会导致循环引用
@@ -683,8 +740,8 @@ export const useDocumentStore = create<DocumentStore>()(
             currentParent = findParentInTree(document.root, currentParent.id)
           }
 
-          // 连接节点
-          const newRoot = connectNodeToTree(document.root, detachedNode, parentId)
+          // 连接节点（保持节点原始层级，不强制调整为 parent.level + 1）
+          const newRoot = connectNodeToTreeWithOriginalLevel(document.root, detachedNode, parentId)
 
           // 从 detachedNodes 中移除
           const newDetachedNodes = detachedNodes.filter((n: TreeNode) => n.id !== nodeId)

@@ -28,6 +28,8 @@ export interface CreateNodesDialogProps {
   parentTitle: string
   /** 父节点层级 */
   parentLevel: number
+  /** 子节点层级（可选，默认 parentLevel + 1） */
+  childLevel?: number
   /** 确认回调 */
   onConfirm: (titles: string[]) => void
   /** 取消回调 */
@@ -38,6 +40,7 @@ export function CreateNodesDialog({
   isOpen,
   parentTitle,
   parentLevel,
+  childLevel: propChildLevel,
   onConfirm,
   onCancel,
 }: CreateNodesDialogProps) {
@@ -47,8 +50,8 @@ export function CreateNodesDialog({
   const [inputText, setInputText] = useState('')
   const [parsedTitles, setParsedTitles] = useState<string[]>([])
 
-  // 子节点层级
-  const childLevel = parentLevel + 1
+  // 子节点层级（使用传入值或默认 parentLevel + 1）
+  const childLevel = propChildLevel ?? parentLevel + 1
 
   // 解析输入的标题
   useEffect(() => {

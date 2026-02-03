@@ -767,6 +767,12 @@ export function FlowCanvas() {
         isOpen={isCreateDialogOpen}
         parentTitle={connectingParentNode?.title || ''}
         parentLevel={connectingParentNode?.level || 0}
+        childLevel={
+          // 如果是虚拟根节点，根据当前子节点层级计算实际的子节点层级
+          connectingParentNode?.id === 'root' && document?.root.children && document.root.children.length > 0
+            ? document.root.children[0].level
+            : undefined
+        }
         onConfirm={handleCreateNodesConfirm}
         onCancel={handleCreateNodesCancel}
       />

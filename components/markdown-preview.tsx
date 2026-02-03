@@ -3,21 +3,28 @@
 /**
  * Markdown预览组件
  *
- * 右侧预览面板，实时渲染Markdown内容
- * 使用 remark 生态系统进行专业 Markdown 解析
+ * 右侧预览面板，支持预览/编辑模式切换
+ * - 预览模式：使用 remark 渲染 Markdown
+ * - 编辑模式：直接编辑原始 Markdown 源码
  *
  * 对应技术文档6.1节
  */
 
 import { useDocumentStore } from '@/stores/documentStore'
 import { useThemeStore, themeConfigs, type ThemeMode } from '@/stores/themeStore'
-import { useMemo, useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
 import remarkGfm from 'remark-gfm'
 import remarkRehype from 'remark-rehype'
 import rehypeStringify from 'rehype-stringify'
-import rehypeSanitize from 'rehype-sanitize'
+import { BookOpen, Pencil } from 'lucide-react'
+import { cn } from '@/lib/utils'
+
+/**
+ * 预览模式类型
+ */
+type PreviewMode = 'preview' | 'edit'
 
 /**
  * 根据主题生成CSS变量样式
@@ -183,20 +190,27 @@ function removeYAMLFrontMatter(markdown: string): string {
 }
 
 export function MarkdownPreview() {
-  const { document } = useDocumentStore()
+  const { document, updateFromMarkdown } = useDocumentStore()
   const { theme, getThemeConfig } = useThemeStore()
   const [mounted, setMounted] = useState(false)
+  const [mode, setMode] = useState<PreviewMode>('preview')
+  const [html, setHtml] = useState('')
+  const [editContent, setEditContent] = useState('')
+  const [isTransitioning, setIsTransitioning] = useState(false)
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
 
   useEffect(() => {
     setMounted(true)
   }, [])
 
-  const [html, setHtml] = useState('')
-
   // 从Store获取当前Markdown
   const store = useDocumentStore.getState()
   const markdown = store.getCurrentMarkdown()
+
+  // 当 markdown 变化时，更新编辑内容
+  useEffect(() => {
+    setEditContent(markdown)
+  }, [markdown])
 
   // 使用 remark 处理 markdown
   useEffect(() => {
@@ -216,6 +230,30 @@ export function MarkdownPreview() {
     processMarkdown()
   }, [markdown])
 
+  // 处理模式切换
+  const handleModeChange = useCallback((newMode: PreviewMode) => {
+    if (newMode === mode) return
+    
+    setIsTransitioning(true)
+    
+    // 如果从编辑模式切换到预览模式，先保存内容
+    if (mode === 'edit' && newMode === 'preview') {
+      // 触发重新解析
+      updateFromMarkdown(editContent)
+    }
+    
+    // 延迟切换以显示过渡动画
+    setTimeout(() => {
+      setMode(newMode)
+      setIsTransitioning(false)
+    }, 150)
+  }, [mode, editContent, updateFromMarkdown])
+
+  // 处理编辑内容变化
+  const handleEditChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setEditContent(e.target.value)
+  }, [])
+
   // 如果没有文档，显示空状态
   if (!document) {
     return (
@@ -233,20 +271,98 @@ export function MarkdownPreview() {
   return (
     <div className="flex h-full flex-col" style={{ backgroundColor: themeConfig.background }}>
       {/* 头部 */}
-      <div className="flex h-14 items-center border-b px-5" style={{ backgroundColor: themeConfig.card, borderColor: themeConfig.border }}>
-        <h2 className="text-lg font-semibold" style={{ color: themeConfig.heading }}>文档预览</h2>
-        <span className="ml-3 text-sm" style={{ color: themeConfig.muted }}>
-          {document.fileName || '未命名文档'}
-        </span>
+      <div className="flex h-14 items-center justify-between border-b px-5" style={{ backgroundColor: themeConfig.card, borderColor: themeConfig.border }}>
+        <div className="flex items-center">
+          <h2 className="text-lg font-semibold" style={{ color: themeConfig.heading }}>
+            {mode === 'preview' ? '文档预览' : '编辑文档'}
+          </h2>
+          <span className="ml-3 text-sm" style={{ color: themeConfig.muted }}>
+            {document.fileName || '未命名文档'}
+          </span>
+        </div>
+        
+        {/* 模式切换按钮 */}
+        <div 
+          className="flex items-center rounded-lg p-1"
+          style={{ backgroundColor: themeConfig.background }}
+        >
+          <button
+            onClick={() => handleModeChange('preview')}
+            className={cn(
+              'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-all duration-200',
+              mode === 'preview' 
+                ? 'shadow-sm' 
+                : 'hover:opacity-80'
+            )}
+            style={{
+              backgroundColor: mode === 'preview' ? themeConfig.card : 'transparent',
+              color: mode === 'preview' ? themeConfig.heading : themeConfig.muted,
+            }}
+            title="预览模式"
+          >
+            <BookOpen className="h-4 w-4" />
+            <span>阅读</span>
+          </button>
+          <button
+            onClick={() => handleModeChange('edit')}
+            className={cn(
+              'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-all duration-200',
+              mode === 'edit' 
+                ? 'shadow-sm' 
+                : 'hover:opacity-80'
+            )}
+            style={{
+              backgroundColor: mode === 'edit' ? themeConfig.card : 'transparent',
+              color: mode === 'edit' ? themeConfig.heading : themeConfig.muted,
+            }}
+            title="编辑模式"
+          >
+            <Pencil className="h-4 w-4" />
+            <span>编辑</span>
+          </button>
+        </div>
       </div>
 
-      {/* 预览内容 */}
-      <div className="flex-1 overflow-y-auto overflow-x-hidden">
-        <div className="p-8 max-w-none">
-          <style>{getThemeStyles(theme)}</style>
-          <article
-            className="markdown-body max-w-none"
-            dangerouslySetInnerHTML={{ __html: html }}
+      {/* 内容区域 */}
+      <div className="relative flex-1 overflow-hidden">
+        {/* 预览模式 */}
+        <div 
+          className={cn(
+            'absolute inset-0 overflow-y-auto overflow-x-hidden transition-all duration-200',
+            mode === 'preview' && !isTransitioning 
+              ? 'opacity-100 translate-x-0' 
+              : 'opacity-0 translate-x-4 pointer-events-none'
+          )}
+        >
+          <div className="p-8 max-w-none">
+            <style>{getThemeStyles(theme)}</style>
+            <article
+              className="markdown-body max-w-none"
+              dangerouslySetInnerHTML={{ __html: html }}
+            />
+          </div>
+        </div>
+
+        {/* 编辑模式 */}
+        <div 
+          className={cn(
+            'absolute inset-0 transition-all duration-200',
+            mode === 'edit' && !isTransitioning 
+              ? 'opacity-100 translate-x-0' 
+              : 'opacity-0 -translate-x-4 pointer-events-none'
+          )}
+        >
+          <textarea
+            value={editContent}
+            onChange={handleEditChange}
+            className="h-full w-full resize-none border-0 p-6 font-mono text-sm outline-none"
+            style={{
+              backgroundColor: themeConfig.background,
+              color: themeConfig.text,
+              lineHeight: 1.6,
+            }}
+            placeholder="在此编辑 Markdown 文档..."
+            spellCheck={false}
           />
         </div>
       </div>
