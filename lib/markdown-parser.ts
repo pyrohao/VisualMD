@@ -48,7 +48,6 @@ export function extractFrontMatter(content: string): {
     const remainingContent = content.slice(match[0].length).trimStart()
     return { metadata, remainingContent }
   } catch (error) {
-    console.warn('Failed to parse YAML Front Matter:', error)
     return { metadata: {}, remainingContent: content }
   }
 }

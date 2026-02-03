@@ -249,14 +249,12 @@ export const useSidebarStore = create<SidebarStore>()(
         },
 
         updateTemplate: (id, updates) => {
-          console.log('[sidebarStore] updateTemplate 被调用:', { id, updatesContentLength: updates.content?.length })
           set((state) => {
             const newTemplates = state.templates.map((t) =>
               t.id === id
                 ? { ...t, ...updates, updatedAt: Date.now() }
                 : t
             )
-            console.log('[sidebarStore] updateTemplate 完成, templates 长度:', newTemplates.length)
             return { templates: newTemplates }
           })
         },
@@ -275,7 +273,6 @@ export const useSidebarStore = create<SidebarStore>()(
 
         getTemplateContent: (id) => {
           const template = get().templates.find((t) => t.id === id)
-          console.log('[sidebarStore] getTemplateContent:', { id, found: !!template, contentLength: template?.content?.length })
           return template?.content || null
         },
 

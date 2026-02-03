@@ -133,11 +133,9 @@ export function TemplatePanel({ onEditTemplate, onPreviewTemplate }: TemplatePan
       const template = latestTemplates.find((t) => t.id === templateId)
       const content = template?.content || null
       
-      console.log('[template-panel] handleEditTemplate:', { templateId, contentLength: content?.length, templateFound: !!template })
       if (!content || !template) return
 
       if (onEditTemplate) {
-        console.log('[template-panel] 调用 onEditTemplate:', { templateName: template.name, templateId, contentLength: content.length })
         onEditTemplate(content, template.name, templateId)
       }
     },

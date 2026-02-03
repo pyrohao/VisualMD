@@ -467,7 +467,6 @@ description:
         
         exportFolder: (folderId: string) => {
           // TODO: 实现 ZIP 导出
-          console.log('Export folder:', folderId)
         },
       }),
       {

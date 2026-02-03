@@ -35,7 +35,6 @@ export function generateFrontMatter(metadata: DocumentMetadata): string {
     // 包装在 --- 之间
     return `---\n${yamlStr}---\n\n`
   } catch (error) {
-    console.warn('Failed to generate YAML Front Matter:', error)
     return ''
   }
 }

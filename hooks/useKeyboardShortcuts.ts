@@ -74,9 +74,6 @@ export function useKeyboardShortcuts(options: KeyboardShortcutsOptions = {}) {
       event.preventDefault()
       if (canUndo()) {
         undo()
-        console.log('[Undo] 撤销操作')
-      } else {
-        console.log('[Undo] 无法撤销')
       }
       return
     }
@@ -92,9 +89,6 @@ export function useKeyboardShortcuts(options: KeyboardShortcutsOptions = {}) {
         event.preventDefault()
         if (canRedo()) {
           redo()
-          console.log('[Redo] 重做操作')
-        } else {
-          console.log('[Redo] 无法重做')
         }
         return
       }
@@ -104,7 +98,6 @@ export function useKeyboardShortcuts(options: KeyboardShortcutsOptions = {}) {
     if (enableSave && isModKey && key.toLowerCase() === 's') {
       event.preventDefault()
       onSave?.()
-      console.log('[Save] 保存文档')
       return
     }
   }, [enableUndoRedo, enableSave, disabled, undo, redo, canUndo, canRedo, onSave, isInputElement])

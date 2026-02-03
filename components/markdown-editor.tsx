@@ -183,17 +183,14 @@ export function MarkdownEditor() {
   // 当切换文件时，加载文档到编辑器
   useEffect(() => {
     if (currentFileId) {
-      console.log('[useEffect] 文件切换:', { currentFileId, templateEditModeIsActive: templateEditMode.isActive })
       // 如果正在编辑模板，先退出模板编辑模式
       if (templateEditMode.isActive) {
-        console.log('[useEffect] 检测到模板编辑模式激活，退出编辑模式')
         setTemplateEditMode({ isActive: false, content: '', templateName: '', templateId: null })
       }
       // 直接从 store 获取最新的文件内容，而不是使用闭包中的 currentFile
       const { files: latestFiles } = useFileSystemStore.getState()
       const latestFile = latestFiles.find(f => f.id === currentFileId)
       if (latestFile) {
-        console.log('[useEffect] 加载文件:', { fileName: latestFile.name, contentLength: latestFile.content.length })
         loadDocument(latestFile.content, latestFile.name)
       }
     }
@@ -220,7 +217,6 @@ export function MarkdownEditor() {
     const isTemplateEdit = templateEditModeRef.current.isActive
 
     if (isDocModified) {
-      console.log('[auto-save] 检测到文档已修改，准备自动保存:', { isTemplateEdit })
       const timeoutId = setTimeout(() => {
         const latestContent = getCurrentMarkdown()
         const currentTemplateEditMode = templateEditModeRef.current
@@ -228,7 +224,6 @@ export function MarkdownEditor() {
         // 如果是模板编辑模式，自动保存到模板
         if (currentTemplateEditMode.isActive && currentTemplateEditMode.templateId) {
           const templateId = currentTemplateEditMode.templateId
-          console.log('[auto-save] 执行模板自动保存:', { templateId, contentLength: latestContent.length })
 
           // 保存模板内容
           useTemplateStore.setState((state) => ({
@@ -246,8 +241,6 @@ export function MarkdownEditor() {
 
           // 标记模板为已保存（类似于文件的 isModified = false）
           useTemplateStore.setState({ isTemplateModified: false })
-
-          console.log('[auto-save] 模板自动保存完成')
           return
         }
 
@@ -255,11 +248,8 @@ export function MarkdownEditor() {
         const fileId = currentFileIdRef.current
 
         if (!fileId) {
-          console.log('[auto-save] 没有当前文件，跳过保存')
           return
         }
-
-        console.log('[auto-save] 执行文件自动保存:', { fileId, contentLength: latestContent.length })
 
         // 直接更新 store
         useFileSystemStore.setState((state) => ({
@@ -269,7 +259,6 @@ export function MarkdownEditor() {
               : f
           ),
         }))
-        console.log('[auto-save] 文件自动保存完成')
       }, 1000) // 防抖 1 秒
       return () => clearTimeout(timeoutId)
     }
@@ -286,18 +275,10 @@ export function MarkdownEditor() {
     // 从 ref 获取最新的 templateEditMode（避免闭包问题）
     const currentTemplateEditMode = templateEditModeRef.current
     const currentFileId = currentFileIdRef.current
-    
-    console.log('[handleSave] 开始保存:', { 
-      isTemplateEdit: currentTemplateEditMode.isActive, 
-      templateId: currentTemplateEditMode.templateId,
-      currentFileId,
-      markdownLength: latestMarkdown.length 
-    })
 
     if (currentTemplateEditMode.isActive && currentTemplateEditMode.templateId) {
       // 保存模板编辑到模板存储 - 直接使用 setState 避免闭包问题
       const templateId = currentTemplateEditMode.templateId
-      console.log('[handleSave] 保存模板:', { templateId, contentLength: latestMarkdown.length })
 
       useTemplateStore.setState((state) => ({
         templates: state.templates.map(t =>
@@ -310,7 +291,6 @@ export function MarkdownEditor() {
       // 标记模板为已保存
       useTemplateStore.setState({ isTemplateModified: false })
 
-      console.log('[handleSave] 模板保存完成，重置 templateEditMode')
       setTemplateEditMode({ isActive: false, content: '', templateName: '', templateId: null })
       toast({
         title: '模板已保存',
@@ -320,7 +300,6 @@ export function MarkdownEditor() {
 
     if (currentFileId) {
       // 直接更新 store，确保内容正确保存
-      console.log('[handleSave] 手动保存文件:', { fileId: currentFileId, contentLength: latestMarkdown.length })
       useFileSystemStore.setState((state) => ({
         files: state.files.map(f =>
           f.id === currentFileId
@@ -328,7 +307,6 @@ export function MarkdownEditor() {
             : f
         ),
       }))
-      console.log('[handleSave] 手动保存完成')
     }
   }, []) // 空依赖数组，使用 ref 获取最新状态
 
@@ -359,8 +337,6 @@ export function MarkdownEditor() {
 
   // 处理编辑模板
   const handleEditTemplate = useCallback((content: string, templateName: string, templateId: string) => {
-    console.log('[handleEditTemplate] 开始编辑模板:', { templateName, templateId, contentLength: content.length })
-
     // 清除当前文件ID，避免文件切换useEffect覆盖模板内容
     useFileSystemStore.setState({ currentFileId: null })
 
@@ -375,11 +351,8 @@ export function MarkdownEditor() {
     loadDocument('', 'temp')
     // 使用 setTimeout 确保状态更新后再加载新内容
     setTimeout(() => {
-      console.log('[handleEditTemplate] setTimeout 执行，加载模板内容')
       loadDocument(content, templateName)
-      console.log('[handleEditTemplate] 调用 setTemplateEditMode')
       setTemplateEditMode({ isActive: true, content, templateName, templateId })
-      console.log('[handleEditTemplate] setTemplateEditMode 完成')
     }, 0)
   }, [loadDocument])
 
