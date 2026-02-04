@@ -286,19 +286,19 @@ function MarkdownNodeComponent(props: MarkdownNodeProps) {
           </h3>
         </div>
 
-        {/* 虚拟根节点显示 YAML 元数据 - 根据展开状态显示 */}
+        {/* 虚拟根节点显示 YAML 元数据 - 根据展开状态显示，每行一对，最多两行 */}
         {isVirtual && isContentExpanded && Object.keys(metadata).length > 0 && (
-          <div className="mt-1.5 text-xs line-clamp-2 break-words" style={{ color: themeConfig.text }}>
-            {Object.entries(metadata).slice(0, 2).map(([key, value], index, arr) => (
-              <span key={key}>
-                <span style={{ color: themeConfig.muted }}>{key}:</span> {String(value).length > 20 
-                  ? String(value).slice(0, 20) + '...' 
+          <div className="mt-1.5 text-xs" style={{ color: themeConfig.text }}>
+            {Object.entries(metadata).slice(0, 2).map(([key, value]) => (
+              <div key={key} className="truncate">
+                <span style={{ color: themeConfig.muted }}>{key}:</span>{' '}
+                {String(value).length > 25 
+                  ? String(value).slice(0, 25) + '...' 
                   : String(value)}
-                {index < arr.length - 1 && ' | '}
-              </span>
+              </div>
             ))}
             {Object.keys(metadata).length > 2 && (
-              <span style={{ color: themeConfig.muted }}> +{Object.keys(metadata).length - 2}</span>
+              <div style={{ color: themeConfig.muted }}>+{Object.keys(metadata).length - 2} more</div>
             )}
           </div>
         )}

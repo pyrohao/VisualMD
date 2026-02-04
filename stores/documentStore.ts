@@ -75,6 +75,12 @@ interface DocumentStore {
   deleteNode: (nodeId: string) => void
 
   /**
+   * 仅删除当前节点（子节点变为断开节点）
+   * @param nodeId 节点ID
+   */
+  deleteNodeOnly: (nodeId: string) => void
+
+  /**
    * 添加子节点
    * @param parentId 父节点ID
    * @param title 节点标题
@@ -250,7 +256,7 @@ function updateNodeInTree(root: TreeNode, nodeId: string, updates: Partial<TreeN
 }
 
 /**
- * 从树中删除节点
+ * 从树中删除节点（包括所有子节点）
  */
 function deleteNodeFromTree(root: TreeNode, nodeId: string): TreeNode {
   return {
@@ -259,6 +265,40 @@ function deleteNodeFromTree(root: TreeNode, nodeId: string): TreeNode {
       .filter(child => child.id !== nodeId)
       .map(child => deleteNodeFromTree(child, nodeId))
   }
+}
+
+/**
+ * 从树中删除节点，但保留其子节点（子节点提升到当前层级）
+ * 返回 { root: 新的根节点, orphanedChildren: 被删除节点的子节点 }
+ */
+function deleteNodeOnlyFromTree(root: TreeNode, nodeId: string): { root: TreeNode; orphanedChildren: TreeNode[] } {
+  let orphanedChildren: TreeNode[] = []
+
+  function traverse(node: TreeNode): TreeNode {
+    const newChildren: TreeNode[] = []
+
+    for (const child of node.children) {
+      if (child.id === nodeId) {
+        // 找到要删除的节点，收集其子节点作为孤儿节点
+        orphanedChildren = child.children.map(grandChild => ({
+          ...grandChild,
+          isDetached: true,
+          detachedFrom: nodeId,
+        }))
+        // 不添加这个节点到新的 children 中（即删除它）
+      } else {
+        // 递归处理子节点
+        newChildren.push(traverse(child))
+      }
+    }
+
+    return {
+      ...node,
+      children: newChildren
+    }
+  }
+
+  return { root: traverse(root), orphanedChildren }
 }
 
 /**
@@ -701,7 +741,7 @@ export const useDocumentStore = create<DocumentStore>()(
         deleteNode: (nodeId: string) => {
           const { document, selectedNodeId } = get()
           if (!document || nodeId === 'root') return
-          
+
           // 添加历史记录
           const node = findNodeInTree(document.root, nodeId)
           useHistoryStore.getState().addHistory({
@@ -710,11 +750,38 @@ export const useDocumentStore = create<DocumentStore>()(
           })
 
           const newRoot = deleteNodeFromTree(document.root, nodeId)
-          set({ 
-            document: { 
-              ...document, 
-              root: newRoot, 
-              isModified: true 
+          set({
+            document: {
+              ...document,
+              root: newRoot,
+              isModified: true
+            },
+            selectedNodeId: selectedNodeId === nodeId ? null : selectedNodeId
+          })
+        },
+
+        deleteNodeOnly: (nodeId: string) => {
+          const { document, selectedNodeId } = get()
+          if (!document || nodeId === 'root') return
+
+          // 添加历史记录
+          const node = findNodeInTree(document.root, nodeId)
+          useHistoryStore.getState().addHistory({
+            type: 'deleteNode',
+            description: `删除节点（保留子节点）: "${node?.title || nodeId}"`,
+          })
+
+          const { root: newRoot, orphanedChildren } = deleteNodeOnlyFromTree(document.root, nodeId)
+
+          // 将孤儿节点添加到 detachedNodes
+          const currentDetachedNodes = (document as any).detachedNodes || []
+
+          set({
+            document: {
+              ...document,
+              root: newRoot,
+              detachedNodes: [...currentDetachedNodes, ...orphanedChildren],
+              isModified: true
             },
             selectedNodeId: selectedNodeId === nodeId ? null : selectedNodeId
           })

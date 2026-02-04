@@ -70,6 +70,9 @@ export interface Translations {
     editNode: string
     deleteNode: string
     deleteNodeConfirm: string
+    deleteNodeOnly: string
+    deleteNodeAndChildren: string
+    deleteNodeOrphanChildren: string
     nodeTitle: string
     nodeContent: string
     addChild: string
@@ -287,6 +290,9 @@ export const translations: Record<Language, Translations> = {
       editNode: '编辑节点',
       deleteNode: '删除节点',
       deleteNodeConfirm: '确定要删除此节点吗？',
+      deleteNodeOnly: '仅删除当前节点',
+      deleteNodeAndChildren: '删除节点及所有子节点',
+      deleteNodeOrphanChildren: '子节点将变为孤立节点',
       nodeTitle: '节点标题',
       nodeContent: '节点内容',
       addChild: '添加子节点',
@@ -495,6 +501,9 @@ export const translations: Record<Language, Translations> = {
       editNode: 'Edit Node',
       deleteNode: 'Delete Node',
       deleteNodeConfirm: 'Are you sure you want to delete this node?',
+      deleteNodeOnly: 'Delete Current Node Only',
+      deleteNodeAndChildren: 'Delete Node and All Children',
+      deleteNodeOrphanChildren: 'Children will become orphaned nodes',
       nodeTitle: 'Node Title',
       nodeContent: 'Node Content',
       addChild: 'Add Child',

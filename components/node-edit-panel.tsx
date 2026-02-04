@@ -16,7 +16,7 @@ import { useSidebarStore } from '@/stores/sidebarStore'
 import { useTranslation } from '@/stores/languageStore'
 import { findNodeInTreeOrDetached } from '@/lib/flow-helpers'
 import { toast } from '@/hooks/use-toast'
-import { DeleteConfirmDialog } from './delete-confirm-dialog'
+import { DeleteNodeDialog, type DeleteMode } from './delete-node-dialog'
 import { VirtualRootEditor, type VirtualRootEditorRef, type MetadataEntry } from './virtual-root-editor'
 import { NodeContentEditor } from './node-content-editor'
 
@@ -28,6 +28,7 @@ export function NodeEditPanel() {
     selectNode,
     updateNode,
     deleteNode,
+    deleteNodeOnly,
     updateMetadata,
     updateFileName,
     getCurrentMarkdown,
@@ -315,14 +316,21 @@ export function NodeEditPanel() {
     setShowDeleteConfirm(true)
   }, [])
 
-  const handleConfirmDelete = useCallback(() => {
+  const handleConfirmDelete = useCallback((mode: DeleteMode) => {
     if (selectedNodeId) {
-      deleteNode(selectedNodeId)
+      if (mode === 'current') {
+        // 仅删除当前节点，子节点变为断开节点
+        deleteNodeOnly(selectedNodeId)
+        toast({ title: t('toast.deleted'), description: '子节点已移至断开节点面板' })
+      } else {
+        // 删除当前节点及所有子节点
+        deleteNode(selectedNodeId)
+        toast({ title: t('toast.deleted') })
+      }
       selectNode(null)
       setShowDeleteConfirm(false)
-      toast({ title: t('toast.deleted') })
     }
-  }, [selectedNodeId, deleteNode, selectNode, t])
+  }, [selectedNodeId, deleteNode, deleteNodeOnly, selectNode, t])
 
   // ========== 准备虚拟节点的数据（使用 useMemo 缓存）==========
   const metadataEntries = useMemo(() =>
@@ -501,14 +509,11 @@ export function NodeEditPanel() {
       </div>
 
       {/* 删除确认对话框 */}
-      <DeleteConfirmDialog
+      <DeleteNodeDialog
         open={showDeleteConfirm}
         onOpenChange={setShowDeleteConfirm}
-        itemName={selectedNode?.title || t('node.nodeTitle')}
-        title={t('node.deleteNode')}
-        description={t('node.deleteNodeConfirm')}
-        confirmText={t('common.delete')}
-        cancelText={t('common.cancel')}
+        nodeName={selectedNode?.title || t('node.nodeTitle')}
+        childrenCount={selectedNode?.children.length || 0}
         onConfirm={handleConfirmDelete}
       />
     </div>
