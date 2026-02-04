@@ -265,6 +265,21 @@ ${html}
 }
 
 /**
+ * 导出为 Markdown 文件（原生格式）
+ * 
+ * @param markdown Markdown内容
+ * @param fileName 文件名
+ * @returns 是否导出成功
+ */
+export function exportAsMarkdown(markdown: string, fileName?: string): boolean {
+  const defaultFileName = fileName || 'document.md'
+  // 确保文件名以 .md 结尾
+  const finalFileName = defaultFileName.endsWith('.md') ? defaultFileName : `${defaultFileName}.md`
+  
+  return downloadFile(markdown, finalFileName)
+}
+
+/**
  * 简单的Markdown到HTML转换
  */
 function convertMarkdownToHTML(markdown: string): string {

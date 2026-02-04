@@ -24,8 +24,9 @@ import { useSidebarStore } from '@/stores/sidebarStore'
 import { useTabsStore } from '@/stores/tabsStore'
 import { Button } from './ui/button'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
+import { useDocumentStore } from '@/stores/documentStore'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
-import { openFile, exportAsHTML } from '@/lib/file-system'
+import { openFile, exportAsMarkdown } from '@/lib/file-system'
 import { ThemeToggle } from './theme-toggle'
 import { toast } from '@/hooks/use-toast'
 import {
@@ -145,15 +146,19 @@ export function EditorToolbar({
     }
   }, [importFile, openFileInTab])
 
-  // 处理导出
+  // 处理导出 - 使用最新的 Markdown 内容
   const handleExport = useCallback(async () => {
     if (!activeTab) return
 
     setIsLoading(true)
     try {
-      const success = await exportAsHTML(activeTab.content, activeTab.fileName)
+      // 从 documentStore 获取最新的 Markdown 内容
+      const { getCurrentMarkdown } = useDocumentStore.getState()
+      const latestContent = getCurrentMarkdown()
+      
+      const success = exportAsMarkdown(latestContent, activeTab.fileName)
       if (success) {
-        toast({ title: '导出成功' })
+        toast({ title: '导出成功', description: '已导出为 Markdown 文件' })
       }
     } catch (error) {
       console.error('Failed to export file:', error)
