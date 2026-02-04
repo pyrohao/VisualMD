@@ -11,6 +11,7 @@ import { FileText } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
+import { useTranslation } from '@/stores/languageStore'
 import type { MarkdownFile } from '@/types/file-system'
 import { DeleteConfirmDialog } from '../delete-confirm-dialog'
 import { toast } from '@/hooks/use-toast'
@@ -32,6 +33,7 @@ export function FileItem({ file, isActive, isModified, onClick }: FileItemProps)
   const { getThemeConfig } = useThemeStore()
   const [mounted, setMounted] = useState(false)
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
+  const { t } = useTranslation()
 
   useEffect(() => {
     setMounted(true)
@@ -169,7 +171,7 @@ export function FileItem({ file, isActive, isModified, onClick }: FileItemProps)
             }}
             className="w-full px-4 py-1.5 text-left text-sm hover:bg-white/10 transition-colors"
           >
-            重命名
+            {t('file.rename')}
           </button>
           <button
             onClick={() => {
@@ -178,7 +180,7 @@ export function FileItem({ file, isActive, isModified, onClick }: FileItemProps)
             }}
             className="w-full px-4 py-1.5 text-left text-sm hover:bg-white/10 transition-colors"
           >
-            导出
+            {t('common.export')}
           </button>
           <div className="my-1 border-t" style={{ borderColor: themeConfig.border }} />
           <button
@@ -188,7 +190,7 @@ export function FileItem({ file, isActive, isModified, onClick }: FileItemProps)
             }}
             className="w-full px-4 py-1.5 text-left text-sm text-red-400 hover:bg-white/10 transition-colors"
           >
-            删除
+            {t('common.delete')}
           </button>
         </div>
       )}
@@ -198,7 +200,9 @@ export function FileItem({ file, isActive, isModified, onClick }: FileItemProps)
         open={showDeleteConfirm}
         onOpenChange={setShowDeleteConfirm}
         itemName={file.name}
-        title="删除文件"
+        title={t('file.deleteFile')}
+        confirmText={t('common.delete')}
+        cancelText={t('common.cancel')}
         onConfirm={handleConfirmDelete}
       />
     </>

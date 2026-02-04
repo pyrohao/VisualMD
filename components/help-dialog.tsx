@@ -10,7 +10,32 @@
 import { useState, useEffect } from 'react'
 import { X, BookOpen, MessageCircle, Github, ExternalLink } from 'lucide-react'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
+import { useTranslation } from '@/stores/languageStore'
 import { Button } from './ui/button'
+
+// Discord 图标组件 - 线性轮廓风格，与其他图标统一
+function DiscordIcon({ className, style }: { className?: string; style?: React.CSSProperties }) {
+  return (
+    <svg
+      className={className}
+      style={style}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path d="M8 12a1 1 0 1 0 2 0a1 1 0 0 0 -2 0" />
+      <path d="M14 12a1 1 0 1 0 2 0a1 1 0 0 0 -2 0" />
+      <path d="M15.5 17c0 1 1.5 2 2.5 2s2.5 -1 2.5 -2l-1 -6.5l-3 -1.5l-5 1.5l-5 -1.5l-3 1.5l-1 6.5c0 1 1.5 2 2.5 2s2.5 -1 2.5 -2" />
+      <path d="M7 16.5c1.5 -1 3.5 -1.5 5 -1.5s3.5 .5 5 1.5" />
+      <path d="M15.5 5.5l2.5 1.5" />
+      <path d="M8.5 5.5l-2.5 1.5" />
+    </svg>
+  )
+}
 
 interface HelpDialogProps {
   open: boolean
@@ -21,6 +46,7 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
   const { getThemeConfig } = useThemeStore()
   const [mounted, setMounted] = useState(false)
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
+  const { t } = useTranslation()
 
   useEffect(() => {
     setMounted(true)
@@ -28,7 +54,36 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
 
   if (!open) return null
 
-  const helpItems = [
+  const helpItems = mounted ? [
+    {
+      icon: BookOpen,
+      title: t('help.contactAuthor'),
+      description: t('help.contactDesc'),
+      action: t('help.contact'),
+      onClick: () => window.open('https://pyrohao.me', '_blank'),
+    },
+    {
+      icon: MessageCircle,
+      title: t('help.community'),
+      description: t('help.communityDesc'),
+      action: t('help.join'),
+      onClick: () => window.open('https://qun.qq.com/universal-share/share?ac=1&authKey=a0wiFbQB4SvHa%2BVIL%2B89WngP2QggeiY2zbd8CUNkOzB7UdbJFheJ4lXqPqBqspCN&busi_data=eyJncm91cENvZGUiOiIxMDc5MTU4NjU3IiwidG9rZW4iOiJwSnpmZFI0emlRSk0zY0RjOEROS2p1VDdCbXBHOURrUkJEN1VQdTJoaDEwLzl0TEdINytHZy9VMlNPcEFRTkVJIiwidWluIjoiMjU2NTg2Nzg1OSJ9&data=2WrdvR_q2tfrEN-xgb-KS_wINzwbhZ42rmJnxjipBGuk6PrZpUOSIC9ToBNBt2qJvgWFigVZwXCevigx-DQCww&svctype=4&tempid=h5_group_info', '_blank'),
+    },
+    {
+      icon: DiscordIcon,
+      title: 'Discord',
+      description: t('help.discordDesc'),
+      action: t('help.join'),
+      onClick: () => window.open('https://discord.gg/8HRs35ne', '_blank'),
+    },
+    {
+      icon: Github,
+      title: 'GitHub',
+      description: t('help.githubDesc'),
+      action: t('help.view'),
+      onClick: () => window.open('https://github.com/LuminousHao/VisualMD', '_blank'),
+    },
+  ] : [
     {
       icon: BookOpen,
       title: '联系作者',
@@ -42,6 +97,13 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
       description: '加入群聊，与其他用户交流使用心得。',
       action: '加入',
       onClick: () => window.open('https://qun.qq.com/universal-share/share?ac=1&authKey=a0wiFbQB4SvHa%2BVIL%2B89WngP2QggeiY2zbd8CUNkOzB7UdbJFheJ4lXqPqBqspCN&busi_data=eyJncm91cENvZGUiOiIxMDc5MTU4NjU3IiwidG9rZW4iOiJwSnpmZFI0emlRSk0zY0RjOEROS2p1VDdCbXBHOURrUkJEN1VQdTJoaDEwLzl0TEdINytHZy9VMlNPcEFRTkVJIiwidWluIjoiMjU2NTg2Nzg1OSJ9&data=2WrdvR_q2tfrEN-xgb-KS_wINzwbhZ42rmJnxjipBGuk6PrZpUOSIC9ToBNBt2qJvgWFigVZwXCevigx-DQCww&svctype=4&tempid=h5_group_info', '_blank'),
+    },
+    {
+      icon: DiscordIcon,
+      title: 'Discord',
+      description: '加入 Discord 社区，与开发者和其他用户实时交流',
+      action: '加入',
+      onClick: () => window.open('https://discord.gg/8HRs35ne', '_blank'),
     },
     {
       icon: Github,

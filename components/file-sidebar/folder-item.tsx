@@ -11,6 +11,7 @@ import { ChevronRight, Folder, FolderOpen } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
+import { useTranslation } from '@/stores/languageStore'
 import type { Folder as FolderType, MarkdownFile } from '@/types/file-system'
 import { FileItem } from './file-item'
 import { DeleteConfirmDialog } from '../delete-confirm-dialog'
@@ -54,11 +55,12 @@ export function FolderItem({
   const { getThemeConfig } = useThemeStore()
   const [mounted, setMounted] = useState(false)
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
+  const { t } = useTranslation()
 
   useEffect(() => {
     setMounted(true)
   }, [])
-  
+
   const { renameFolder, deleteFolder, createFile, moveFileToFolder, openFile, importFile } = useFileSystemStore()
 
   // 处理重命名
@@ -274,7 +276,7 @@ export function FolderItem({
             }}
             className="w-full px-4 py-1.5 text-left text-sm hover:bg-white/10 transition-colors"
           >
-            重命名
+            {t('file.rename')}
           </button>
           <button
             onClick={() => {
@@ -282,14 +284,14 @@ export function FolderItem({
             }}
             className="w-full px-4 py-1.5 text-left text-sm hover:bg-white/10 transition-colors"
           >
-            新建文件
+            {t('file.newFile')}
           </button>
           <div className="my-1 border-t" style={{ borderColor: themeConfig.border }} />
           <button
             onClick={handleDelete}
             className="w-full px-4 py-1.5 text-left text-sm text-red-400 hover:bg-white/10 transition-colors"
           >
-            删除
+            {t('common.delete')}
           </button>
         </div>
       )}
@@ -308,7 +310,7 @@ export function FolderItem({
         >
           {files.length === 0 ? (
             <div className="px-4 py-2 text-xs opacity-30 italic">
-              {isDragOverExternal ? '释放以导入文件' : '空文件夹'}
+              {isDragOverExternal ? t('file.importFile') : t('file.emptyFolder')}
             </div>
           ) : (
             files.map((file) => (
@@ -334,8 +336,10 @@ export function FolderItem({
         open={showDeleteConfirm}
         onOpenChange={setShowDeleteConfirm}
         itemName={folder.name}
-        title="删除文件夹"
-        description={`确定要删除文件夹 "${folder.name}" 吗？文件夹内的所有文件也将被删除。`}
+        title={t('file.deleteFolder')}
+        description={`${t('file.deleteFolderConfirm')} "${folder.name}"? ${t('file.deleteFolderWarning')}`}
+        confirmText={t('common.delete')}
+        cancelText={t('common.cancel')}
         onConfirm={handleConfirmDelete}
       />
 
@@ -344,12 +348,12 @@ export function FolderItem({
         isOpen={showFilePrompt}
         onClose={() => setShowFilePrompt(false)}
         onConfirm={handleConfirmCreateFile}
-        title="新建文件"
-        description="请输入文件名："
-        defaultValue="未命名.md"
-        confirmText="创建"
-        cancelText="取消"
-        placeholder="文件名"
+        title={t('file.newFile')}
+        description={t('file.enterFileName')}
+        defaultValue={t('file.untitled') + '.md'}
+        confirmText={t('common.create')}
+        cancelText={t('common.cancel')}
+        placeholder={t('file.fileName')}
       />
     </div>
   )

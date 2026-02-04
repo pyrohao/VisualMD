@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils'
 import { ScrollArea } from './ui/scroll-area'
 import { useDocumentStore } from '@/stores/documentStore'
 import { useThemeStore } from '@/stores/themeStore'
+import { useTranslation } from '@/stores/languageStore'
 import type { TreeNode } from '@/types/tree'
 
 /**
@@ -157,6 +158,7 @@ export function TreeView() {
   // 获取主题配置
   const { getThemeConfig } = useThemeStore()
   const themeConfig = getThemeConfig()
+  const { t } = useTranslation()
 
   if (!document) {
     return (
@@ -175,11 +177,11 @@ export function TreeView() {
             className="text-lg font-semibold"
             style={{ color: themeConfig.heading }}
           >
-            大纲
+            {t('sidebar.outline')}
           </h2>
         </div>
         <div className="flex flex-1 items-center justify-center">
-          <p style={{ color: themeConfig.muted }}>没有打开的文档</p>
+          <p style={{ color: themeConfig.muted }}>{t('sidebar.noFileOpen')}</p>
         </div>
       </div>
     )
@@ -202,13 +204,13 @@ export function TreeView() {
           className="text-lg font-semibold"
           style={{ color: themeConfig.heading }}
         >
-          大纲
+          {t('sidebar.outline')}
         </h2>
         <span
           className="ml-2 text-xs"
           style={{ color: themeConfig.muted }}
         >
-          {document.fileName || '未命名'}
+          {document.fileName || t('file.untitled')}
         </span>
       </div>
 

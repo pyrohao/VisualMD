@@ -13,6 +13,7 @@ import { useDocumentStore } from '@/stores/documentStore'
 import { useThemeStore } from '@/stores/themeStore'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useSidebarStore } from '@/stores/sidebarStore'
+import { useTranslation } from '@/stores/languageStore'
 import { findNodeInTreeOrDetached } from '@/lib/flow-helpers'
 import { toast } from '@/hooks/use-toast'
 import { DeleteConfirmDialog } from './delete-confirm-dialog'
@@ -36,6 +37,7 @@ export function NodeEditPanel() {
   const themeConfig = getThemeConfig()
   const { currentFileId, saveFileContent, renameFile, files } = useFileSystemStore()
   const { editingTemplateId } = useSidebarStore()
+  const { t } = useTranslation()
 
   // ========== 派生状态 ==========
   const selectedNode = selectedNodeId && document
@@ -180,8 +182,8 @@ export function NodeEditPanel() {
       autoSaveTimeoutRef.current = null
     }
     doSave()
-    toast({ title: '已保存', description: '修改已保存' })
-  }, [doSave])
+    toast({ title: t('toast.saved'), description: t('toast.saved') })
+  }, [doSave, t])
 
   const handleClose = useCallback(() => {
     if (autoSaveTimeoutRef.current) {
@@ -204,9 +206,17 @@ export function NodeEditPanel() {
 
   // ========== 虚拟节点：文件名变化处理 ==========
   const handleFileNameChange = useCallback((newFileName: string) => {
-    // 实时更新到 documentStore
+    // 1. 实时更新到 documentStore
     updateFileName(newFileName)
-  }, [updateFileName])
+    
+    // 2. 立即同步到 fileSystemStore（确保文件面板实时更新）
+    if (currentFileId) {
+      const currentFile = files.find(f => f.id === currentFileId)
+      if (currentFile && currentFile.name !== newFileName) {
+        renameFile(currentFileId, newFileName)
+      }
+    }
+  }, [updateFileName, currentFileId, files, renameFile])
 
   // ========== 删除节点 ==========
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
@@ -220,9 +230,9 @@ export function NodeEditPanel() {
       deleteNode(selectedNodeId)
       selectNode(null)
       setShowDeleteConfirm(false)
-      toast({ title: '节点已删除' })
+      toast({ title: t('toast.deleted') })
     }
-  }, [selectedNodeId, deleteNode, selectNode])
+  }, [selectedNodeId, deleteNode, selectNode, t])
 
   // ========== 准备虚拟节点的数据（使用 useMemo 缓存）==========
   const metadataEntries = useMemo(() =>
@@ -268,10 +278,10 @@ export function NodeEditPanel() {
             </div>
             <div>
               <h2 className="text-base font-semibold" style={{ color: themeConfig.heading }}>
-                {isVirtualRoot ? 'Metadata' : '编辑节点'}
+                {isVirtualRoot ? t('node.metadata') : t('node.editNode')}
               </h2>
               <p className="text-xs" style={{ color: themeConfig.muted }}>
-                {isVirtualRoot ? '元数据' : `H${selectedNode.level} 标题`}
+                {isVirtualRoot ? t('node.metadataDescription') : `H${selectedNode.level} ${t('node.nodeTitle')}`}
               </p>
             </div>
           </div>
@@ -343,7 +353,7 @@ export function NodeEditPanel() {
                   style={{ backgroundColor: isVirtualRoot ? '#8b5cf6' : themeConfig.accent }}
                 />
                 <p className="text-sm font-medium" style={{ color: themeConfig.text }}>
-                  包含 {selectedNode.children.length} 个子节点
+                  {selectedNode.children.length} {t('node.childNodes')}
                 </p>
               </div>
             </div>
@@ -368,7 +378,7 @@ export function NodeEditPanel() {
               }}
             >
               <Save className="mr-2 h-4 w-4" />
-              保存修改
+              {t('common.save')}
             </Button>
             <Button
               variant="outline"
@@ -380,7 +390,7 @@ export function NodeEditPanel() {
                 color: themeConfig.text,
               }}
             >
-              取消
+              {t('common.cancel')}
             </Button>
             {!isVirtualRoot && (
               <Button
@@ -404,11 +414,11 @@ export function NodeEditPanel() {
       <DeleteConfirmDialog
         open={showDeleteConfirm}
         onOpenChange={setShowDeleteConfirm}
-        itemName={selectedNode?.title || '节点'}
-        title="删除节点"
-        description={`确定要删除"${selectedNode?.title || '节点'}"及其子节点吗？`}
-        confirmText="删除"
-        cancelText="取消"
+        itemName={selectedNode?.title || t('node.nodeTitle')}
+        title={t('node.deleteNode')}
+        description={t('node.deleteNodeConfirm')}
+        confirmText={t('common.delete')}
+        cancelText={t('common.cancel')}
         onConfirm={handleConfirmDelete}
       />
     </div>

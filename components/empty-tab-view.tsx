@@ -11,6 +11,7 @@ import { FilePlus, FolderOpen, X } from 'lucide-react'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { useTabsStore } from '@/stores/tabsStore'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
+import { useTranslation } from '@/stores/languageStore'
 import { openFile } from '@/lib/file-system'
 import { toast } from '@/hooks/use-toast'
 import { useState, useEffect } from 'react'
@@ -25,6 +26,7 @@ export function EmptyTabView({ tabId, onOpenSearch }: EmptyTabViewProps) {
   const [mounted, setMounted] = useState(false)
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
   const { closeTab, openFileInCurrentTab } = useTabsStore()
+  const { t } = useTranslation()
 
   useEffect(() => {
     setMounted(true)
@@ -34,7 +36,7 @@ export function EmptyTabView({ tabId, onOpenSearch }: EmptyTabViewProps) {
   // 处理创建新文件 - 在当前空白标签页打开新创建的文件
   const handleCreateNewFile = () => {
     // 创建新文件到文件系统
-    createFile('未命名文档.md', null)
+    createFile(t('file.untitled') + '.md', null)
     
     // 获取刚创建的文件（最新的文件）
     const { files: updatedFiles } = useFileSystemStore.getState()
@@ -64,14 +66,14 @@ export function EmptyTabView({ tabId, onOpenSearch }: EmptyTabViewProps) {
         // 在当前空白标签页打开文件内容
         openFileInCurrentTab(tabId, result.fileName, result.content)
         toast({
-          title: '文件已打开',
+          title: t('toast.fileAdded'),
           description: result.fileName,
         })
       }
     } catch (error) {
       console.error('Failed to open file:', error)
       toast({
-        title: '打开文件失败',
+        title: t('file.openFileFailed'),
         variant: 'destructive',
       })
     }
@@ -84,7 +86,27 @@ export function EmptyTabView({ tabId, onOpenSearch }: EmptyTabViewProps) {
     }
   }
 
-  const menuItems = [
+  // 使用 useMemo 确保菜单项在语言变化时更新，但避免 hydration 不匹配
+  const menuItems = mounted ? [
+    {
+      icon: FilePlus,
+      label: t('sidebar.newFile'),
+      shortcut: 'Ctrl + N',
+      onClick: handleCreateNewFile,
+    },
+    {
+      icon: FolderOpen,
+      label: t('sidebar.openFile'),
+      shortcut: 'Ctrl + O',
+      onClick: handleOpenFile,
+    },
+    {
+      icon: X,
+      label: t('sidebar.closeTab'),
+      shortcut: '',
+      onClick: handleCloseTab,
+    },
+  ] : [
     {
       icon: FilePlus,
       label: '创建新文件',
@@ -116,8 +138,9 @@ export function EmptyTabView({ tabId, onOpenSearch }: EmptyTabViewProps) {
         <h2
           className="text-2xl font-semibold"
           style={{ color: themeConfig.text }}
+          suppressHydrationWarning
         >
-          未打开文件
+          {mounted ? t('sidebar.noFileOpen') : '未打开文件'}
         </h2>
 
         {/* 操作菜单 */}
@@ -136,8 +159,9 @@ export function EmptyTabView({ tabId, onOpenSearch }: EmptyTabViewProps) {
               onMouseLeave={(e) => {
                 e.currentTarget.style.backgroundColor = 'transparent'
               }}
+              suppressHydrationWarning
             >
-              <span className="text-base font-medium">{item.label}</span>
+              <span className="text-base font-medium" suppressHydrationWarning>{item.label}</span>
               {item.shortcut && (
                 <span
                   className="text-sm ml-1 opacity-50"
@@ -155,8 +179,9 @@ export function EmptyTabView({ tabId, onOpenSearch }: EmptyTabViewProps) {
       <div
         className="absolute bottom-8 text-xs opacity-40"
         style={{ color: themeConfig.muted }}
+        suppressHydrationWarning
       >
-        从左侧文件面板选择文件，或从上方标签栏新建文档
+        {mounted ? t('sidebar.selectFromSidebar') : '从左侧文件面板选择文件，或从上方标签栏新建文档'}
       </div>
     </div>
   )

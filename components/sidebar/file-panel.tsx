@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { useTabsStore } from '@/stores/tabsStore'
+import { useTranslation } from '@/stores/languageStore'
 import { FolderItem } from '../file-sidebar/folder-item'
 import { FileItem } from '../file-sidebar/file-item'
 import type { DropPosition } from '@/types/file-system'
@@ -29,6 +30,7 @@ import {
 
 export function FilePanel() {
   const { getThemeConfig } = useThemeStore()
+  const { t } = useTranslation()
 
   const {
     folders,
@@ -73,8 +75,8 @@ export function FilePanel() {
   // 对话框状态
   const [showFileDialog, setShowFileDialog] = useState(false)
   const [showFolderDialog, setShowFolderDialog] = useState(false)
-  const [fileName, setFileName] = useState('未命名.md')
-  const [folderName, setFolderName] = useState('新建文件夹')
+  const [fileName, setFileName] = useState('')
+  const [folderName, setFolderName] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
 
@@ -150,7 +152,7 @@ export function FilePanel() {
 
   // 处理创建文件
   const handleCreateFile = () => {
-    setFileName('未命名.md')
+    setFileName(t('file.untitled') + '.md')
     setShowFileDialog(true)
   }
 
@@ -160,14 +162,14 @@ export function FilePanel() {
       createFile(fileName.trim(), null)
       setShowFileDialog(false)
       toast({
-        title: '文件创建成功',
+        title: t('toast.fileAdded'),
       })
     }
   }
 
   // 处理创建文件夹
   const handleCreateFolder = () => {
-    setFolderName('新建文件夹')
+    setFolderName(t('file.newFolder'))
     setShowFolderDialog(true)
   }
 
@@ -177,7 +179,7 @@ export function FilePanel() {
       createFolder(folderName.trim())
       setShowFolderDialog(false)
       toast({
-        title: '文件夹创建成功',
+        title: t('toast.folderAdded'),
       })
     }
   }
@@ -185,12 +187,12 @@ export function FilePanel() {
   // 处理对话框取消
   const handleCancelFileDialog = () => {
     setShowFileDialog(false)
-    setFileName('未命名.md')
+    setFileName('')
   }
 
   const handleCancelFolderDialog = () => {
     setShowFolderDialog(false)
-    setFolderName('新建文件夹')
+    setFolderName('')
   }
 
   // 处理文件夹展开/折叠
@@ -307,7 +309,7 @@ export function FilePanel() {
             className="font-medium"
             style={{ color: themeConfig.text }}
           >
-            文件管理
+            {mounted ? t('sidebar.files') : '文件'}
           </span>
         </div>
         <span
@@ -324,14 +326,14 @@ export function FilePanel() {
       {/* 顶部工具栏 */}
       <div className="flex items-center justify-between px-3 py-2">
         <span className="text-xs font-semibold uppercase tracking-wider opacity-60">
-          文件列表
+          {mounted ? t('sidebar.files') : '文件'}
         </span>
         <div className="flex items-center gap-0.5">
           {/* 新建文件 */}
           <button
             onClick={handleCreateFile}
             className="p-1.5 rounded hover:bg-white/10 transition-colors"
-            title="新建文件"
+            title={mounted ? t('file.newFile') : '新建文件'}
           >
             <FilePlus className="w-4 h-4" />
           </button>
@@ -339,7 +341,7 @@ export function FilePanel() {
           <button
             onClick={handleCreateFolder}
             className="p-1.5 rounded hover:bg-white/10 transition-colors"
-            title="新建文件夹"
+            title={mounted ? t('sidebar.createNewFolder') : '新建文件夹'}
           >
             <FolderPlus className="w-4 h-4" />
           </button>
@@ -351,7 +353,7 @@ export function FilePanel() {
                 setShowSortMenu(!showSortMenu)
               }}
               className="p-1.5 rounded hover:bg-white/10 transition-colors"
-              title="排序"
+              title={mounted ? t('common.sort') : '排序'}
             >
               <ArrowUpDown className="w-4 h-4" />
             </button>
@@ -374,7 +376,7 @@ export function FilePanel() {
                   )}
                   style={{ color: sortBy === 'name' && sortOrder === 'asc' ? undefined : themeConfig.text }}
                 >
-                  文件名 (A-Z)
+                  {mounted ? t('file.nameAZ') : '文件名 (A-Z)'}
                   {sortBy === 'name' && sortOrder === 'asc' && <ChevronDown className="w-4 h-4" />}
                 </button>
                 <button
@@ -385,7 +387,7 @@ export function FilePanel() {
                   )}
                   style={{ color: sortBy === 'name' && sortOrder === 'desc' ? undefined : themeConfig.text }}
                 >
-                  文件名 (Z-A)
+                  {mounted ? t('file.nameZA') : '文件名 (Z-A)'}
                   {sortBy === 'name' && sortOrder === 'desc' && <ChevronDown className="w-4 h-4" />}
                 </button>
 
@@ -401,7 +403,7 @@ export function FilePanel() {
                   )}
                   style={{ color: sortBy === 'updatedAt' && sortOrder === 'desc' ? undefined : themeConfig.text }}
                 >
-                  编辑时间 (从新到旧)
+                  {mounted ? t('file.updatedNewToOld') : '编辑时间 (从新到旧)'}
                   {sortBy === 'updatedAt' && sortOrder === 'desc' && <ChevronDown className="w-4 h-4" />}
                 </button>
                 <button
@@ -412,7 +414,7 @@ export function FilePanel() {
                   )}
                   style={{ color: sortBy === 'updatedAt' && sortOrder === 'asc' ? undefined : themeConfig.text }}
                 >
-                  编辑时间 (从旧到新)
+                  {mounted ? t('file.updatedOldToNew') : '编辑时间 (从旧到新)'}
                   {sortBy === 'updatedAt' && sortOrder === 'asc' && <ChevronDown className="w-4 h-4" />}
                 </button>
 
@@ -428,7 +430,7 @@ export function FilePanel() {
                   )}
                   style={{ color: sortBy === 'createdAt' && sortOrder === 'desc' ? undefined : themeConfig.text }}
                 >
-                  创建时间 (从新到旧)
+                  {mounted ? t('file.createdNewToOld') : '创建时间 (从新到旧)'}
                   {sortBy === 'createdAt' && sortOrder === 'desc' && <ChevronDown className="w-4 h-4" />}
                 </button>
                 <button
@@ -439,7 +441,7 @@ export function FilePanel() {
                   )}
                   style={{ color: sortBy === 'createdAt' && sortOrder === 'asc' ? undefined : themeConfig.text }}
                 >
-                  创建时间 (从旧到新)
+                  {mounted ? t('file.createdOldToNew') : '创建时间 (从旧到新)'}
                   {sortBy === 'createdAt' && sortOrder === 'asc' && <ChevronDown className="w-4 h-4" />}
                 </button>
               </div>
@@ -516,10 +518,10 @@ export function FilePanel() {
         >
           <DialogHeader>
             <DialogTitle style={{ color: themeConfig.text }}>
-              新建文件
+              {mounted ? t('file.newFile') : '新建文件'}
             </DialogTitle>
             <DialogDescription style={{ color: themeConfig.textMuted }}>
-              请输入文件名：
+              {mounted ? t('file.enterFileName') : '请输入文件名：'}
             </DialogDescription>
           </DialogHeader>
           <div className="mt-4">
@@ -536,7 +538,7 @@ export function FilePanel() {
                   handleCancelFileDialog()
                 }
               }}
-              placeholder="文件名"
+              placeholder={mounted ? t('file.fileName') : '文件名'}
               className="w-full px-3 py-2 rounded-md border text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
               style={{
                 backgroundColor: themeConfig.background,
@@ -557,7 +559,7 @@ export function FilePanel() {
               }}
               className="hover:opacity-80"
             >
-              取消
+              {mounted ? t('common.cancel') : '取消'}
             </Button>
             <Button
               onClick={handleConfirmCreateFile}
@@ -567,7 +569,7 @@ export function FilePanel() {
               }}
               className="hover:opacity-90"
             >
-              创建
+              {mounted ? t('common.create') : '创建'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -584,10 +586,10 @@ export function FilePanel() {
         >
           <DialogHeader>
             <DialogTitle style={{ color: themeConfig.text }}>
-              新建文件夹
+              {mounted ? t('sidebar.createNewFolder') : '新建文件夹'}
             </DialogTitle>
             <DialogDescription style={{ color: themeConfig.textMuted }}>
-              请输入文件夹名称：
+              {mounted ? t('file.enterFolderName') : '请输入文件夹名称：'}
             </DialogDescription>
           </DialogHeader>
           <div className="mt-4">
@@ -604,7 +606,7 @@ export function FilePanel() {
                   handleCancelFolderDialog()
                 }
               }}
-              placeholder="文件夹名称"
+              placeholder={mounted ? t('file.folderName') : '文件夹名称'}
               className="w-full px-3 py-2 rounded-md border text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
               style={{
                 backgroundColor: themeConfig.background,
@@ -625,7 +627,7 @@ export function FilePanel() {
               }}
               className="hover:opacity-80"
             >
-              取消
+              {mounted ? t('common.cancel') : '取消'}
             </Button>
             <Button
               onClick={handleConfirmCreateFolder}
@@ -635,7 +637,7 @@ export function FilePanel() {
               }}
               className="hover:opacity-90"
             >
-              创建
+              {mounted ? t('common.create') : '创建'}
             </Button>
           </DialogFooter>
         </DialogContent>

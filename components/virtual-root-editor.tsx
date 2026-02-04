@@ -14,6 +14,7 @@ import { useState, useCallback, useRef, forwardRef, useImperativeHandle } from '
 import { FileJson, FileText, Info, Plus, Trash } from 'lucide-react'
 import { Button } from './ui/button'
 import { Textarea } from './ui/textarea'
+import { useTranslation } from '@/stores/languageStore'
 
 export interface MetadataEntry {
   key: string
@@ -47,6 +48,7 @@ export const VirtualRootEditor = forwardRef<VirtualRootEditorRef, VirtualRootEdi
   onEntriesChange,
   onFileNameChange,
 }, ref) {
+  const { t } = useTranslation()
   const [editIndex, setEditIndex] = useState<number | null>(null)
   const [editField, setEditField] = useState<'key' | 'value' | null>(null)
   const [editContent, setEditContent] = useState('')
@@ -192,12 +194,12 @@ export const VirtualRootEditor = forwardRef<VirtualRootEditorRef, VirtualRootEdi
   }, [handleEditBlur])
 
   const getEditLabel = () => {
-    if (isEditingFileName) return '编辑文件名'
+    if (isEditingFileName) return t('node.editFileName')
     if (isEditingNew && editingNewField) {
-      return editingNewField === 'key' ? '编辑新键' : '编辑新值'
+      return editingNewField === 'key' ? t('node.editNewKey') : t('node.editNewValue')
     }
-    if (editIndex === null || editField === null) return '点击上方键或值进行编辑'
-    return editField === 'key' ? '编辑键' : '编辑值'
+    if (editIndex === null || editField === null) return t('node.clickToEdit')
+    return editField === 'key' ? t('node.editKey') : t('node.editValue')
   }
 
   return (
@@ -210,7 +212,7 @@ export const VirtualRootEditor = forwardRef<VirtualRootEditorRef, VirtualRootEdi
       <div className="space-y-2">
         <label className="flex items-center gap-2 text-xs font-medium" style={{ color: themeConfig.muted }}>
           <Info className="w-3 h-3" />
-          文件名
+          {t('node.fileName')}
         </label>
         <button
           onClick={handleSelectFileName}
@@ -221,7 +223,7 @@ export const VirtualRootEditor = forwardRef<VirtualRootEditorRef, VirtualRootEdi
             color: themeConfig.text,
           }}
         >
-          {fileName || <span style={{ color: themeConfig.muted }}>未命名文档.md</span>}
+          {fileName || <span style={{ color: themeConfig.muted }}>{t('node.untitledDoc')}</span>}
         </button>
       </div>
 
@@ -230,7 +232,7 @@ export const VirtualRootEditor = forwardRef<VirtualRootEditorRef, VirtualRootEdi
       <div className="space-y-2 max-h-[200px] overflow-y-auto">
         <label className="flex items-center gap-2 text-xs font-medium" style={{ color: themeConfig.muted }}>
           <Info className="w-3 h-3" />
-          点击键或值在下方编辑
+          {t('node.clickKeyOrValue')}
         </label>
         {entries.map((entry, index) => (
           <div key={index} className="flex items-center gap-2">
@@ -243,7 +245,7 @@ export const VirtualRootEditor = forwardRef<VirtualRootEditorRef, VirtualRootEdi
                 color: themeConfig.text,
               }}
             >
-              {entry.key || <span style={{ color: themeConfig.muted }}>键</span>}
+              {entry.key || <span style={{ color: themeConfig.muted }}>{t('node.key')}</span>}
             </button>
             <span style={{ color: themeConfig.muted }}>:</span>
             <button
@@ -255,7 +257,7 @@ export const VirtualRootEditor = forwardRef<VirtualRootEditorRef, VirtualRootEdi
                 color: themeConfig.text,
               }}
             >
-              {entry.value || <span style={{ color: themeConfig.muted }}>值</span>}
+              {entry.value || <span style={{ color: themeConfig.muted }}>{t('node.value')}</span>}
             </button>
             <Button
               variant="ghost"
@@ -280,7 +282,7 @@ export const VirtualRootEditor = forwardRef<VirtualRootEditorRef, VirtualRootEdi
             color: themeConfig.text,
           }}
         >
-          {newKey || <span style={{ color: themeConfig.muted }}>新键</span>}
+          {newKey || <span style={{ color: themeConfig.muted }}>{t('node.newKey')}</span>}
         </button>
         <span style={{ color: themeConfig.muted }}>:</span>
         <button
@@ -292,7 +294,7 @@ export const VirtualRootEditor = forwardRef<VirtualRootEditorRef, VirtualRootEdi
             color: themeConfig.text,
           }}
         >
-          {newValue || <span style={{ color: themeConfig.muted }}>值</span>}
+          {newValue || <span style={{ color: themeConfig.muted }}>{t('node.value')}</span>}
         </button>
         <Button
           variant="ghost"
@@ -318,7 +320,7 @@ export const VirtualRootEditor = forwardRef<VirtualRootEditorRef, VirtualRootEdi
             borderColor: (editIndex !== null && editField !== null) || (isEditingNew && editingNewField !== null) || isEditingFileName
               ? themeConfig.accent
               : themeConfig.border,
-            height: '200px',
+            height: '160px',
           }}
         >
           <Textarea
@@ -327,10 +329,10 @@ export const VirtualRootEditor = forwardRef<VirtualRootEditorRef, VirtualRootEdi
             onBlur={handleEditBlur}
             onKeyDown={handleKeyDown}
             placeholder={isEditingFileName
-              ? '在此输入文件名，按 Enter 保存...'
+              ? t('node.enterFileNamePlaceholder')
               : (editIndex !== null && editField !== null) || (isEditingNew && editingNewField !== null)
-                ? `在此输入${(editField === 'key' || editingNewField === 'key') ? '键' : '值'}，按 Enter 保存...`
-                : '点击上方的键或值，在此处编辑长内容'}
+                ? (editField === 'key' || editingNewField === 'key') ? t('node.enterKeyPlaceholder') : t('node.enterValuePlaceholder')
+                : t('node.clickToEditLongContent')}
             disabled={editIndex === null && editField === null && !isEditingNew && !isEditingFileName}
             className="w-full h-full resize-none border-0 font-mono text-sm leading-relaxed p-4 focus:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0 disabled:opacity-50"
             style={{ backgroundColor: 'transparent', color: themeConfig.text }}
@@ -340,7 +342,7 @@ export const VirtualRootEditor = forwardRef<VirtualRootEditorRef, VirtualRootEdi
 
       <p className="text-xs flex items-center gap-1" style={{ color: themeConfig.muted }}>
         <Info className="w-3 h-3" />
-        Metadata 将保存为 YAML 格式
+        {t('node.metadataYaml')}
       </p>
     </div>
   )

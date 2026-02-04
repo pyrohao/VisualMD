@@ -11,6 +11,7 @@ import { FolderOpen, LayoutTemplate, Sparkles, Settings, ListTree, HelpCircle } 
 import { cn } from '@/lib/utils'
 import { useSidebarStore, type SidebarPanel } from '@/stores/sidebarStore'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
+import { useTranslation } from '@/stores/languageStore'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useState, useEffect } from 'react'
 import { HelpDialog } from '../help-dialog'
@@ -22,15 +23,15 @@ interface IconItem {
   shortcut: string
 }
 
-const ICONS: IconItem[] = [
-  { id: 'files', icon: FolderOpen, label: '文件', shortcut: 'Ctrl+1' },
-  { id: 'outline', icon: ListTree, label: '大纲', shortcut: 'Ctrl+2' },
-  { id: 'templates', icon: LayoutTemplate, label: '模板', shortcut: 'Ctrl+3' },
-  { id: 'ai', icon: Sparkles, label: 'AI生成', shortcut: 'Ctrl+4' },
+const getIcons = (t: (key: string) => string): IconItem[] => [
+  { id: 'files', icon: FolderOpen, label: t('sidebar.files'), shortcut: 'Ctrl+1' },
+  { id: 'outline', icon: ListTree, label: t('sidebar.outline'), shortcut: 'Ctrl+2' },
+  { id: 'templates', icon: LayoutTemplate, label: t('sidebar.templates'), shortcut: 'Ctrl+3' },
+  { id: 'ai', icon: Sparkles, label: t('sidebar.aiGenerate'), shortcut: 'Ctrl+4' },
 ]
 
-const BOTTOM_ICONS: IconItem[] = [
-  { id: 'settings', icon: Settings, label: '设置', shortcut: '' },
+const getBottomIcons = (t: (key: string) => string): IconItem[] => [
+  { id: 'settings', icon: Settings, label: t('sidebar.settings'), shortcut: '' },
 ]
 
 export function IconSidebar() {
@@ -38,6 +39,7 @@ export function IconSidebar() {
   const { getThemeConfig } = useThemeStore()
   const [mounted, setMounted] = useState(false)
   const [helpDialogOpen, setHelpDialogOpen] = useState(false)
+  const { t } = useTranslation()
 
   // 使用安全的主题配置，避免 SSR 不匹配
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
@@ -54,6 +56,9 @@ export function IconSidebar() {
   const handleHelpClick = () => {
     setHelpDialogOpen(true)
   }
+
+  const ICONS = getIcons(t)
+  const BOTTOM_ICONS = getBottomIcons(t)
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -123,7 +128,7 @@ export function IconSidebar() {
               </button>
             </TooltipTrigger>
             <TooltipContent side="right">
-              <span>帮助</span>
+              <span>{mounted ? t('sidebar.help') : '帮助'}</span>
             </TooltipContent>
           </Tooltip>
 

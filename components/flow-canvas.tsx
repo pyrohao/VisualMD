@@ -39,6 +39,7 @@ import { calculateTreeLayout } from '@/lib/layout-engine'
 import { useDocumentStore } from '@/stores/documentStore'
 import type { TreeNode } from '@/types/tree'
 import { useThemeStore } from '@/stores/themeStore'
+import { useTranslation } from '@/stores/languageStore'
 import { toast } from '@/hooks/use-toast'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
 import {
@@ -70,6 +71,7 @@ export function FlowCanvas() {
 
   const { getThemeConfig } = useThemeStore()
   const themeConfig = getThemeConfig()
+  const { t } = useTranslation()
 
   // 启用键盘快捷键
   useKeyboardShortcuts({
@@ -790,7 +792,7 @@ export function FlowCanvas() {
             }}
           >
             <LayoutGrid className="h-4 w-4" />
-            整理布局
+            {t('canvas.layout')}
           </Button>
         </Panel>
 

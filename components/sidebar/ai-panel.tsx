@@ -15,6 +15,7 @@ import { Sparkles, Send, Loader2, AlertCircle, CheckCircle, Settings } from 'luc
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
+import { useTranslation } from '@/stores/languageStore'
 import { createAIService } from '@/lib/ai-service'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -26,12 +27,27 @@ export function AIPanel() {
   
   const { getThemeConfig } = useThemeStore()
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
+  const { t } = useTranslation()
 
   useEffect(() => {
     setMounted(true)
   }, [])
-  
-  const { 
+
+  // 获取翻译后的提供商名称
+  const getProviderDisplayName = (providerId: string, defaultName: string) => {
+    const names: Record<string, string> = {
+      'openai': 'OpenAI',
+      'volcengine': t('settings.volcengine') || '火山引擎',
+      'siliconflow': t('settings.siliconflow') || '硅基流动',
+      'zhipu': t('settings.zhipu') || '智谱AI',
+      'qianwen': t('settings.qianwen') || '通义千问',
+      'openrouter': 'OpenRouter',
+      'custom': t('settings.custom') || '自定义',
+    }
+    return names[providerId] || defaultName
+  }
+
+  const {
     activeProvider,
     providerConfigs,
     getActiveProviderApiKey,
@@ -61,8 +77,8 @@ export function AIPanel() {
   const handleGenerate = async () => {
     if (!prompt.trim()) {
       toast({
-        title: '请输入内容描述',
-        description: '请描述您想要生成的文档内容',
+        title: t('common.enterDescription'),
+        description: t('common.describeContent'),
         variant: 'destructive',
       })
       return
@@ -70,8 +86,8 @@ export function AIPanel() {
     
     if (!isConfigValid) {
       toast({
-        title: 'AI配置无效',
-        description: '请先在设置中配置并测试API',
+        title: t('common.aiConfigInvalid'),
+        description: t('common.configureApiFirst'),
         variant: 'destructive',
       })
       return
@@ -92,7 +108,7 @@ export function AIPanel() {
       })
       
       if (!result.success) {
-        throw new Error(result.error || '生成失败')
+        throw new Error(result.error || t('toast.generateFailed'))
       }
       
       // 保存到文件系统
@@ -103,13 +119,13 @@ export function AIPanel() {
       
       // 提示成功
       toast({
-        title: '文档生成成功',
+        title: t('toast.generateSuccess'),
         description: `已保存为: ${result.fileName}`,
       })
     } catch (error) {
       console.error('AI生成失败:', error)
       toast({
-        title: '生成失败',
+        title: t('toast.generateFailed'),
         description: error instanceof Error ? error.message : '未知错误',
         variant: 'destructive',
       })
@@ -143,7 +159,7 @@ export function AIPanel() {
       <div className="flex h-14 items-center border-b px-4" style={{ borderColor: themeConfig.border }}>
         <Sparkles className="mr-2 h-5 w-5" style={{ color: themeConfig.primary }} />
         <h2 className="text-sm font-semibold" style={{ color: themeConfig.heading }}>
-          AI 文档生成
+          {t('sidebar.aiGenerate')}
         </h2>
       </div>
       
@@ -164,11 +180,11 @@ export function AIPanel() {
               ) : (
                 <AlertCircle className="h-4 w-4" style={{ color: themeConfig.error }} />
               )}
-              <span 
+              <span
                 className="text-xs font-medium"
                 style={{ color: isConfigValid ? themeConfig.success : themeConfig.error }}
               >
-                {currentConfig.name}
+                {mounted ? getProviderDisplayName(activeProvider, currentConfig.name) : currentConfig.name}
               </span>
             </div>
             <button
@@ -180,7 +196,7 @@ export function AIPanel() {
               }}
             >
               <Settings className="h-3 w-3" />
-              配置
+              {t('sidebar.config')}
             </button>
           </div>
           <p 
@@ -188,8 +204,8 @@ export function AIPanel() {
             style={{ color: isConfigValid ? themeConfig.success : themeConfig.error }}
           >
             {isConfigValid 
-              ? `已配置并测试通过 · 模型: ${currentConfig.model}` 
-              : '未配置或测试未通过，请先配置API'
+              ? `${t('sidebar.configured')} · ${t('common.model')}: ${currentConfig.model}` 
+              : t('sidebar.notConfigured')
             }
           </p>
         </div>
@@ -200,14 +216,14 @@ export function AIPanel() {
             className="text-xs font-medium flex-shrink-0"
             style={{ color: themeConfig.textMuted }}
           >
-            描述您想要的文档内容
+            {t('sidebar.enterDescription')}
           </label>
           <div className="flex-1 relative min-h-0">
             <Textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="例如：生成一份关于React Hooks的技术文档，包含useState、useEffect和useContext的使用说明和示例代码..."
+              placeholder={mounted ? t('sidebar.aiPlaceholder') : '例如：生成一份关于React Hooks的技术文档，包含useState、useEffect和useContext的使用说明和示例代码...'}
               disabled={isGenerating}
               className="resize-none border text-sm overflow-y-auto absolute inset-0"
               style={{ 
@@ -218,7 +234,7 @@ export function AIPanel() {
             />
           </div>
           <p className="text-xs flex-shrink-0" style={{ color: themeConfig.textMuted }}>
-            按 Ctrl+Enter 快速发送
+            {t('sidebar.quickSend')}
           </p>
         </div>
         
@@ -236,12 +252,12 @@ export function AIPanel() {
           {isGenerating ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              生成中...
+              {t('sidebar.generating')}
             </>
           ) : (
             <>
               <Send className="mr-2 h-4 w-4" />
-              生成文档
+              {t('common.generate')}
             </>
           )}
         </Button>
@@ -256,8 +272,8 @@ export function AIPanel() {
               color: themeConfig.textMuted,
             }}
           >
-            <p>正在生成文档，请稍候...</p>
-            <p className="mt-1">您可以切换到其他面板继续工作</p>
+            <p>{t('common.generatingDoc')}</p>
+            <p className="mt-1">{t('common.switchPanel')}</p>
           </div>
         )}
       </div>

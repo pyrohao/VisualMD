@@ -12,6 +12,7 @@ import { useEffect, useState } from 'react'
 import { ListTree, FileText } from 'lucide-react'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { useDocumentStore } from '@/stores/documentStore'
+import { useTranslation } from '@/stores/languageStore'
 
 interface Heading {
   level: number
@@ -23,6 +24,7 @@ export function OutlinePanel() {
   const { getThemeConfig } = useThemeStore()
   const [mounted, setMounted] = useState(false)
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
+  const { t } = useTranslation()
 
   useEffect(() => {
     setMounted(true)
@@ -67,7 +69,7 @@ export function OutlinePanel() {
       <div className="flex h-14 items-center border-b px-4" style={{ borderColor: themeConfig.border }}>
         <ListTree className="mr-2 h-5 w-5" style={{ color: themeConfig.primary }} />
         <h2 className="text-sm font-semibold" style={{ color: themeConfig.heading }}>
-          大纲
+          {mounted ? t('sidebar.outline') : '大纲'}
         </h2>
       </div>
 
@@ -77,17 +79,17 @@ export function OutlinePanel() {
           <div className="flex flex-col items-center justify-center py-8 text-center">
             <FileText className="mb-2 h-8 w-8" style={{ color: themeConfig.textMuted }} />
             <p className="text-sm" style={{ color: themeConfig.textMuted }}>
-              暂无打开的文件
+              {mounted ? t('sidebar.noFileOpen') : '暂无打开的文件'}
             </p>
           </div>
         ) : headings.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-8 text-center">
             <ListTree className="mb-2 h-8 w-8" style={{ color: themeConfig.textMuted }} />
             <p className="text-sm" style={{ color: themeConfig.textMuted }}>
-              当前文档没有标题
+              {mounted ? t('sidebar.noHeadings') : '当前文档没有标题'}
             </p>
             <p className="mt-1 text-xs" style={{ color: themeConfig.textMuted }}>
-              使用 # ## ### 等创建标题
+              {mounted ? t('sidebar.useHashToCreate') : '使用 # ## ### 等创建标题'}
             </p>
           </div>
         ) : (

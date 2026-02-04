@@ -12,6 +12,7 @@
 
 import { useDocumentStore } from '@/stores/documentStore'
 import { useThemeStore, themeConfigs, type ThemeMode } from '@/stores/themeStore'
+import { useTranslation } from '@/stores/languageStore'
 import { useEffect, useState, useCallback } from 'react'
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
@@ -198,6 +199,7 @@ export function MarkdownPreview() {
   const [editContent, setEditContent] = useState('')
   const [isTransitioning, setIsTransitioning] = useState(false)
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
+  const { t } = useTranslation()
 
   useEffect(() => {
     setMounted(true)
@@ -259,10 +261,10 @@ export function MarkdownPreview() {
     return (
       <div className="flex h-full flex-col" style={{ backgroundColor: themeConfig.background }}>
         <div className="flex h-14 items-center border-b px-5" style={{ backgroundColor: themeConfig.card, borderColor: themeConfig.border }}>
-          <h2 className="text-lg font-semibold" style={{ color: themeConfig.heading }}>文档预览</h2>
+          <h2 className="text-lg font-semibold" style={{ color: themeConfig.heading }}>{mounted ? t('preview.preview') : '文档预览'}</h2>
         </div>
         <div className="flex flex-1 items-center justify-center">
-          <p style={{ color: themeConfig.muted }}>没有可预览的内容</p>
+          <p style={{ color: themeConfig.muted }}>{mounted ? t('preview.noContent') : '没有可预览的内容'}</p>
         </div>
       </div>
     )
@@ -274,15 +276,15 @@ export function MarkdownPreview() {
       <div className="flex h-14 items-center justify-between border-b px-5" style={{ backgroundColor: themeConfig.card, borderColor: themeConfig.border }}>
         <div className="flex items-center">
           <h2 className="text-lg font-semibold" style={{ color: themeConfig.heading }}>
-            {mode === 'preview' ? '文档预览' : '编辑文档'}
+            {mode === 'preview' ? (mounted ? t('preview.preview') : '文档预览') : (mounted ? t('preview.edit') : '编辑文档')}
           </h2>
           <span className="ml-3 text-sm" style={{ color: themeConfig.muted }}>
-            {document.fileName || '未命名文档'}
+            {document.fileName || (mounted ? t('file.untitled') : '未命名')}
           </span>
         </div>
-        
+
         {/* 模式切换按钮 */}
-        <div 
+        <div
           className="flex items-center rounded-lg p-1"
           style={{ backgroundColor: themeConfig.background }}
         >
@@ -290,35 +292,35 @@ export function MarkdownPreview() {
             onClick={() => handleModeChange('preview')}
             className={cn(
               'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-all duration-200',
-              mode === 'preview' 
-                ? 'shadow-sm' 
+              mode === 'preview'
+                ? 'shadow-sm'
                 : 'hover:opacity-80'
             )}
             style={{
               backgroundColor: mode === 'preview' ? themeConfig.card : 'transparent',
               color: mode === 'preview' ? themeConfig.heading : themeConfig.muted,
             }}
-            title="预览模式"
+            title={mounted ? t('preview.previewMode') : '预览模式'}
           >
             <BookOpen className="h-4 w-4" />
-            <span>阅读</span>
+            <span>{mounted ? t('preview.read') : '阅读'}</span>
           </button>
           <button
             onClick={() => handleModeChange('edit')}
             className={cn(
               'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-all duration-200',
-              mode === 'edit' 
-                ? 'shadow-sm' 
+              mode === 'edit'
+                ? 'shadow-sm'
                 : 'hover:opacity-80'
             )}
             style={{
               backgroundColor: mode === 'edit' ? themeConfig.card : 'transparent',
               color: mode === 'edit' ? themeConfig.heading : themeConfig.muted,
             }}
-            title="编辑模式"
+            title={mounted ? t('preview.editMode') : '编辑模式'}
           >
             <Pencil className="h-4 w-4" />
-            <span>编辑</span>
+            <span>{mounted ? t('preview.edit') : '编辑'}</span>
           </button>
         </div>
       </div>
@@ -361,7 +363,7 @@ export function MarkdownPreview() {
               color: themeConfig.text,
               lineHeight: 1.6,
             }}
-            placeholder="在此编辑 Markdown 文档..."
+            placeholder={mounted ? t('preview.editPlaceholder') : '在此编辑 Markdown 文档...'}
             spellCheck={false}
           />
         </div>

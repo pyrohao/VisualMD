@@ -26,8 +26,10 @@ import { Button } from './ui/button'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useDocumentStore } from '@/stores/documentStore'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
+import { useTranslation } from '@/stores/languageStore'
 import { openFile, exportAsMarkdown } from '@/lib/file-system'
 import { ThemeToggle } from './theme-toggle'
+import { LanguageToggle } from './language-switcher'
 import { toast } from '@/hooks/use-toast'
 import {
   DropdownMenu,
@@ -60,6 +62,7 @@ export function EditorToolbar({
   const { getThemeConfig } = useThemeStore()
   const { isPanelExpanded, togglePanel } = useSidebarStore()
   const { tabs, activeTabId, activateTab, closeTab, createTab, openFileInTab, getActiveTab, closeAllTabs, reorderTabs } = useTabsStore()
+  const { t } = useTranslation()
   const [isLoading, setIsLoading] = useState(false)
   const [hoveredTabId, setHoveredTabId] = useState<string | null>(null)
   const tabsContainerRef = useRef<HTMLDivElement>(null)
@@ -138,13 +141,13 @@ export function EditorToolbar({
     } catch (error) {
       console.error('Failed to open file:', error)
       toast({
-        title: '打开文件失败',
+        title: t('file.openFileFailed'),
         variant: 'destructive',
       })
     } finally {
       setIsLoading(false)
     }
-  }, [importFile, openFileInTab])
+  }, [importFile, openFileInTab, t])
 
   // 处理导出 - 使用最新的 Markdown 内容
   const handleExport = useCallback(async () => {
@@ -155,21 +158,21 @@ export function EditorToolbar({
       // 从 documentStore 获取最新的 Markdown 内容
       const { getCurrentMarkdown } = useDocumentStore.getState()
       const latestContent = getCurrentMarkdown()
-      
+
       const success = exportAsMarkdown(latestContent, activeTab.fileName)
       if (success) {
-        toast({ title: '导出成功', description: '已导出为 Markdown 文件' })
+        toast({ title: t('file.exportSuccess'), description: '已导出为 Markdown 文件' })
       }
     } catch (error) {
       console.error('Failed to export file:', error)
       toast({
-        title: '导出文件失败',
+        title: t('file.exportFailed'),
         variant: 'destructive',
       })
     } finally {
       setIsLoading(false)
     }
-  }, [activeTab])
+  }, [activeTab, t])
 
   // 处理新建标签 - 创建空白标签页
   const handleNewTab = () => {
@@ -357,9 +360,10 @@ export function EditorToolbar({
               e.currentTarget.style.color = themeConfig.muted
               e.currentTarget.style.backgroundColor = 'transparent'
             }}
+            suppressHydrationWarning
           >
             <Plus className="h-3 w-3" />
-            新建文档
+            {mounted ? t('node.newDocument') : '新建文档'}
           </Button>
         ) : (
           <div className="flex items-center h-full relative">
@@ -518,7 +522,7 @@ export function EditorToolbar({
               onClick={() => {
                 closeAllTabs()
                 toast({
-                  title: '已关闭所有标签页',
+                  title: mounted ? t('file.closeAllTabs') : '已关闭所有标签页',
                 })
               }}
               className="cursor-pointer focus:bg-transparent"
@@ -529,9 +533,10 @@ export function EditorToolbar({
               onMouseLeave={(e) => {
                 e.currentTarget.style.backgroundColor = 'transparent'
               }}
+              suppressHydrationWarning
             >
               <X className="mr-2 h-4 w-4" style={{ color: themeConfig.muted }} />
-              <span>全部关闭</span>
+              <span suppressHydrationWarning>{mounted ? t('common.closeAll') : '全部关闭'}</span>
             </DropdownMenuItem>
 
             <DropdownMenuSeparator style={{ backgroundColor: themeConfig.border }} />
@@ -541,8 +546,9 @@ export function EditorToolbar({
               <div
                 className="px-2 py-3 text-sm text-center"
                 style={{ color: themeConfig.muted }}
+                suppressHydrationWarning
               >
-                没有打开的标签页
+                {mounted ? t('common.noOpenTabs') : '没有打开的标签页'}
               </div>
             ) : (
               tabs.map((tab) => (
@@ -577,6 +583,13 @@ export function EditorToolbar({
         />
 
         <ThemeToggle />
+
+        <div
+          className="mx-1 h-4 w-px"
+          style={{ backgroundColor: themeConfig.border }}
+        />
+
+        <LanguageToggle />
       </div>
     </div>
   )

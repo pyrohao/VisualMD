@@ -14,6 +14,7 @@ import { cn } from '@/lib/utils'
 import { useSidebarStore } from '@/stores/sidebarStore'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
+import { useTranslation } from '@/stores/languageStore'
 import { TemplateCard } from './template-card'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/hooks/use-toast'
@@ -48,6 +49,7 @@ export function TemplatePanel({ onEditTemplate, onPreviewTemplate }: TemplatePan
   } = useSidebarStore()
   const { createFile, importFile, files } = useFileSystemStore()
   const { getThemeConfig } = useThemeStore()
+  const { t } = useTranslation()
   const [mounted, setMounted] = useState(false)
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
 
@@ -100,15 +102,15 @@ export function TemplatePanel({ onEditTemplate, onPreviewTemplate }: TemplatePan
       const content = getTemplateContent(templateId)
       if (!content) {
         toast({
-          title: '错误',
-          description: '无法加载模板内容',
+          title: t('common.error'),
+          description: t('toast.loadTemplateFailed'),
           variant: 'destructive',
         })
         return
       }
 
       const template = templates.find((t) => t.id === templateId)
-      const baseName = template?.name || '模板'
+      const baseName = template?.name || t('sidebar.templates')
       const fileName = generateUniqueFileName(baseName)
 
       // 使用 importFile 直接创建带模板内容的文件
@@ -118,11 +120,11 @@ export function TemplatePanel({ onEditTemplate, onPreviewTemplate }: TemplatePan
       setActivePanel('files')
 
       toast({
-        title: '模板已应用',
-        description: `已创建文件：${fileName}`,
+        title: t('toast.templateApplied'),
+        description: `${t('file.fileName')}: ${fileName}`,
       })
     },
-    [getTemplateContent, templates, generateUniqueFileName, importFile, setActivePanel]
+    [getTemplateContent, templates, generateUniqueFileName, importFile, setActivePanel, t]
   )
 
   // 编辑模板
@@ -176,13 +178,13 @@ export function TemplatePanel({ onEditTemplate, onPreviewTemplate }: TemplatePan
       const template = templates.find((t) => t.id === templateToDelete)
       deleteTemplate(templateToDelete)
       toast({
-        title: '模板已删除',
-        description: `模板"${template?.name}"已被删除`,
+        title: t('toast.templateDeleted'),
+        description: `${t('sidebar.templates')}: ${template?.name}`,
       })
       setTemplateToDelete(null)
       setDeleteDialogOpen(false)
     }
-  }, [deleteTemplate, templateToDelete, templates])
+  }, [deleteTemplate, templateToDelete, templates, t])
 
   // 取消删除
   const handleCancelDelete = useCallback(() => {
@@ -208,8 +210,8 @@ export function TemplatePanel({ onEditTemplate, onPreviewTemplate }: TemplatePan
         // 检查是否是有效的 Markdown 文件
         if (!file.name.endsWith('.md') && !file.name.endsWith('.markdown')) {
           toast({
-            title: '格式错误',
-            description: '请选择 Markdown 文件 (.md 或 .markdown)',
+            title: t('toast.formatError'),
+            description: t('toast.selectMarkdownFile'),
             variant: 'destructive',
           })
           return
@@ -217,18 +219,18 @@ export function TemplatePanel({ onEditTemplate, onPreviewTemplate }: TemplatePan
 
         addTemplate({
           name: fileName,
-          description: `从文件导入的模板：${file.name}`,
+          description: `${t('sidebar.importTemplateFile')}: ${file.name}`,
           content,
         })
 
         toast({
-          title: '模板导入成功',
-          description: `已导入模板：${fileName}`,
+          title: t('toast.importSuccess'),
+          description: `${t('sidebar.templates')}: ${fileName}`,
         })
       } catch (error) {
         toast({
-          title: '导入失败',
-          description: '无法读取文件内容',
+          title: t('toast.importFailed'),
+          description: t('toast.cannotReadFile'),
           variant: 'destructive',
         })
       }
@@ -236,31 +238,31 @@ export function TemplatePanel({ onEditTemplate, onPreviewTemplate }: TemplatePan
       // 重置 input
       e.target.value = ''
     },
-    [addTemplate]
+    [addTemplate, t]
   )
 
   // 新建空白模板
   const handleCreateNewTemplate = useCallback(() => {
     const defaultTemplateContent = `---
-name: 新模板
-description: 模板描述
+name: ${t('sidebar.newTemplate')}
+description: ${t('node.metadataDescription')}
 ---
 
-# 新模板
+# ${t('sidebar.newTemplate')}
 
-在这里编辑你的模板内容...
+${t('node.nodeContent')}...
 `
     addTemplate({
-      name: '新模板',
-      description: '自定义模板',
+      name: t('sidebar.newTemplate'),
+      description: t('node.metadataDescription'),
       content: defaultTemplateContent,
     })
 
     toast({
-      title: '模板创建成功',
-      description: '已创建新模板，右键点击编辑内容',
+      title: t('toast.templateCreated'),
+      description: t('sidebar.rightClickForMore'),
     })
-  }, [addTemplate])
+  }, [addTemplate, t])
 
   // 获取要删除的模板信息
   const templateToDeleteInfo = templateToDelete
@@ -286,7 +288,7 @@ description: 模板描述
         open={deleteDialogOpen}
         onOpenChange={setDeleteDialogOpen}
         itemName={templateToDeleteInfo?.name || ''}
-        title="确认删除模板"
+        title={t('template.confirmDelete')}
         onConfirm={handleConfirmDelete}
         onCancel={handleCancelDelete}
       />
@@ -305,7 +307,7 @@ description: 模板描述
             className="font-medium"
             style={{ color: themeConfig.text }}
           >
-            模板库
+            {t('sidebar.templateLibrary')}
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -323,7 +325,7 @@ description: 模板描述
             <DropdownMenuTrigger asChild>
               <button
                 className="p-1.5 rounded hover:bg-white/10 transition-colors"
-                title="新增模板"
+                title={t('sidebar.addTemplate')}
               >
                 <Plus className="w-4 h-4" style={{ color: themeConfig.primary }} />
               </button>
@@ -331,11 +333,11 @@ description: 模板描述
             <DropdownMenuContent align="end" className="w-40">
               <DropdownMenuItem onClick={handleCreateNewTemplate} className="gap-2">
                 <FilePlus className="w-4 h-4" />
-                <span>新建空白模板</span>
+                <span>{t('sidebar.newBlankTemplate')}</span>
               </DropdownMenuItem>
               <DropdownMenuItem onClick={handleImportTemplate} className="gap-2">
                 <Upload className="w-4 h-4" />
-                <span>导入模板文件</span>
+                <span>{t('sidebar.importTemplateFile')}</span>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -349,7 +351,7 @@ description: 模板描述
             className="flex items-center justify-center h-32"
             style={{ color: themeConfig.textMuted }}
           >
-            <span className="text-sm">加载模板中...</span>
+            <span className="text-sm">{t('toast.loadingTemplates')}</span>
           </div>
         ) : templates.length === 0 ? (
           <div
@@ -357,7 +359,7 @@ description: 模板描述
             style={{ color: themeConfig.textMuted }}
           >
             <LayoutTemplate className="w-8 h-8 mb-2 opacity-50" />
-            <span className="text-sm mb-1">暂无模板</span>
+            <span className="text-sm mb-1">{t('sidebar.noTemplates')}</span>
             <div className="flex flex-col gap-2 mt-2">
               <Button
                 variant="ghost"
@@ -366,7 +368,7 @@ description: 模板描述
                 className="text-xs"
               >
                 <FilePlus className="w-3 h-3 mr-1" />
-                新建模板
+                {t('sidebar.newTemplate')}
               </Button>
               <Button
                 variant="ghost"
@@ -375,7 +377,7 @@ description: 模板描述
                 className="text-xs"
               >
                 <Upload className="w-3 h-3 mr-1" />
-                导入模板
+                {t('sidebar.importTemplate')}
               </Button>
             </div>
           </div>
@@ -414,7 +416,7 @@ description: 模板描述
           color: themeConfig.textMuted,
         }}
       >
-        右键点击模板查看更多选项
+        {t('sidebar.rightClickForMore')}
       </div>
     </div>
   )

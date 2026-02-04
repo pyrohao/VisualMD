@@ -13,6 +13,7 @@ import { useState, useEffect } from 'react'
 import { Settings, Key, Globe, Cpu, TestTube, AlertCircle, CheckCircle, Eye, EyeOff } from 'lucide-react'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { useSettingsStore, PRESET_PROVIDERS, type AIProvider } from '@/stores/settingsStore'
+import { useTranslation } from '@/stores/languageStore'
 import { createAIService } from '@/lib/ai-service'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -23,10 +24,26 @@ export function SettingsPanel() {
   const { getThemeConfig } = useThemeStore()
   const [mounted, setMounted] = useState(false)
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
+  const { t } = useTranslation()
 
   useEffect(() => {
     setMounted(true)
   }, [])
+
+  // 获取翻译后的提供商名称
+  const getProviderDisplayName = (presetId: string, presetName: string) => {
+    if (!mounted) return presetName
+    const names: Record<string, string> = {
+      'openai': 'OpenAI',
+      'volcengine': t('settings.volcengine') || '火山引擎',
+      'siliconflow': t('settings.siliconflow') || '硅基流动',
+      'zhipu': t('settings.zhipu') || '智谱AI',
+      'qianwen': t('settings.qianwen') || '通义千问',
+      'openrouter': 'OpenRouter',
+      'custom': t('settings.custom') || '自定义',
+    }
+    return names[presetId] || presetName
+  }
   
   const { 
     activeProvider,
@@ -73,8 +90,8 @@ export function SettingsPanel() {
     
     if (!currentConfig.baseUrl || !apiKey) {
       toast({
-        title: '配置不完整',
-        description: '请填写API地址和密钥',
+        title: t('settings.configIncomplete'),
+        description: t('settings.enterApiInfo'),
         variant: 'destructive',
       })
       return
@@ -95,21 +112,21 @@ export function SettingsPanel() {
       
       if (result.success) {
         toast({
-          title: '连接成功',
+          title: t('settings.connectionSuccess'),
           description: result.message,
         })
       } else {
         toast({
-          title: '连接失败',
+          title: t('settings.connectionFailed'),
           description: result.message,
           variant: 'destructive',
         })
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : '测试失败'
+      const message = error instanceof Error ? error.message : t('settings.connectionFailed')
       setProviderTestStatus(activeProvider, false, message)
       toast({
-        title: '连接失败',
+        title: t('settings.connectionFailed'),
         description: message,
         variant: 'destructive',
       })
@@ -124,7 +141,7 @@ export function SettingsPanel() {
   const handleApplyPreset = () => {
     applyPresetProvider(activeProvider)
     toast({
-      title: '已恢复默认配置',
+      title: t('settings.restored'),
       description: PRESET_PROVIDERS.find(p => p.id === activeProvider)?.name,
     })
   }
@@ -135,7 +152,7 @@ export function SettingsPanel() {
       <div className="flex h-14 items-center border-b px-4" style={{ borderColor: themeConfig.border }}>
         <Settings className="mr-2 h-5 w-5" style={{ color: themeConfig.primary }} />
         <h2 className="text-sm font-semibold" style={{ color: themeConfig.heading }}>
-          设置
+          {mounted ? t('settings.title') : '设置'}
         </h2>
       </div>
       
@@ -148,7 +165,7 @@ export function SettingsPanel() {
             <div className="flex items-center gap-2">
               <Cpu className="h-4 w-4" style={{ color: themeConfig.primary }} />
               <h3 className="text-sm font-medium" style={{ color: themeConfig.heading }}>
-                AI 提供商
+                {mounted ? t('settings.aiProvider') : 'AI 提供商'}
               </h3>
             </div>
             
@@ -164,13 +181,13 @@ export function SettingsPanel() {
                     key={preset.id}
                     onClick={() => handleProviderSelect(preset.id)}
                     className="flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-all"
-                    style={{ 
+                    style={{
                       borderColor: isActive ? themeConfig.primary : themeConfig.border,
                       backgroundColor: isActive ? `${themeConfig.primary}15` : themeConfig.card,
                       color: isActive ? themeConfig.primary : themeConfig.text,
                     }}
                   >
-                    <span>{preset.name}</span>
+                    <span>{getProviderDisplayName(preset.id, preset.name)}</span>
                     {isConfigured && (
                       <CheckCircle className="h-3 w-3" style={{ color: themeConfig.success }} />
                     )}
@@ -191,12 +208,12 @@ export function SettingsPanel() {
               {currentConfig.isTested ? (
                 <>
                   <CheckCircle className="h-4 w-4" />
-                  <span>已配置并测试通过</span>
+                  <span>{mounted ? t('settings.configured') : '已配置并测试通过'}</span>
                 </>
               ) : (
                 <>
                   <AlertCircle className="h-4 w-4" />
-                  <span>未测试或测试未通过</span>
+                  <span>{mounted ? t('settings.notTested') : '未测试或测试未通过'}</span>
                 </>
               )}
             </div>
@@ -205,14 +222,14 @@ export function SettingsPanel() {
             <div className="space-y-3 rounded-lg border p-4" style={{ borderColor: themeConfig.border }}>
               <div className="flex items-center justify-between">
                 <Label className="text-xs font-medium" style={{ color: themeConfig.textMuted }}>
-                  {currentConfig.name} 配置
+                  {getProviderDisplayName(activeProvider, currentConfig.name)} {mounted ? t('common.config') : '配置'}
                 </Label>
                 <button
                   onClick={handleApplyPreset}
                   className="text-xs transition-opacity hover:opacity-70"
                   style={{ color: themeConfig.primary }}
                 >
-                  恢复默认
+                  {mounted ? t('settings.restoreDefault') : '恢复默认'}
                 </button>
               </div>
               
@@ -221,7 +238,7 @@ export function SettingsPanel() {
                 <div className="flex items-center gap-1.5">
                   <Globe className="h-3.5 w-3.5" style={{ color: themeConfig.textMuted }} />
                   <Label className="text-xs" style={{ color: themeConfig.text }}>
-                    API地址
+                    {mounted ? t('settings.apiAddress') : 'API地址'}
                   </Label>
                 </div>
                 <Input
@@ -242,7 +259,7 @@ export function SettingsPanel() {
                 <div className="flex items-center gap-1.5">
                   <Key className="h-3.5 w-3.5" style={{ color: themeConfig.textMuted }} />
                   <Label className="text-xs" style={{ color: themeConfig.text }}>
-                    API密钥
+                    {mounted ? t('settings.apiKey') : 'API密钥'}
                   </Label>
                 </div>
                 <div className="relative">
@@ -271,7 +288,7 @@ export function SettingsPanel() {
                   </button>
                 </div>
                 <p className="text-xs" style={{ color: themeConfig.textMuted }}>
-                  密钥将加密存储在本地
+                  {mounted ? t('settings.keyStoredLocally') : '密钥将加密存储在本地'}
                 </p>
               </div>
               
@@ -280,7 +297,7 @@ export function SettingsPanel() {
                 <div className="flex items-center gap-1.5">
                   <Cpu className="h-3.5 w-3.5" style={{ color: themeConfig.textMuted }} />
                   <Label className="text-xs" style={{ color: themeConfig.text }}>
-                    模型名称
+                    {mounted ? t('settings.modelName') : '模型名称'}
                   </Label>
                 </div>
                 <Input
@@ -311,12 +328,12 @@ export function SettingsPanel() {
               {isTesting ? (
                 <>
                   <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                  测试中...
+                  {mounted ? t('settings.testing') : '测试中...'}
                 </>
               ) : (
                 <>
                   <TestTube className="mr-2 h-4 w-4" />
-                  测试连接
+                  {mounted ? t('settings.testConnection') : '测试连接'}
                 </>
               )}
             </Button>

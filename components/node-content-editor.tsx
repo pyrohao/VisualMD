@@ -8,6 +8,7 @@
 import { Type, FileText, Info } from 'lucide-react'
 import { Input } from './ui/input'
 import { Textarea } from './ui/textarea'
+import { useTranslation } from '@/stores/languageStore'
 
 interface NodeContentEditorProps {
   title: string
@@ -31,18 +32,20 @@ export function NodeContentEditor({
   onTitleChange,
   onContentChange,
 }: NodeContentEditorProps) {
+  const { t } = useTranslation()
+
   return (
     <div className="space-y-6">
       {/* 标题编辑 */}
       <div className="space-y-3">
         <label className="flex items-center gap-2 text-sm font-medium" style={{ color: themeConfig.heading }}>
           <Type className="w-4 h-4" style={{ color: themeConfig.accent }} />
-          标题
+          {t('node.title')}
         </label>
         <Input
           value={title}
           onChange={(e) => onTitleChange(e.target.value)}
-          placeholder="输入节点标题..."
+          placeholder={t('node.enterTitle')}
           className="h-12 text-base border-2"
           style={{
             backgroundColor: themeConfig.card,
@@ -56,7 +59,7 @@ export function NodeContentEditor({
       <div className="space-y-3">
         <label className="flex items-center gap-2 text-sm font-medium" style={{ color: themeConfig.heading }}>
           <FileText className="w-4 h-4" style={{ color: themeConfig.accent }} />
-          内容
+          {t('node.content')}
         </label>
         <div
           className="rounded-xl border-2 overflow-hidden"
@@ -69,7 +72,7 @@ export function NodeContentEditor({
           <Textarea
             value={content}
             onChange={(e) => onContentChange(e.target.value)}
-            placeholder="输入节点内容（可选）...\n\n支持 Markdown 格式"
+            placeholder={t('node.enterContent')}
             className="w-full h-full resize-none border-0 font-mono text-sm leading-relaxed p-4 focus:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0"
             style={{
               backgroundColor: 'transparent',
@@ -79,7 +82,7 @@ export function NodeContentEditor({
         </div>
         <p className="text-xs flex items-center gap-1" style={{ color: themeConfig.muted }}>
           <Info className="w-3 h-3" />
-          支持 Markdown 格式，内容将显示在节点下方
+          {t('node.markdownSupport')}
         </p>
       </div>
     </div>
