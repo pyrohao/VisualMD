@@ -35,6 +35,18 @@ export interface Translations {
     aiConfigInvalid: string
     configureApiFirst: string
     model: string
+    // 错误提示
+     detachedNodeNotFound: string
+     levelMismatchConnect: string
+     childrenMovedToDetached: string
+     parentNodeNotFound: string
+     levelMismatchRoot: string
+     levelMismatch: string
+     cycleError: string
+     parentChanged: string
+     detachFailed: string
+     nodeNotFound: string
+     maxLevelReached: string
   }
   // 文件操作
   file: {
@@ -269,6 +281,18 @@ export const translations: Record<Language, Translations> = {
       aiConfigInvalid: 'AI配置无效',
       configureApiFirst: '请先在设置中配置并测试API',
       model: '模型',
+      // 错误提示
+      detachedNodeNotFound: '目标节点必须大于当前节点',
+      levelMismatchConnect: '目标节点必须大于当前节点',
+      childrenMovedToDetached: '子节点已移至断开节点面板',
+      parentNodeNotFound: '找不到目标父节点',
+      levelMismatchRoot: '当前节点层级与虚拟根节点不匹配',
+      levelMismatch: '目标节点必须大于当前节点',
+      cycleError: '不能将节点连接到其自身的后代节点下',
+      parentChanged: '父节点位置已改变，请重试',
+      detachFailed: '断开节点失败',
+      nodeNotFound: '找不到要断开的节点',
+      maxLevelReached: '已达到最大层级限制（6级），无法继续添加子节点',
     },
     file: {
       newFile: '新建文件',
@@ -492,6 +516,18 @@ export const translations: Record<Language, Translations> = {
       aiConfigInvalid: 'AI configuration invalid',
       configureApiFirst: 'Please configure and test API in settings first',
       model: 'Model',
+      // Error messages
+      detachedNodeNotFound: 'Target node level must be greater than current node',
+      levelMismatchConnect: 'Target node level must be greater than current node',
+      childrenMovedToDetached: 'Child nodes have been moved to detached panel',
+      parentNodeNotFound: 'Target parent node not found',
+      levelMismatchRoot: 'Current node level does not match virtual root',
+      levelMismatch: 'Target node level must be greater than current node',
+      cycleError: 'Cannot connect node to its own descendant',
+      parentChanged: 'Parent node position has changed, please try again',
+      detachFailed: 'Failed to detach node',
+      nodeNotFound: 'Node not found',
+      maxLevelReached: 'Maximum level limit reached (6 levels), cannot add more child nodes',
     },
     file: {
       newFile: 'New File',

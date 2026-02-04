@@ -310,7 +310,7 @@ export function NodeEditPanel() {
       if (mode === 'current') {
         // 仅删除当前节点，子节点变为断开节点
         deleteNodeOnly(selectedNodeId)
-        toast({ title: t('toast.deleted'), description: '子节点已移至断开节点面板' })
+        toast({ title: t('toast.deleted'), description: t('common.childrenMovedToDetached') })
       } else {
         // 删除当前节点及所有子节点
         deleteNode(selectedNodeId)

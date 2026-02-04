@@ -80,8 +80,7 @@ export function FlowCanvas() {
     onSave: () => {
       markAsSaved()
       toast({
-        title: '已保存',
-        description: '文档已保存',
+        title: t('toast.saved'),
       })
     },
   })
@@ -401,8 +400,7 @@ export function FlowCanvas() {
       // 检查层级限制
       if (parentNode.level >= 6) {
         toast({
-          title: '已达到最大层级限制',
-          description: '无法继续添加子节点（最大6级）',
+          title: t('common.maxLevelReached'),
           variant: 'destructive',
         })
         // 重置连接状态
@@ -586,8 +584,11 @@ export function FlowCanvas() {
       const expectedLevel = sourceNode.level + 1
       if (targetNode.level !== expectedLevel) {
         toast({
-          title: '层级不匹配',
-          description: `H${targetNode.level} 节点不能连接到 H${sourceNode.level} 节点下。只能连接 H${expectedLevel} 节点。`,
+          title: t('common.error'),
+          description: t('common.levelMismatchConnect')
+            .replace('{child}', String(targetNode.level))
+            .replace('{parent}', String(sourceNode.level))
+            .replace('{expected}', String(expectedLevel)),
           variant: 'destructive',
         })
         return
@@ -712,7 +713,7 @@ export function FlowCanvas() {
     if (error) {
       // 显示错误提示
       toast({
-        title: '错误',
+        title: t('common.error'),
         description: error,
         variant: 'destructive',
       })

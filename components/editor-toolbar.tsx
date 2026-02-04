@@ -161,7 +161,7 @@ export function EditorToolbar({
 
       const success = exportAsMarkdown(latestContent, activeTab.fileName)
       if (success) {
-        toast({ title: t('file.exportSuccess'), description: '已导出为 Markdown 文件' })
+        toast({ title: t('file.exportSuccess') })
       }
     } catch (error) {
       console.error('Failed to export file:', error)

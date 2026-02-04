@@ -1,7 +1,11 @@
 # Visual MD — 可视化Markdown编辑器
 
 <p align="center">
-  <strong>Markdown 文档智能转可视化树状结构，直观呈现文档骨架，快速梳理内容脉络，让编辑、阅读、梳理更省心</strong>
+  <img src="./public/apple-icon.png" alt="Visual MD" width="120">
+</p>
+
+<p align="center">
+  <strong>THINK IN TREES!</strong>
 </p>
 
 <p align="center">

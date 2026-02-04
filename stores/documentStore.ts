@@ -19,6 +19,7 @@ import { generateFromState, generateMarkdown } from '@/lib/markdown-generator'
 import { useHistoryStore, injectGetDocumentState } from './historyStore'
 import { saveEditorState, loadEditorState, createEditorState } from '@/lib/editor-state-storage'
 import { findNodeInDetached } from '@/lib/flow-helpers'
+import { useLanguageStore } from './languageStore'
 
 /**
  * 文档Store状态接口
@@ -807,7 +808,8 @@ export const useDocumentStore = create<DocumentStore>()(
 
           // 检查层级限制（最大6级）
           if (parentNode.level >= 6) {
-            set({ error: '已达到最大层级限制（6级），无法继续添加子节点' })
+            const { t } = useLanguageStore.getState()
+            set({ error: t('common.maxLevelReached') })
             return null
           }
 
@@ -878,7 +880,8 @@ export const useDocumentStore = create<DocumentStore>()(
             const { root: newRoot, detachedNode } = detachNodeFromTree(document.root, nodeId)
             
             if (!detachedNode) {
-              set({ error: '断开节点失败' })
+              const { t } = useLanguageStore.getState()
+              set({ error: t('common.detachFailed') })
               return
             }
 
@@ -907,7 +910,8 @@ export const useDocumentStore = create<DocumentStore>()(
             // 在断开节点中查找（处理断开节点内部的边删除）
             const detachedNode = findNodeInDetached(document.detachedNodes || [], nodeId)
             if (!detachedNode) {
-              set({ error: '找不到要断开的节点' })
+              const { t } = useLanguageStore.getState()
+              set({ error: t('common.nodeNotFound') })
               return
             }
 
@@ -918,7 +922,8 @@ export const useDocumentStore = create<DocumentStore>()(
             )
             
             if (!extractedNode) {
-              set({ error: '断开节点失败' })
+              const { t } = useLanguageStore.getState()
+              set({ error: t('common.detachFailed') })
               return
             }
 
@@ -952,7 +957,8 @@ export const useDocumentStore = create<DocumentStore>()(
           const nodeIndex = detachedNodes.findIndex((n: TreeNode) => n.id === nodeId)
 
           if (nodeIndex === -1) {
-            set({ error: '找不到断开的节点' })
+            const { t } = useLanguageStore.getState()
+            set({ error: t('common.detachedNodeNotFound') })
             return
           }
 
@@ -973,7 +979,8 @@ export const useDocumentStore = create<DocumentStore>()(
           }
 
           if (!parentNode) {
-            set({ error: '找不到目标父节点' })
+            const { t } = useLanguageStore.getState()
+            set({ error: t('common.parentNodeNotFound') })
             return
           }
 
@@ -986,7 +993,8 @@ export const useDocumentStore = create<DocumentStore>()(
               // 虚拟根节点已有子节点，检查层级是否匹配
               const expectedLevel = rootChildrenLevels[0]
               if (detachedNode.level !== expectedLevel) {
-                set({ error: `虚拟根节点只能连接 H${expectedLevel} 层级的节点，当前节点是 H${detachedNode.level}` })
+                const { t } = useLanguageStore.getState()
+                set({ error: t('common.levelMismatchRoot').replace('{expected}', String(expectedLevel)).replace('{current}', String(detachedNode.level)) })
                 return
               }
             }
@@ -994,7 +1002,8 @@ export const useDocumentStore = create<DocumentStore>()(
           } else {
             // 非虚拟根节点：验证层级关系，父节点层级必须小于子节点层级
             if (parentNode.level >= detachedNode.level) {
-              set({ error: `不能将 H${detachedNode.level} 节点连接到 H${parentNode.level} 节点下，父节点层级必须小于子节点层级` })
+              const { t } = useLanguageStore.getState()
+              set({ error: t('common.levelMismatch').replace('{child}', String(detachedNode.level)).replace('{parent}', String(parentNode.level)) })
               return
             }
           }
@@ -1011,7 +1020,8 @@ export const useDocumentStore = create<DocumentStore>()(
             }
             
             if (checkCycleInDetached(detachedNode, parentId)) {
-              set({ error: '不能将节点连接到其自身的后代节点下' })
+              const { t } = useLanguageStore.getState()
+              set({ error: t('common.cycleError') })
               return
             }
           } else {
@@ -1019,7 +1029,8 @@ export const useDocumentStore = create<DocumentStore>()(
             let currentParent = findParentInTree(document.root, parentId)
             while (currentParent) {
               if (currentParent.id === nodeId) {
-                set({ error: '不能将节点连接到其自身的后代节点下' })
+                const { t } = useLanguageStore.getState()
+                set({ error: t('common.cycleError') })
                 return
               }
               currentParent = findParentInTree(document.root, currentParent.id)
@@ -1036,7 +1047,8 @@ export const useDocumentStore = create<DocumentStore>()(
             // 更新父节点在数组中的位置（因为可能改变了）
             const updatedParentIndex = updatedDetachedNodes.findIndex((n: TreeNode) => n.id === parentId)
             if (updatedParentIndex === -1) {
-              set({ error: '父节点位置已改变，请重试' })
+              const { t } = useLanguageStore.getState()
+              set({ error: t('common.parentChanged') })
               return
             }
             
