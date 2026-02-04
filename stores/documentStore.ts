@@ -762,7 +762,7 @@ export const useDocumentStore = create<DocumentStore>()(
         },
 
         deleteNodeOnly: (nodeId: string) => {
-          const { document, selectedNodeId } = get()
+          const { document, selectedNodeId, expandedNodeIds } = get()
           if (!document || nodeId === 'root') return
 
           // 添加历史记录
@@ -776,16 +776,25 @@ export const useDocumentStore = create<DocumentStore>()(
 
           // 将孤儿节点添加到 detachedNodes
           const currentDetachedNodes = (document as any).detachedNodes || []
+          const newDetachedNodes = [...currentDetachedNodes, ...orphanedChildren]
 
           set({
             document: {
               ...document,
               root: newRoot,
-              detachedNodes: [...currentDetachedNodes, ...orphanedChildren],
+              detachedNodes: newDetachedNodes,
               isModified: true
             },
             selectedNodeId: selectedNodeId === nodeId ? null : selectedNodeId
           })
+
+          // 自动保存编辑器状态
+          if (document.fileId) {
+            const state = createEditorState(document.fileId)
+            state.detachedNodes = newDetachedNodes
+            state.expandedNodeIds = Array.from(expandedNodeIds)
+            saveEditorState(state)
+          }
         },
 
         addChildNode: (parentId: string, title: string, insertIndex?: number) => {
@@ -858,7 +867,7 @@ export const useDocumentStore = create<DocumentStore>()(
         },
 
         detachNode: (nodeId: string) => {
-          const { document } = get()
+          const { document, expandedNodeIds } = get()
           if (!document || nodeId === 'root') return
 
           // 先在树中查找节点
@@ -875,16 +884,25 @@ export const useDocumentStore = create<DocumentStore>()(
 
             // 将断开的节点存储在文档的 detachedNodes 中
             const detachedNodes = (document as any).detachedNodes || []
+            const newDetachedNodes = [...detachedNodes, detachedNode]
             
             set({ 
               document: { 
                 ...document, 
                 root: newRoot,
-                detachedNodes: [...detachedNodes, detachedNode],
+                detachedNodes: newDetachedNodes,
                 isModified: true 
               },
               error: null
             })
+
+            // 自动保存编辑器状态
+            if (document.fileId) {
+              const state = createEditorState(document.fileId)
+              state.detachedNodes = newDetachedNodes
+              state.expandedNodeIds = Array.from(expandedNodeIds)
+              saveEditorState(state)
+            }
           } else {
             // 在断开节点中查找（处理断开节点内部的边删除）
             const detachedNode = findNodeInDetached(document.detachedNodes || [], nodeId)
@@ -904,19 +922,29 @@ export const useDocumentStore = create<DocumentStore>()(
               return
             }
 
+            const finalDetachedNodes = [...newDetachedNodes, extractedNode]
+
             set({ 
               document: { 
                 ...document, 
-                detachedNodes: [...newDetachedNodes, extractedNode],
+                detachedNodes: finalDetachedNodes,
                 isModified: true 
               },
               error: null
             })
+
+            // 自动保存编辑器状态
+            if (document.fileId) {
+              const state = createEditorState(document.fileId)
+              state.detachedNodes = finalDetachedNodes
+              state.expandedNodeIds = Array.from(expandedNodeIds)
+              saveEditorState(state)
+            }
           }
         },
 
         connectNode: (nodeId: string, parentId: string) => {
-          const { document } = get()
+          const { document, expandedNodeIds } = get()
           if (!document) return
 
           // 从 detachedNodes 中找到要连接的节点
@@ -1041,6 +1069,14 @@ export const useDocumentStore = create<DocumentStore>()(
               },
               error: null
             })
+
+            // 自动保存编辑器状态
+            if (document.fileId) {
+              const state = createEditorState(document.fileId)
+              state.detachedNodes = updatedDetachedNodes
+              state.expandedNodeIds = Array.from(expandedNodeIds)
+              saveEditorState(state)
+            }
           } else {
             // 父节点在树中，将节点连接到树
             const newRoot = connectNodeToTreeWithOriginalLevel(document.root, detachedNode, parentId)
@@ -1057,6 +1093,14 @@ export const useDocumentStore = create<DocumentStore>()(
               },
               error: null
             })
+
+            // 自动保存编辑器状态
+            if (document.fileId) {
+              const state = createEditorState(document.fileId)
+              state.detachedNodes = newDetachedNodes
+              state.expandedNodeIds = Array.from(expandedNodeIds)
+              saveEditorState(state)
+            }
           }
         },
 
