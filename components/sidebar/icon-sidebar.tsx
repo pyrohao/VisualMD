@@ -13,7 +13,7 @@ import { useSidebarStore, type SidebarPanel } from '@/stores/sidebarStore'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { useTranslation } from '@/stores/languageStore'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { HelpDialog } from '../help-dialog'
 
 interface IconItem {
@@ -57,8 +57,9 @@ export function IconSidebar() {
     setHelpDialogOpen(true)
   }
 
-  const ICONS = getIcons(t)
-  const BOTTOM_ICONS = getBottomIcons(t)
+  // 使用 useMemo 缓存图标配置，避免每次渲染重新创建
+  const ICONS = useMemo(() => getIcons(t), [t])
+  const BOTTOM_ICONS = useMemo(() => getBottomIcons(t), [t])
 
   return (
     <TooltipProvider delayDuration={300}>

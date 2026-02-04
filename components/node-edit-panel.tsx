@@ -86,8 +86,8 @@ export function NodeEditPanel() {
     }
   }, [selectedNodeId, selectedNode?.title, selectedNode?.content])
 
-  // ========== 保存逻辑（使用 ref 避免循环依赖）==========
-  const doSave = useCallback(() => {
+  // ========== 自动保存逻辑（仅保存，不重新解析）==========
+  const doAutoSave = useCallback(() => {
     const doc = documentRef.current
     const selNodeId = selectedNodeIdRef.current
     const isVirtRoot = isVirtualRootRef.current
@@ -97,19 +97,24 @@ export function NodeEditPanel() {
     const currFiles = filesRef.current
     const editTemplateId = editingTemplateIdRef.current
 
-    if (!selNodeId || !doc) return
+    console.log('[NodeEditPanel] doAutoSave called:', { selNodeId, isVirtRoot, currTitle: currTitle.trim() })
 
-    // 1. 更新数据到 documentStore
+    if (!selNodeId || !doc) {
+      console.log('[NodeEditPanel] doAutoSave skipped: no selectedNodeId or document')
+      return
+    }
+
+    // 1. 更新数据到 documentStore（仅更新当前节点，不重新解析）
     if (!isVirtRoot) {
-      // 普通节点：更新标题和内容
       const trimmedTitle = currTitle.trim()
       if (trimmedTitle) {
-        updateNode(selNodeId, { title: trimmedTitle, content: currContent || undefined })
+        console.log('[NodeEditPanel] Auto-saving node:', { selNodeId, title: trimmedTitle })
+        useDocumentStore.getState().updateNode(selNodeId, { title: trimmedTitle, content: currContent || undefined })
       }
     }
 
     // 2. 获取最新 Markdown 内容
-    const latestContent = getCurrentMarkdown()
+    const latestContent = useDocumentStore.getState().getCurrentMarkdown()
 
     // 3. 避免重复保存
     if (latestContent === lastSavedContentRef.current) {
@@ -121,13 +126,13 @@ export function NodeEditPanel() {
     if (currFileId && doc.fileName) {
       const currentFile = currFiles.find(f => f.id === currFileId)
       if (currentFile && currentFile.name !== doc.fileName) {
-        renameFile(currFileId, doc.fileName)
+        useFileSystemStore.getState().renameFile(currFileId, doc.fileName)
       }
     }
 
     // 5. 保存到文件系统
     if (currFileId) {
-      saveFileContent(currFileId, latestContent)
+      useFileSystemStore.getState().saveFileContent(currFileId, latestContent)
     } else if (editTemplateId) {
       useSidebarStore.setState((state) => ({
         templates: state.templates.map(t =>
@@ -138,7 +143,70 @@ export function NodeEditPanel() {
         isTemplateModified: false,
       }))
     }
-  }, [updateNode, getCurrentMarkdown, renameFile, saveFileContent])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // ========== 手动保存并重新解析（用于关闭面板时）==========
+  const doSaveAndReparse = useCallback(() => {
+    const doc = documentRef.current
+    const selNodeId = selectedNodeIdRef.current
+    const isVirtRoot = isVirtualRootRef.current
+    const currTitle = titleRef.current
+    const currContent = contentRef.current
+    const currFileId = currentFileIdRef.current
+    const currFiles = filesRef.current
+    const editTemplateId = editingTemplateIdRef.current
+
+    console.log('[NodeEditPanel] doSaveAndReparse called:', { selNodeId, isVirtRoot, currTitle: currTitle.trim() })
+
+    if (!selNodeId || !doc) {
+      console.log('[NodeEditPanel] doSaveAndReparse skipped: no selectedNodeId or document')
+      return
+    }
+
+    // 1. 更新数据到 documentStore
+    if (!isVirtRoot) {
+      const trimmedTitle = currTitle.trim()
+      if (trimmedTitle) {
+        console.log('[NodeEditPanel] Saving and reparsing node:', { selNodeId, title: trimmedTitle })
+        useDocumentStore.getState().updateNode(selNodeId, { title: trimmedTitle, content: currContent || undefined })
+      }
+    }
+
+    // 2. 获取最新 Markdown 内容并重新解析（这会处理内容中的新标题）
+    const latestContent = useDocumentStore.getState().getCurrentMarkdown()
+    console.log('[NodeEditPanel] Regenerating markdown and reparsing...')
+    useDocumentStore.getState().updateFromMarkdown(latestContent)
+
+    // 3. 避免重复保存
+    if (latestContent === lastSavedContentRef.current) {
+      return
+    }
+    lastSavedContentRef.current = latestContent
+
+    // 4. 同步文件名到 fileSystemStore（如果发生变化）
+    if (currFileId && doc.fileName) {
+      const currentFile = currFiles.find(f => f.id === currFileId)
+      if (currentFile && currentFile.name !== doc.fileName) {
+        useFileSystemStore.getState().renameFile(currFileId, doc.fileName)
+      }
+    }
+
+    // 5. 保存到文件系统
+    if (currFileId) {
+      useFileSystemStore.getState().saveFileContent(currFileId, latestContent)
+    } else if (editTemplateId) {
+      useSidebarStore.setState((state) => ({
+        templates: state.templates.map(t =>
+          t.id === editTemplateId
+            ? { ...t, content: latestContent, updatedAt: Date.now() }
+            : t
+        ),
+        isTemplateModified: false,
+      }))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // ========== 自动保存 ==========
   useEffect(() => {
@@ -153,17 +221,17 @@ export function NodeEditPanel() {
       clearTimeout(autoSaveTimeoutRef.current)
     }
 
-    // 设置新的定时器（1秒后自动保存）
+    // 设置自动保存定时器（0.8秒后保存）- 仅保存，不重新解析
     autoSaveTimeoutRef.current = setTimeout(() => {
-      doSave()
-    }, 1000)
+      doAutoSave()
+    }, 800)
 
     return () => {
       if (autoSaveTimeoutRef.current) {
         clearTimeout(autoSaveTimeoutRef.current)
       }
     }
-  }, [title, content, selectedNodeId, doSave])
+  }, [title, content, selectedNodeId, doAutoSave])
 
   // ========== 组件卸载时保存 ==========
   useEffect(() => {
@@ -171,9 +239,28 @@ export function NodeEditPanel() {
       if (autoSaveTimeoutRef.current) {
         clearTimeout(autoSaveTimeoutRef.current)
       }
-      doSave()
+      // 使用 ref 获取最新的值，避免依赖数组问题
+      const selNodeId = selectedNodeIdRef.current
+      const isVirtRoot = isVirtualRootRef.current
+      const currTitle = titleRef.current
+      const currContent = contentRef.current
+
+      // 只有在有选中节点且不是虚拟根节点时才保存
+      if (selNodeId && !isVirtRoot) {
+        const trimmedTitle = currTitle.trim()
+        if (trimmedTitle) {
+          console.log('[NodeEditPanel] Unmounting, saving and reparsing node:', { selNodeId, title: trimmedTitle })
+          useDocumentStore.getState().updateNode(selNodeId, { title: trimmedTitle, content: currContent || undefined })
+          
+          // 重新解析 Markdown 以处理内容中的新标题
+          const latestContent = useDocumentStore.getState().getCurrentMarkdown()
+          console.log('[NodeEditPanel] Unmounting, reparsing markdown...')
+          useDocumentStore.getState().updateFromMarkdown(latestContent)
+        }
+      }
     }
-  }, [doSave])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // ========== 事件处理 ==========
   const handleSave = useCallback(() => {
@@ -181,18 +268,21 @@ export function NodeEditPanel() {
       clearTimeout(autoSaveTimeoutRef.current)
       autoSaveTimeoutRef.current = null
     }
-    doSave()
+    // 保存并重新解析（处理内容中的新标题）
+    doSaveAndReparse()
+    selectNode(null)
     toast({ title: t('toast.saved'), description: t('toast.saved') })
-  }, [doSave, t])
+  }, [doSaveAndReparse, selectNode, t])
 
   const handleClose = useCallback(() => {
     if (autoSaveTimeoutRef.current) {
       clearTimeout(autoSaveTimeoutRef.current)
       autoSaveTimeoutRef.current = null
     }
-    doSave()
+    // 保存并重新解析（处理内容中的新标题）
+    doSaveAndReparse()
     selectNode(null)
-  }, [doSave, selectNode])
+  }, [doSaveAndReparse, selectNode])
 
   // ========== 虚拟节点：元数据变化处理 ==========
   const handleEntriesChange = useCallback((newEntries: MetadataEntry[]) => {

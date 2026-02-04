@@ -15,11 +15,37 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu'
+import { useEffect, useState } from 'react'
 
 export function LanguageSwitcher() {
   const { currentLanguage, setLanguage, t } = useTranslation()
   const { getThemeConfig } = useThemeStore()
+  const [mounted, setMounted] = useState(false)
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+
   const themeConfig = getThemeConfig()
+
+  // 避免 hydration 不匹配，在客户端挂载前使用默认样式
+  if (!mounted) {
+    return (
+      <Button
+        variant="ghost"
+        size="sm"
+        className="gap-2 transition-all duration-200 hover:shadow-sm"
+        style={{
+          color: '#24292f',
+          backgroundColor: '#0969da15',
+          border: '1px solid #d0d7de',
+        }}
+      >
+        <Globe className="w-4 h-4" style={{ color: '#0969da' }} />
+        <span>中文</span>
+      </Button>
+    )
+  }
 
   return (
     <DropdownMenu>
@@ -96,7 +122,32 @@ export function LanguageSwitcher() {
 export function LanguageToggle() {
   const { currentLanguage, toggleLanguage } = useTranslation()
   const { getThemeConfig } = useThemeStore()
+  const [mounted, setMounted] = useState(false)
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+
   const themeConfig = getThemeConfig()
+
+  // 避免 hydration 不匹配，在客户端挂载前使用默认样式
+  if (!mounted) {
+    return (
+      <Button
+        variant="ghost"
+        size="sm"
+        className="gap-2 transition-all duration-200 hover:shadow-sm"
+        style={{
+          color: '#24292f',
+          backgroundColor: '#0969da15',
+          border: '1px solid #d0d7de',
+        }}
+      >
+        <Globe className="w-4 h-4" style={{ color: '#0969da' }} />
+        <span>中文</span>
+      </Button>
+    )
+  }
 
   return (
     <Button

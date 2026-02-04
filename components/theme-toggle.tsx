@@ -12,7 +12,7 @@
 import { Sun, Moon, BookOpen } from 'lucide-react'
 import { Button } from './ui/button'
 import { useThemeStore, type ThemeMode } from '@/stores/themeStore'
-import { useCallback } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 /**
  * 主题配置 - 图标和标签
@@ -34,6 +34,12 @@ const themeIcons: Record<ThemeMode, { label: string; icon: React.ReactNode }> = 
 
 export function ThemeToggle() {
   const { theme, setTheme, getThemeConfig } = useThemeStore()
+  const [mounted, setMounted] = useState(false)
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+
   const themeConfig = getThemeConfig()
   const currentTheme = themeIcons[theme]
 
@@ -43,6 +49,26 @@ export function ThemeToggle() {
     const nextTheme = themes[(currentIndex + 1) % themes.length]
     setTheme(nextTheme)
   }, [theme, setTheme])
+
+  // 避免 hydration 不匹配，在客户端挂载前使用默认样式
+  if (!mounted) {
+    return (
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-9 gap-2 px-3 transition-all duration-200 hover:shadow-sm"
+        style={{
+          color: '#24292f',
+          backgroundColor: '#0969da15',
+          border: '1px solid #d0d7de',
+        }}
+        title="主题切换"
+      >
+        <span style={{ color: '#0969da' }}><Sun className="h-4 w-4" /></span>
+        <span className="text-sm font-medium">明亮</span>
+      </Button>
+    )
+  }
 
   return (
     <Button

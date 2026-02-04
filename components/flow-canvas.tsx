@@ -121,12 +121,16 @@ export function FlowCanvas() {
   const [contextMenuOpen, setContextMenuOpen] = useState(false)
   const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 })
 
-  // 当树结构变化时更新节点和边
+  // 当文档变化时更新节点和边
   useEffect(() => {
     if (!document) return
 
+    console.log('[FlowCanvas] Document changed, regenerating nodes')
+
     const detachedNodes = (document as any).detachedNodes || []
     const { nodes: newNodes, edges: newEdges } = treeToNodesAndEdges(document.root, detachedNodes)
+
+    console.log('[FlowCanvas] Generated', newNodes.length, 'nodes')
 
     // 添加回调函数到节点数据
     const nodesWithCallbacks = newNodes.map(node => ({
@@ -163,7 +167,8 @@ export function FlowCanvas() {
 
     setNodes(nodesWithCallbacks as Node<FlowNodeData>[])
     setEdges(edgesWithStyle)
-  }, [document?.root, (document as any)?.detachedNodes, setNodes, setEdges, updateNode, toggleNode, selectNode, selectedEdgeId, themeConfig])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [document])
 
   // 选中节点变化时更新节点样式
   useEffect(() => {
@@ -173,7 +178,10 @@ export function FlowCanvas() {
         selected: node.id === selectedNodeId,
       }))
     )
-  }, [selectedNodeId, setNodes])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedNodeId])
+
+
 
   // 获取节点的所有子节点ID（递归）- 从文档树和 edges 中查找
   const getAllChildNodeIds = useCallback((nodeId: string): string[] => {
@@ -666,11 +674,12 @@ export function FlowCanvas() {
 
   // 一键整理布局
   const handleLayout = useCallback(() => {
-    if (!document) return
+    const latestDocument = useDocumentStore.getState().document
+    if (!latestDocument) return
 
     // 重新计算布局（包含断开的节点）
-    const detachedNodes = (document as any).detachedNodes || []
-    const positions = calculateTreeLayout(document.root, detachedNodes)
+    const detachedNodes = (latestDocument as any).detachedNodes || []
+    const positions = calculateTreeLayout(latestDocument.root, detachedNodes)
 
     // 更新节点位置
     setNodes((nds) =>
@@ -684,7 +693,8 @@ export function FlowCanvas() {
     setTimeout(() => {
       fitView({ padding: 0.2, duration: 800 })
     }, 100)
-  }, [document, setNodes, fitView])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // 监听错误并自动清除
   useEffect(() => {

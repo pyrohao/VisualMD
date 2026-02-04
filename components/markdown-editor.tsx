@@ -149,6 +149,8 @@ export function MarkdownEditor() {
     initTheme()
   }, [])
 
+
+
   // 监听标签页切换，加载对应内容到编辑器
   useEffect(() => {
     if (!mounted || !activeTab) return
