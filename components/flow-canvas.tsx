@@ -130,7 +130,7 @@ export function FlowCanvas() {
     const detachedNodes = (document as any).detachedNodes || []
     const { nodes: newNodes, edges: newEdges } = treeToNodesAndEdges(document.root, detachedNodes)
 
-    console.log('[FlowCanvas] Generated', newNodes.length, 'nodes')
+    console.log('[FlowCanvas] Generated', newNodes.length, 'nodes', newEdges.length, 'edges')
 
     // 添加回调函数到节点数据
     const nodesWithCallbacks = newNodes.map(node => ({
@@ -155,12 +155,22 @@ export function FlowCanvas() {
       },
     }))
 
+    // 设置边的基础样式
+    const edgesWithStyle = newEdges.map(edge => ({
+      ...edge,
+      style: {
+        stroke: selectedEdgeId === edge.id ? themeConfig.accent : themeConfig.muted,
+        strokeWidth: selectedEdgeId === edge.id ? 3 : 2,
+      },
+      animated: selectedEdgeId === edge.id,
+    }))
+
     setNodes(nodesWithCallbacks as Node<FlowNodeData>[])
-    // 边在下面的 effect 中单独处理
+    setEdges(edgesWithStyle)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [document])
 
-  // 当选中的边变化时，更新边的样式
+  // 当选中的边变化时，更新已有边的样式
   useEffect(() => {
     setEdges((currentEdges) =>
       currentEdges.map(edge => ({

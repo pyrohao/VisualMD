@@ -37,6 +37,8 @@ export interface HistoryEntry {
   description: string
   /** 操作前的文档根节点状态 */
   previousRoot: TreeNode
+  /** 操作前的断开节点 */
+  previousDetachedNodes: TreeNode[]
   /** 操作前的元数据 */
   previousMetadata: DocumentMetadata
   /** 操作时间戳 */
@@ -68,7 +70,7 @@ interface HistoryStore {
    * 添加历史记录
    * @param entry 历史记录条目（不含previousState，由store自动获取当前状态）
    */
-  addHistory: (entry: Omit<HistoryEntry, 'previousRoot' | 'previousMetadata' | 'timestamp'>) => void
+  addHistory: (entry: Omit<HistoryEntry, 'previousRoot' | 'previousDetachedNodes' | 'previousMetadata' | 'timestamp'>) => void
   
   /**
    * 开始批量操作
@@ -122,13 +124,13 @@ interface HistoryStore {
 /**
  * 外部获取当前文档状态的函数（由documentStore注入）
  */
-let getCurrentDocumentState: (() => { root: TreeNode; metadata: DocumentMetadata } | null) | null = null
+let getCurrentDocumentState: (() => { root: TreeNode; detachedNodes: TreeNode[]; metadata: DocumentMetadata } | null) | null = null
 
 /**
  * 注入获取文档状态的函数
  * 在documentStore初始化时调用
  */
-export function injectGetDocumentState(fn: () => { root: TreeNode; metadata: DocumentMetadata } | null) {
+export function injectGetDocumentState(fn: () => { root: TreeNode; detachedNodes: TreeNode[]; metadata: DocumentMetadata } | null) {
   getCurrentDocumentState = fn
 }
 
@@ -171,6 +173,7 @@ export const useHistoryStore = create<HistoryStore>()(
         const historyEntry: HistoryEntry = {
           ...entry,
           previousRoot: deepCloneTree(currentState.root),
+          previousDetachedNodes: (currentState.detachedNodes || []).map(n => deepCloneTree(n)),
           previousMetadata: { ...currentState.metadata },
           timestamp: Date.now(),
         }
@@ -213,6 +216,7 @@ export const useHistoryStore = create<HistoryStore>()(
             type: 'batch',
             description,
             previousRoot: deepCloneTree(currentState.root),
+            previousDetachedNodes: (currentState.detachedNodes || []).map(n => deepCloneTree(n)),
             previousMetadata: { ...currentState.metadata },
             timestamp: Date.now(),
           }
@@ -267,6 +271,7 @@ export const useHistoryStore = create<HistoryStore>()(
           type: previousEntry.type,
           description: previousEntry.description,
           previousRoot: deepCloneTree(currentState.root),
+          previousDetachedNodes: (currentState.detachedNodes || []).map(n => deepCloneTree(n)),
           previousMetadata: { ...currentState.metadata },
           timestamp: Date.now(),
         }
@@ -280,6 +285,7 @@ export const useHistoryStore = create<HistoryStore>()(
         // 返回要恢复的状态
         return {
           root: previousEntry.previousRoot,
+          detachedNodes: previousEntry.previousDetachedNodes,
           metadata: previousEntry.previousMetadata,
         }
       },
@@ -307,6 +313,7 @@ export const useHistoryStore = create<HistoryStore>()(
           type: nextEntry.type,
           description: nextEntry.description,
           previousRoot: deepCloneTree(currentState.root),
+          previousDetachedNodes: (currentState.detachedNodes || []).map(n => deepCloneTree(n)),
           previousMetadata: { ...currentState.metadata },
           timestamp: Date.now(),
         }
@@ -320,6 +327,7 @@ export const useHistoryStore = create<HistoryStore>()(
         // 返回要恢复的状态
         return {
           root: nextEntry.previousRoot,
+          detachedNodes: nextEntry.previousDetachedNodes,
           metadata: nextEntry.previousMetadata,
         }
       },

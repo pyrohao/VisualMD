@@ -587,6 +587,7 @@ export const useDocumentStore = create<DocumentStore>()(
         if (!document) return null
         return {
           root: document.root,
+          detachedNodes: (document as any).detachedNodes || [],
           metadata: document.metadata
         }
       })
@@ -1290,7 +1291,7 @@ export const useDocumentStore = create<DocumentStore>()(
 
         undo: () => {
           const historyState = useHistoryStore.getState()
-          const result = historyState.undo()
+          const result = historyState.undo() as { root: TreeNode; detachedNodes: TreeNode[]; metadata: DocumentMetadata } | null
           
           if (result) {
             const { document } = get()
@@ -1299,6 +1300,7 @@ export const useDocumentStore = create<DocumentStore>()(
                 document: {
                   ...document,
                   root: result.root,
+                  detachedNodes: result.detachedNodes,
                   metadata: result.metadata,
                   isModified: true
                 }
@@ -1309,7 +1311,7 @@ export const useDocumentStore = create<DocumentStore>()(
 
         redo: () => {
           const historyState = useHistoryStore.getState()
-          const result = historyState.redo()
+          const result = historyState.redo() as { root: TreeNode; detachedNodes: TreeNode[]; metadata: DocumentMetadata } | null
           
           if (result) {
             const { document } = get()
@@ -1318,6 +1320,7 @@ export const useDocumentStore = create<DocumentStore>()(
                 document: {
                   ...document,
                   root: result.root,
+                  detachedNodes: result.detachedNodes,
                   metadata: result.metadata,
                   isModified: true
                 }
