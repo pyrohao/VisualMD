@@ -155,20 +155,25 @@ export function FlowCanvas() {
       },
     }))
 
-    // 更新边的样式，支持选中状态
-    const edgesWithStyle = newEdges.map(edge => ({
-      ...edge,
-      style: {
-        stroke: selectedEdgeId === edge.id ? themeConfig.accent : themeConfig.muted,
-        strokeWidth: selectedEdgeId === edge.id ? 3 : 2,
-      },
-      animated: selectedEdgeId === edge.id,
-    }))
-
     setNodes(nodesWithCallbacks as Node<FlowNodeData>[])
-    setEdges(edgesWithStyle)
+    // 边在下面的 effect 中单独处理
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [document])
+
+  // 当选中的边变化时，更新边的样式
+  useEffect(() => {
+    setEdges((currentEdges) =>
+      currentEdges.map(edge => ({
+        ...edge,
+        style: {
+          stroke: selectedEdgeId === edge.id ? themeConfig.accent : themeConfig.muted,
+          strokeWidth: selectedEdgeId === edge.id ? 3 : 2,
+        },
+        animated: selectedEdgeId === edge.id,
+      }))
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedEdgeId, themeConfig])
 
   // 选中节点变化时更新节点样式
   useEffect(() => {
