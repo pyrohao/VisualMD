@@ -27,75 +27,264 @@ import { useSidebarStore as useTemplateStore } from '@/stores/sidebarStore'
 import { EmptyTabView } from './empty-tab-view'
 
 /**
- * 默认示例Markdown内容
+ * 默认示例Markdown内容（英文版）
  */
-const defaultMarkdown = `---
-name: Markdown Visual Editor
-description: A visual editor for markdown documents
+const defaultMarkdownEN = `---
+title: Markdown Visual Editor
 author: PyroHao
-version: 1.0.0
+description: A visual node-based editor for markdown documents
 ---
 
-# Markdown可视化编辑器
+# Markdown Visual Editor
 
-欢迎使用Markdown可视化编辑器！这是一个创新的工具，将Markdown文档转换为可视化的树状结构。
+Welcome to the Markdown Visual Editor! This innovative tool transforms Markdown documents into an interactive node-based tree structure, making document organization intuitive and efficient.
+
+## Core Features
+
+### Visual Node Tree
+
+- **Interactive Canvas**: Drag and drop nodes to reorganize content
+- **Real-time Sync**: Changes reflect instantly across all views
+- **Node Connections**: Visualize document hierarchy with connected edges
+- **Detach & Reattach**: Break connections and reconnect nodes freely
+
+### Dual Editing Modes
+
+Switch between two powerful editing modes:
+
+- **Visual Mode**: Edit through the interactive node graph
+- **Text Mode**: Direct Markdown source editing with live preview
+
+### Smart Node Operations
+
+- **Add Child Nodes**: Right-click or drag to create new nodes
+- **Batch Creation**: Create multiple child nodes at once
+- **Delete Options**: Delete current node only or with all children
+- **Move & Reorder**: Drag nodes to new positions or change order
+
+## Getting Started
+
+### Basic Navigation
+
+1. **Left Sidebar**: File explorer and disconnected nodes panel
+2. **Center Canvas**: Visual node editing with zoom and pan
+3. **Right Panel**: Live preview and node editor
+
+### Creating Content
+
+- Click any node to edit its title and content
+- Use Markdown syntax in the content area
+- Add child nodes by dragging from connection points
+- Disconnect nodes by right-clicking edges
+
+## Advanced Features
+
+### AI Document Generation
+
+The editor includes AI-powered document generation:
+
+- **Multiple Providers**: OpenAI, Volcano Engine, SiliconFlow, etc.
+- **Custom Prompts**: Describe what you need, AI generates the structure
+- **One-click Import**: Generated documents are automatically saved
+
+### Disconnected Nodes Panel
+
+Manage orphaned nodes efficiently:
+
+- View all disconnected nodes in one place
+- Reconnect nodes to any parent
+- Organize floating content before integrating
+
+### Metadata Support
+
+Document metadata using YAML Front Matter:
+
+\`\`\`yaml
+---
+title: Document Title
+description: Brief description
+date: 2024-01-15
+---
+\`\`\`
+
+### Multi-language Support
+
+- **Interface Languages**: Switch between Chinese and English
+
+### Template Library
+
+Quickly create documents from predefined templates:
+
+- **Built-in Templates**: Ready-to-use document templates
+- **Custom Templates**: Create and save your own templates
+- **Import Templates**: Import templates from Markdown files
+- **One-click Apply**: Instantly create documents from templates
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| \`Ctrl+S\` | Save document |
+| \`Ctrl+Z\` | Undo |
+| \`Ctrl+Y\` | Redo |
+
+## Tips & Tricks
+
+### Content Editing
+
+- Write Markdown in node content to create sub-nodes automatically
+- Use \`#\` headers in content to generate child hierarchy
+- Collapse/expand nodes to focus on specific sections
+
+### Visual Organization
+
+- Use the layout button to auto-arrange nodes
+- Zoom in/out for overview or detailed editing
+- Select edges to highlight connections
+
+### File Management
+
+- Create folders to organize documents
+- Drag files between folders
+- Export to Markdown formats
+
+## About
+
+This editor combines the power of Markdown with visual node editing, making document structure management intuitive and efficient. Perfect for documentation, brainstorming, and structured writing.
+
+## Community
+
+Join our community to share ideas, get help, and connect with other users. We welcome feedback and suggestions to make this tool even better.
+`
+
+/**
+ * 默认示例Markdown内容（中文版）
+ */
+const defaultMarkdownCN = `---
+title: Markdown 可视化编辑器
+author: PyroHao
+description: 基于节点的 Markdown 可视化编辑器
+---
+
+# Markdown 可视化编辑器
+
+欢迎使用 Markdown 可视化编辑器！这是一款创新工具，将 Markdown 文档转换为交互式节点树状结构，让文档组织变得直观高效。
 
 ## 核心功能
 
-本编辑器提供以下主要功能：
-
 ### 可视化节点树
 
-- 使用React Flow展示文档结构
-- 拖拽节点重新组织内容
-- 实时同步更新
+- **交互式画布**：拖拽节点重新组织内容
+- **实时同步**：所有视图的更改即时反映
+- **节点连接**：用连接线可视化文档层级
+- **断开与重连**：自由断开连接并重新连接节点
 
-### 双向编辑
+### 双模式编辑
 
-编辑器支持两种编辑模式：
+在两种强大的编辑模式间切换：
 
-- **可视化模式**：通过节点图编辑
-- **文本模式**：直接编辑Markdown源码
+- **可视化模式**：通过交互式节点图编辑
+- **文本模式**：直接编辑 Markdown 源码并实时预览
 
-## 技术特性
+### 智能节点操作
 
-### 解析引擎
-
-采用统一的解析引擎进行Markdown处理。
-
-### 状态管理
-
-确保画布、文本编辑器和预览视图实时同步。
+- **添加子节点**：右键或拖拽创建新节点
+- **批量创建**：一次创建多个子节点
+- **删除选项**：仅删除当前节点或删除所有子节点
+- **移动与排序**：拖拽节点到新位置或改变顺序
 
 ## 开始使用
 
-1. 在左侧查看文档树结构
-2. 在中间画布中可视化编辑节点
-3. 在右侧预览最终效果
+### 基础导航
 
-### 快捷键
+1. **左侧边栏**：文件资源管理器和断开节点面板
+2. **中央画布**：可视化节点编辑，支持缩放和平移
+3. **右侧面板**：实时预览和节点编辑器
 
-- \`Ctrl+S\`: 保存文档
-- \`Ctrl+B\`: 加粗文本
-- \`Ctrl+I\`: 斜体文本
+### 创建内容
+
+- 点击任意节点编辑标题和内容
+- 在内容区域使用 Markdown 语法
+- 从连接点拖拽添加子节点
+- 右键边线断开节点连接
 
 ## 高级功能
 
-### Metadata 支持
+### AI 文档生成
 
-文档元数据使用 Metadata (YAML Front Matter) 格式定义。
+编辑器内置 AI 驱动的文档生成功能：
 
-### 导出选项
+- **多厂商支持**：OpenAI、火山引擎、硅基流动等
+- **自定义提示**：描述你的需求，AI 生成文档结构
+- **一键导入**：生成的文档自动保存
 
-支持多种导出格式：
+### 断开节点面板
 
-- Markdown (.md)
-- HTML
-- PDF
+高效管理孤立节点：
+
+- 在一个地方查看所有断开节点
+- 将节点重新连接到任意父节点
+- 在整合前组织浮动内容
+
+### 元数据支持
+
+使用 YAML Front Matter 定义文档元数据：
+
+\`\`\`yaml
+---
+title: 文档标题
+description: 简要描述
+---
+\`\`\`
+
+### 多语言支持
+
+- **界面语言**：中英文界面一键切换
+
+### 模板库
+
+从预定义模板快速创建文档：
+
+- **内置模板**：即用型文档模板
+- **自定义模板**：创建并保存你自己的模板
+- **导入模板**：从 Markdown 文件导入模板
+- **一键应用**：从模板即时创建文档
+
+## 键盘快捷键
+
+| 快捷键 | 功能 |
+|--------|------|
+| \`Ctrl+S\` | 保存文档 |
+| \`Ctrl+Z\` | 撤销 |
+| \`Ctrl+Y\` | 重做 |
+
+## 使用技巧
+
+### 内容编辑
+
+- 在节点内容中编写 Markdown 自动创建子节点
+- 使用 \`#\` 标题在内容中生成子层级
+- 折叠/展开节点以专注于特定章节
+
+### 可视化组织
+
+- 使用布局按钮自动排列节点
+- 放大/缩小以概览或精细编辑
+- 选中边线高亮显示连接
+
+### 文件管理
+
+- 创建文件夹组织文档
+- 在文件夹间拖拽文件
+- 导出为 Markdown格式
 
 ## 关于
 
-这是一个展示Markdown文档可视化编辑能力的演示项目。
+本编辑器结合 Markdown 的强大功能与可视化节点编辑，让文档结构管理变得直观高效。适用于技术文档、头脑风暴和结构化写作。
+
+## 社区
+
+欢迎加入我们的社区，分享使用心得、获取帮助，与其他用户交流。我们期待你的反馈和建议，让这款工具变得更好。
 `
 
 export function MarkdownEditor() {
@@ -175,7 +364,9 @@ export function MarkdownEditor() {
       const { files } = useFileSystemStore.getState()
       if (files.length === 0) {
         const { importFile } = useFileSystemStore.getState()
-        importFile('欢迎使用.md', defaultMarkdown, null)
+        // 同时导入中英文两个示例文档
+        importFile('Welcome.md', defaultMarkdownEN, null)
+        importFile('欢迎使用.md', defaultMarkdownCN, null)
       }
     }, 100)
 
