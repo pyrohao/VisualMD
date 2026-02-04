@@ -32,7 +32,7 @@ import { EmptyTabView } from './empty-tab-view'
 const defaultMarkdown = `---
 name: Markdown Visual Editor
 description: A visual editor for markdown documents
-author: AI Assistant
+author: PyroHao
 version: 1.0.0
 ---
 

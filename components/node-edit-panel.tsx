@@ -98,10 +98,7 @@ export function NodeEditPanel() {
     const currFiles = filesRef.current
     const editTemplateId = editingTemplateIdRef.current
 
-    console.log('[NodeEditPanel] doAutoSave called:', { selNodeId, isVirtRoot, currTitle: currTitle.trim() })
-
     if (!selNodeId || !doc) {
-      console.log('[NodeEditPanel] doAutoSave skipped: no selectedNodeId or document')
       return
     }
 
@@ -109,7 +106,6 @@ export function NodeEditPanel() {
     if (!isVirtRoot) {
       const trimmedTitle = currTitle.trim()
       if (trimmedTitle) {
-        console.log('[NodeEditPanel] Auto-saving node:', { selNodeId, title: trimmedTitle })
         useDocumentStore.getState().updateNode(selNodeId, { title: trimmedTitle, content: currContent || undefined })
       }
     }
@@ -158,10 +154,7 @@ export function NodeEditPanel() {
     const currFiles = filesRef.current
     const editTemplateId = editingTemplateIdRef.current
 
-    console.log('[NodeEditPanel] doSaveAndReparse called:', { selNodeId, isVirtRoot, currTitle: currTitle.trim() })
-
     if (!selNodeId || !doc) {
-      console.log('[NodeEditPanel] doSaveAndReparse skipped: no selectedNodeId or document')
       return
     }
 
@@ -169,14 +162,12 @@ export function NodeEditPanel() {
     if (!isVirtRoot) {
       const trimmedTitle = currTitle.trim()
       if (trimmedTitle) {
-        console.log('[NodeEditPanel] Saving and reparsing node:', { selNodeId, title: trimmedTitle })
         useDocumentStore.getState().updateNode(selNodeId, { title: trimmedTitle, content: currContent || undefined })
       }
     }
 
     // 2. 获取最新 Markdown 内容并重新解析（这会处理内容中的新标题）
     const latestContent = useDocumentStore.getState().getCurrentMarkdown()
-    console.log('[NodeEditPanel] Regenerating markdown and reparsing...')
     useDocumentStore.getState().updateFromMarkdown(latestContent)
 
     // 3. 避免重复保存
@@ -250,12 +241,10 @@ export function NodeEditPanel() {
       if (selNodeId && !isVirtRoot) {
         const trimmedTitle = currTitle.trim()
         if (trimmedTitle) {
-          console.log('[NodeEditPanel] Unmounting, saving and reparsing node:', { selNodeId, title: trimmedTitle })
           useDocumentStore.getState().updateNode(selNodeId, { title: trimmedTitle, content: currContent || undefined })
           
           // 重新解析 Markdown 以处理内容中的新标题
           const latestContent = useDocumentStore.getState().getCurrentMarkdown()
-          console.log('[NodeEditPanel] Unmounting, reparsing markdown...')
           useDocumentStore.getState().updateFromMarkdown(latestContent)
         }
       }

@@ -113,12 +113,10 @@ export function SettingsPanel() {
       if (result.success) {
         toast({
           title: t('settings.connectionSuccess'),
-          description: result.message,
         })
       } else {
         toast({
           title: t('settings.connectionFailed'),
-          description: result.message,
           variant: 'destructive',
         })
       }

@@ -125,12 +125,8 @@ export function FlowCanvas() {
   useEffect(() => {
     if (!document) return
 
-    console.log('[FlowCanvas] Document changed, regenerating nodes')
-
     const detachedNodes = (document as any).detachedNodes || []
     const { nodes: newNodes, edges: newEdges } = treeToNodesAndEdges(document.root, detachedNodes)
-
-    console.log('[FlowCanvas] Generated', newNodes.length, 'nodes', newEdges.length, 'edges')
 
     // 添加回调函数到节点数据
     const nodesWithCallbacks = newNodes.map(node => ({

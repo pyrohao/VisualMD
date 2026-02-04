@@ -20,6 +20,7 @@ import { Button } from './ui/button'
 import { Textarea } from './ui/textarea'
 import { ScrollArea } from './ui/scroll-area'
 import { useThemeStore } from '@/stores/themeStore'
+import { useTranslation } from '@/stores/languageStore'
 
 export interface CreateNodesDialogProps {
   /** 是否显示对话框 */
@@ -45,6 +46,7 @@ export function CreateNodesDialog({
   onCancel,
 }: CreateNodesDialogProps) {
   const { getThemeConfig } = useThemeStore()
+  const { t } = useTranslation()
   const themeConfig = getThemeConfig()
 
   const [inputText, setInputText] = useState('')
@@ -64,12 +66,12 @@ export function CreateNodesDialog({
 
   // 快速添加按钮处理
   const handleQuickAdd = useCallback((count: number) => {
-    const newLines = Array(count).fill('').map((_, i) => `新节点 ${parsedTitles.length + i + 1}`)
+    const newLines = Array(count).fill('').map((_, i) => `${t('node.newNode')} ${parsedTitles.length + i + 1}`)
     setInputText(prev => {
       const current = prev.trim()
       return current ? `${current}\n${newLines.join('\n')}` : newLines.join('\n')
     })
-  }, [parsedTitles.length])
+  }, [parsedTitles.length, t])
 
   // 清空输入
   const handleClear = useCallback(() => {
@@ -128,10 +130,10 @@ export function CreateNodesDialog({
                 className="text-lg font-semibold"
                 style={{ color: themeConfig.heading }}
               >
-                创建子节点
+                {t('node.createChildNodes')}
               </h2>
               <p className="text-xs" style={{ color: themeConfig.muted }}>
-                在「{parentTitle || '未命名'}」下创建 H{childLevel} 子节点
+                {t('node.createChildNodesUnder').replace('{parent}', parentTitle || t('node.untitled')).replace('{level}', String(childLevel))}
               </p>
             </div>
           </div>
@@ -160,7 +162,7 @@ export function CreateNodesDialog({
               className="text-sm font-medium"
               style={{ color: themeConfig.heading }}
             >
-              快速添加
+              {t('node.quickAdd')}
             </label>
             <div className="flex gap-2">
               {[1, 2, 3, 5].map((count) => (
@@ -185,7 +187,7 @@ export function CreateNodesDialog({
                   }}
                 >
                   <Plus className="w-3.5 h-3.5 mr-1" />
-                  {count}个
+                  {count}
                 </Button>
               ))}
             </div>
@@ -198,7 +200,7 @@ export function CreateNodesDialog({
                 className="text-sm font-medium"
                 style={{ color: themeConfig.heading }}
               >
-                节点标题
+                {t('node.nodeTitles')}
               </label>
               <button
                 onClick={handleClear}
@@ -214,7 +216,7 @@ export function CreateNodesDialog({
                 }}
               >
                 <Trash2 className="w-3 h-3" />
-                清空
+                {t('node.clear')}
               </button>
             </div>
             <div
@@ -235,7 +237,7 @@ export function CreateNodesDialog({
               <Textarea
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
-                placeholder={`输入子节点标题，每行一个\n例如：\n子节点1\n子节点2\n子节点3`}
+                placeholder={t('node.titlesPlaceholder')}
                 className="w-full h-40 resize-none border-0 text-sm leading-relaxed p-4 focus:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0"
                 style={{
                   backgroundColor: 'transparent',
@@ -244,7 +246,7 @@ export function CreateNodesDialog({
               />
             </div>
             <p className="text-xs" style={{ color: themeConfig.muted }}>
-              每行输入一个标题，系统将自动创建为 H{childLevel} 层级的子节点
+              {t('node.titlesDescription').replace('{level}', String(childLevel))}
             </p>
           </div>
 
@@ -266,7 +268,7 @@ export function CreateNodesDialog({
                   className="text-sm font-medium"
                   style={{ color: themeConfig.heading }}
                 >
-                  即将创建 {parsedTitles.length} 个节点
+                  {t('node.willCreateNodes').replace('{count}', String(parsedTitles.length))}
                 </span>
               </div>
               <ScrollArea className="h-32">
@@ -321,7 +323,7 @@ export function CreateNodesDialog({
               }}
             >
               <Plus className="mr-2 h-4 w-4" />
-              创建 {parsedTitles.length > 0 ? `${parsedTitles.length} 个` : ''}节点
+              {t('node.create')} {parsedTitles.length > 0 ? `(${parsedTitles.length})` : ''}
             </Button>
             <Button
               variant="outline"
@@ -339,7 +341,7 @@ export function CreateNodesDialog({
                 e.currentTarget.style.backgroundColor = themeConfig.buttonSecondaryBg
               }}
             >
-              取消
+              {t('node.cancel')}
             </Button>
           </div>
         </div>

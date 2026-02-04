@@ -123,7 +123,6 @@ export function AIPanel() {
         description: `已保存为: ${result.fileName}`,
       })
     } catch (error) {
-      console.error('AI生成失败:', error)
       toast({
         title: t('toast.generateFailed'),
         description: error instanceof Error ? error.message : '未知错误',

@@ -85,6 +85,18 @@ export interface Translations {
     enterTitle: string
     enterContent: string
     markdownSupport: string
+    createChildNodes: string
+     createChildNodesUnder: string
+     quickAdd: string
+     nodeTitles: string
+     clear: string
+     titlesPlaceholder: string
+     titlesDescription: string
+     willCreateNodes: string
+     create: string
+     cancel: string
+     untitled: string
+     newNode: string
     editFileName: string
     editNewKey: string
     editNewValue: string
@@ -305,6 +317,18 @@ export const translations: Record<Language, Translations> = {
       enterTitle: '输入节点标题...',
       enterContent: '输入节点内容...',
       markdownSupport: '支持 Markdown 格式，内容将显示在节点下方',
+      createChildNodes: '创建子节点',
+      createChildNodesUnder: '在「{parent}」下创建 H{level} 子节点',
+      quickAdd: '快速添加',
+      nodeTitles: '节点标题',
+      clear: '清空',
+      titlesPlaceholder: '输入子节点标题，每行一个\n例如：\n子节点1\n子节点2\n子节点3',
+      titlesDescription: '每行输入一个标题，系统将自动创建为 H{level} 层级的子节点',
+      willCreateNodes: '即将创建 {count} 个节点',
+      create: '创建',
+      cancel: '取消',
+      untitled: '未命名',
+      newNode: '新节点',
       editFileName: '编辑文件名',
       editNewKey: '编辑新键',
       editNewValue: '编辑新值',
@@ -516,6 +540,18 @@ export const translations: Record<Language, Translations> = {
       enterTitle: 'Enter node title...',
       enterContent: 'Enter node content...',
       markdownSupport: 'Supports Markdown format, content will be displayed below the node',
+      createChildNodes: 'Create Child Nodes',
+      createChildNodesUnder: 'Create H{level} child nodes under "{parent}"',
+      quickAdd: 'Quick Add',
+      nodeTitles: 'Node Titles',
+      clear: 'Clear',
+      titlesPlaceholder: 'Enter child node titles, one per line\nExample:\nChild Node 1\nChild Node 2\nChild Node 3',
+      titlesDescription: 'Enter one title per line, system will auto-create H{level} level child nodes',
+      willCreateNodes: 'Will create {count} nodes',
+      create: 'Create',
+      cancel: 'Cancel',
+      untitled: 'Untitled',
+      newNode: 'New Node',
       editFileName: 'Edit File Name',
       editNewKey: 'Edit New Key',
       editNewValue: 'Edit New Value',
