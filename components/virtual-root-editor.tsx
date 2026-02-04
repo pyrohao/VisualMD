@@ -2,26 +2,27 @@
 
 /**
  * 虚拟根节点编辑器组件
- * 用于编辑 YAML Front Matter 元数据
- * 
- * 设计：
- * - 上方列表：显示所有 key-value，点击选择要编辑的项
- * - 下方编辑框：专门编辑长内容，不会失焦
+ * 用于编辑 Metadata 元数据
+ *
+ * 设计原则：
+ * - 受控组件模式：所有数据由父组件通过 props 提供
+ * - 实时同步：任何变化立即通过 onChange 通知父组件
+ * - 无本地状态缓存：不缓存 entries，直接使用 props
  */
 
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useRef, forwardRef, useImperativeHandle } from 'react'
 import { FileJson, FileText, Info, Plus, Trash } from 'lucide-react'
 import { Button } from './ui/button'
-import { Input } from './ui/input'
 import { Textarea } from './ui/textarea'
 
-interface MetadataEntry {
+export interface MetadataEntry {
   key: string
   value: string
 }
 
 interface VirtualRootEditorProps {
-  initialEntries: MetadataEntry[]
+  entries: MetadataEntry[]
+  fileName?: string
   themeConfig: {
     card: string
     border: string
@@ -31,125 +32,170 @@ interface VirtualRootEditorProps {
     accent: string
     danger: string
   }
-  onChange: (entries: MetadataEntry[]) => void
+  onEntriesChange: (entries: MetadataEntry[]) => void
+  onFileNameChange?: (fileName: string) => void
 }
 
-export function VirtualRootEditor({
-  initialEntries,
+export interface VirtualRootEditorRef {
+  getEntries: () => MetadataEntry[]
+}
+
+export const VirtualRootEditor = forwardRef<VirtualRootEditorRef, VirtualRootEditorProps>(function VirtualRootEditor({
+  entries,
+  fileName,
   themeConfig,
-  onChange,
-}: VirtualRootEditorProps) {
-  // 本地状态
-  const [entries, setEntries] = useState<MetadataEntry[]>(initialEntries)
-  const [newKey, setNewKey] = useState('')
-  const [newValue, setNewValue] = useState('')
-  
-  // 当前编辑状态
+  onEntriesChange,
+  onFileNameChange,
+}, ref) {
   const [editIndex, setEditIndex] = useState<number | null>(null)
   const [editField, setEditField] = useState<'key' | 'value' | null>(null)
   const [editContent, setEditContent] = useState('')
-  
-  // 防止循环更新
-  const isExternalUpdate = useRef(false)
 
-  // 外部数据变化时同步
-  useEffect(() => {
-    isExternalUpdate.current = true
-    setEntries(initialEntries)
-    setEditIndex(null)
-    setEditField(null)
-    setEditContent('')
-    setNewKey('')
-    setNewValue('')
-  }, [initialEntries])
+  const [newKey, setNewKey] = useState('')
+  const [newValue, setNewValue] = useState('')
+  const [isEditingNew, setIsEditingNew] = useState(false)
+  const [editingNewField, setEditingNewField] = useState<'key' | 'value' | null>(null)
 
-  // 通知父组件
-  useEffect(() => {
-    if (isExternalUpdate.current) {
-      isExternalUpdate.current = false
-      return
-    }
-    onChange(entries)
-  }, [entries, onChange])
+  const [isEditingFileName, setIsEditingFileName] = useState(false)
+  const [editFileNameContent, setEditFileNameContent] = useState('')
 
-  // 选择要编辑的字段
-  const handleSelect = useCallback((index: number, field: 'key' | 'value') => {
-    const entry = entries[index]
-    if (!entry) return
-    
-    setEditIndex(index)
-    setEditField(field)
-    setEditContent(field === 'key' ? entry.key : entry.value)
-  }, [entries])
+  const entriesRef = useRef(entries)
+  entriesRef.current = entries
 
-  // 下方大编辑框内容变化 - 只更新本地 editContent，不立即同步到 entries
-  const handleEditChange = useCallback((content: string) => {
-    setEditContent(content)
-  }, [])
+  useImperativeHandle(ref, () => ({
+    getEntries: () => entriesRef.current,
+  }), [])
 
-  // 下方编辑框失去焦点时，同步到 entries
-  const handleEditBlur = useCallback(() => {
-    if (editIndex === null || editField === null) return
-    
-    setEntries(prev => {
-      const updated = [...prev]
-      const entry = updated[editIndex]
-      if (entry) {
-        if (editField === 'key') {
-          updated[editIndex] = { ...entry, key: editContent }
-        } else {
-          updated[editIndex] = { ...entry, value: editContent }
-        }
-      }
-      return updated
-    })
-  }, [editIndex, editField, editContent])
+  const updateEntry = useCallback((index: number, field: 'key' | 'value', value: string) => {
+    // 值未变化时跳过，避免无意义的状态更新
+    if (entries[index]?.[field] === value) return
+    const newEntries = [...entries]
+    newEntries[index] = { ...newEntries[index], [field]: value }
+    onEntriesChange(newEntries)
+  }, [entries, onEntriesChange])
 
-  // 添加快捷键支持（Ctrl+Enter 保存）
-  const handleEditKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-      handleEditBlur()
-    }
-  }, [handleEditBlur])
-
-  // 添加快捷键支持（Enter 保存）
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      handleEditBlur()
-    }
-  }, [handleEditBlur])
-
-  // 添加快捷键支持（Escape 取消）
-  const handleKeyDownCancel = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      setEditIndex(null)
-      setEditField(null)
-      setEditContent('')
-    }
-  }, [])
-
-  // 添加新元数据
-  const handleAdd = useCallback(() => {
+  const addEntry = useCallback(() => {
     if (!newKey.trim()) return
-    
-    setEntries(prev => [...prev, { key: newKey.trim(), value: newValue }])
+    const newEntries = [...entries, { key: newKey.trim(), value: newValue }]
+    onEntriesChange(newEntries)
     setNewKey('')
     setNewValue('')
-  }, [newKey, newValue])
+    setIsEditingNew(false)
+    setEditingNewField(null)
+  }, [entries, newKey, newValue, onEntriesChange])
 
-  // 删除元数据
-  const handleDelete = useCallback((index: number) => {
-    setEntries(prev => prev.filter((_, i) => i !== index))
-    
+  const deleteEntry = useCallback((index: number) => {
+    const newEntries = entries.filter((_, i) => i !== index)
+    onEntriesChange(newEntries)
     if (editIndex === index) {
       setEditIndex(null)
       setEditField(null)
       setEditContent('')
     }
-  }, [editIndex])
+  }, [entries, editIndex, onEntriesChange])
 
-  // 获取标签文字
+  const handleSelectEntry = useCallback((index: number, field: 'key' | 'value') => {
+    if (isEditingNew && editingNewField) {
+      if (editingNewField === 'key') {
+        setNewKey(editContent)
+      } else {
+        setNewValue(editContent)
+      }
+    }
+
+    setIsEditingNew(false)
+    setEditingNewField(null)
+    setEditIndex(index)
+    setEditField(field)
+    setEditContent(entries[index]?.[field] || '')
+  }, [entries, isEditingNew, editingNewField, editContent])
+
+  const handleSelectNew = useCallback((field: 'key' | 'value') => {
+    if (editIndex !== null && editField !== null) {
+      updateEntry(editIndex, editField, editContent)
+    }
+
+    setEditIndex(null)
+    setEditField(null)
+    setIsEditingNew(true)
+    setEditingNewField(field)
+    setEditContent(field === 'key' ? newKey : newValue)
+  }, [editIndex, editField, editContent, newKey, newValue, updateEntry])
+
+  const handleSelectFileName = useCallback(() => {
+    if (editIndex !== null && editField !== null) {
+      updateEntry(editIndex, editField, editContent)
+      setEditIndex(null)
+      setEditField(null)
+    }
+    if (isEditingNew && editingNewField) {
+      if (editingNewField === 'key') {
+        setNewKey(editContent)
+      } else {
+        setNewValue(editContent)
+      }
+      setIsEditingNew(false)
+      setEditingNewField(null)
+    }
+
+    setIsEditingFileName(true)
+    setEditFileNameContent(fileName?.replace(/\.md$/, '') || '')
+  }, [editIndex, editField, editContent, isEditingNew, editingNewField, fileName, updateEntry])
+
+  const handleEditChange = useCallback((content: string) => {
+    setEditContent(content)
+  }, [])
+
+  const handleEditBlur = useCallback(() => {
+    if (isEditingFileName && onFileNameChange) {
+      const fileNameWithExt = editFileNameContent.endsWith('.md')
+        ? editFileNameContent
+        : `${editFileNameContent}.md`
+      onFileNameChange(fileNameWithExt)
+      setIsEditingFileName(false)
+      setEditFileNameContent('')
+      return
+    }
+
+    if (isEditingNew && editingNewField) {
+      if (editingNewField === 'key') {
+        setNewKey(editContent)
+      } else {
+        setNewValue(editContent)
+      }
+      setIsEditingNew(false)
+      setEditingNewField(null)
+      return
+    }
+
+    if (editIndex !== null && editField !== null) {
+      updateEntry(editIndex, editField, editContent)
+      setEditIndex(null)
+      setEditField(null)
+    }
+  }, [isEditingFileName, editFileNameContent, onFileNameChange, isEditingNew, editingNewField, editIndex, editField, editContent, updateEntry])
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      handleEditBlur()
+    }
+    if (e.key === 'Escape') {
+      setEditIndex(null)
+      setEditField(null)
+      setEditContent('')
+      setIsEditingNew(false)
+      setEditingNewField(null)
+      setIsEditingFileName(false)
+      setEditFileNameContent('')
+    }
+  }, [handleEditBlur])
+
   const getEditLabel = () => {
+    if (isEditingFileName) return '编辑文件名'
+    if (isEditingNew && editingNewField) {
+      return editingNewField === 'key' ? '编辑新键' : '编辑新值'
+    }
     if (editIndex === null || editField === null) return '点击上方键或值进行编辑'
     return editField === 'key' ? '编辑键' : '编辑值'
   }
@@ -158,10 +204,29 @@ export function VirtualRootEditor({
     <div className="space-y-4">
       <label className="flex items-center gap-2 text-sm font-medium" style={{ color: themeConfig.heading }}>
         <FileJson className="w-4 h-4" style={{ color: themeConfig.accent }} />
-        YAML 元数据
+        Metadata
       </label>
 
-      {/* 现有元数据列表 - 点击选择 */}
+      <div className="space-y-2">
+        <label className="flex items-center gap-2 text-xs font-medium" style={{ color: themeConfig.muted }}>
+          <Info className="w-3 h-3" />
+          文件名
+        </label>
+        <button
+          onClick={handleSelectFileName}
+          className="w-full h-10 px-3 text-sm text-left rounded-md border-2 transition-colors overflow-hidden text-ellipsis whitespace-nowrap"
+          style={{
+            backgroundColor: isEditingFileName ? themeConfig.accent + '20' : themeConfig.card,
+            borderColor: isEditingFileName ? themeConfig.accent : themeConfig.border,
+            color: themeConfig.text,
+          }}
+        >
+          {fileName || <span style={{ color: themeConfig.muted }}>未命名文档.md</span>}
+        </button>
+      </div>
+
+      <div className="border-t" style={{ borderColor: themeConfig.border }} />
+
       <div className="space-y-2 max-h-[200px] overflow-y-auto">
         <label className="flex items-center gap-2 text-xs font-medium" style={{ color: themeConfig.muted }}>
           <Info className="w-3 h-3" />
@@ -169,34 +234,24 @@ export function VirtualRootEditor({
         </label>
         {entries.map((entry, index) => (
           <div key={index} className="flex items-center gap-2">
-            {/* Key - 点击选择 */}
             <button
-              onClick={() => handleSelect(index, 'key')}
+              onClick={() => handleSelectEntry(index, 'key')}
               className="flex-1 h-10 px-3 text-sm text-left rounded-md border-2 transition-colors overflow-hidden text-ellipsis whitespace-nowrap"
               style={{
-                backgroundColor: editIndex === index && editField === 'key' 
-                  ? themeConfig.accent + '20' 
-                  : themeConfig.card,
-                borderColor: editIndex === index && editField === 'key' 
-                  ? themeConfig.accent 
-                  : themeConfig.border,
+                backgroundColor: editIndex === index && editField === 'key' ? themeConfig.accent + '20' : themeConfig.card,
+                borderColor: editIndex === index && editField === 'key' ? themeConfig.accent : themeConfig.border,
                 color: themeConfig.text,
               }}
             >
               {entry.key || <span style={{ color: themeConfig.muted }}>键</span>}
             </button>
             <span style={{ color: themeConfig.muted }}>:</span>
-            {/* Value - 点击选择 */}
             <button
-              onClick={() => handleSelect(index, 'value')}
+              onClick={() => handleSelectEntry(index, 'value')}
               className="flex-[2] h-10 px-3 text-sm text-left rounded-md border-2 transition-colors overflow-hidden text-ellipsis whitespace-nowrap"
               style={{
-                backgroundColor: editIndex === index && editField === 'value' 
-                  ? themeConfig.accent + '20' 
-                  : themeConfig.card,
-                borderColor: editIndex === index && editField === 'value' 
-                  ? themeConfig.accent 
-                  : themeConfig.border,
+                backgroundColor: editIndex === index && editField === 'value' ? themeConfig.accent + '20' : themeConfig.card,
+                borderColor: editIndex === index && editField === 'value' ? themeConfig.accent : themeConfig.border,
                 color: themeConfig.text,
               }}
             >
@@ -205,7 +260,7 @@ export function VirtualRootEditor({
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => handleDelete(index)}
+              onClick={() => deleteEntry(index)}
               className="h-10 w-10 shrink-0 hover:bg-red-50"
               style={{ color: themeConfig.danger }}
             >
@@ -215,97 +270,80 @@ export function VirtualRootEditor({
         ))}
       </div>
 
-      {/* 添加新元数据 */}
       <div className="flex items-center gap-2 pt-2 border-t" style={{ borderColor: themeConfig.border }}>
-        <Input
-          value={newKey}
-          onChange={(e) => setNewKey(e.target.value)}
-          placeholder="新键"
-          className="flex-1 h-10 text-sm border-2"
+        <button
+          onClick={() => handleSelectNew('key')}
+          className="flex-1 h-10 px-3 text-sm text-left rounded-md border-2 transition-colors overflow-hidden text-ellipsis whitespace-nowrap"
           style={{
-            backgroundColor: themeConfig.card,
-            borderColor: themeConfig.border,
+            backgroundColor: isEditingNew && editingNewField === 'key' ? themeConfig.accent + '20' : themeConfig.card,
+            borderColor: isEditingNew && editingNewField === 'key' ? themeConfig.accent : themeConfig.border,
             color: themeConfig.text,
           }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && newKey.trim()) {
-              handleAdd()
-            }
-          }}
-        />
+        >
+          {newKey || <span style={{ color: themeConfig.muted }}>新键</span>}
+        </button>
         <span style={{ color: themeConfig.muted }}>:</span>
-        <Input
-          value={newValue}
-          onChange={(e) => setNewValue(e.target.value)}
-          placeholder="值"
-          className="flex-[2] h-10 text-sm border-2"
+        <button
+          onClick={() => handleSelectNew('value')}
+          className="flex-[2] h-10 px-3 text-sm text-left rounded-md border-2 transition-colors overflow-hidden text-ellipsis whitespace-nowrap"
           style={{
-            backgroundColor: themeConfig.card,
-            borderColor: themeConfig.border,
+            backgroundColor: isEditingNew && editingNewField === 'value' ? themeConfig.accent + '20' : themeConfig.card,
+            borderColor: isEditingNew && editingNewField === 'value' ? themeConfig.accent : themeConfig.border,
             color: themeConfig.text,
           }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && newKey.trim()) {
-              handleAdd()
-            }
-          }}
-        />
+        >
+          {newValue || <span style={{ color: themeConfig.muted }}>值</span>}
+        </button>
         <Button
           variant="ghost"
           size="icon"
-          onClick={handleAdd}
+          onClick={addEntry}
           disabled={!newKey.trim()}
           className="h-10 w-10 shrink-0 hover:bg-blue-100 disabled:hover:bg-transparent transition-colors"
-          style={{
-            color: '#0969da',
-            opacity: newKey.trim() ? 1 : 0.4,
-          }}
+          style={{ color: '#0969da', opacity: newKey.trim() ? 1 : 0.4 }}
         >
           <Plus className="w-5 h-5" strokeWidth={3} />
         </Button>
       </div>
 
-      {/* 内容编辑框 - 专门编辑长内容 */}
       <div className="space-y-2">
         <label className="flex items-center gap-2 text-xs font-medium" style={{ color: themeConfig.muted }}>
           <FileText className="w-3 h-3" />
           {getEditLabel()}
-
         </label>
         <div
           className="rounded-xl border-2 overflow-hidden"
           style={{
             backgroundColor: themeConfig.card,
-            borderColor: editIndex !== null && editField !== null 
-              ? themeConfig.accent 
+            borderColor: (editIndex !== null && editField !== null) || (isEditingNew && editingNewField !== null) || isEditingFileName
+              ? themeConfig.accent
               : themeConfig.border,
             height: '200px',
           }}
         >
           <Textarea
-            value={editContent}
-            onChange={(e) => handleEditChange(e.target.value)}
+            value={isEditingFileName ? editFileNameContent : editContent}
+            onChange={(e) => isEditingFileName ? setEditFileNameContent(e.target.value) : handleEditChange(e.target.value)}
             onBlur={handleEditBlur}
             onKeyDown={handleKeyDown}
-            placeholder={editIndex !== null && editField !== null 
-              ? `在此输入${editField === 'key' ? '键' : '值'}，按 Enter 保存...` 
-              : '点击上方的键或值，在此处编辑长内容'}
-            disabled={editIndex === null || editField === null}
+            placeholder={isEditingFileName
+              ? '在此输入文件名，按 Enter 保存...'
+              : (editIndex !== null && editField !== null) || (isEditingNew && editingNewField !== null)
+                ? `在此输入${(editField === 'key' || editingNewField === 'key') ? '键' : '值'}，按 Enter 保存...`
+                : '点击上方的键或值，在此处编辑长内容'}
+            disabled={editIndex === null && editField === null && !isEditingNew && !isEditingFileName}
             className="w-full h-full resize-none border-0 font-mono text-sm leading-relaxed p-4 focus:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0 disabled:opacity-50"
-            style={{
-              backgroundColor: 'transparent',
-              color: themeConfig.text,
-            }}
+            style={{ backgroundColor: 'transparent', color: themeConfig.text }}
           />
         </div>
       </div>
 
       <p className="text-xs flex items-center gap-1" style={{ color: themeConfig.muted }}>
         <Info className="w-3 h-3" />
-        这些元数据将保存为 YAML Front Matter 格式
+        Metadata 将保存为 YAML 格式
       </p>
     </div>
   )
-}
+})
 
 export default VirtualRootEditor

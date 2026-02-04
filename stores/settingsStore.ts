@@ -44,6 +44,8 @@ export interface ProviderConfig {
   isTested: boolean
   /** 测试状态消息 */
   testMessage?: string
+  /** 自定义请求头 */
+  customHeaders?: Record<string, string>
 }
 
 /**

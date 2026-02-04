@@ -29,7 +29,7 @@ export interface AIGenerateOptions {
 export interface AIGenerateResult {
   /** 生成的内容 */
   content: string
-  /** 文件名（从Front Matter提取） */
+  /** 文件名（从 Metadata 提取） */
   fileName: string
   /** 是否成功 */
   success: boolean
@@ -47,7 +47,7 @@ const DEFAULT_SYSTEM_PROMPT = `你是一个专业的Markdown文档生成助手�
 ## 要求
 
 1. **文档结构**
-   - 使用YAML Front Matter开头，包含 title、date、description 字段
+   - 使用 Metadata (YAML Front Matter) 开头，包含 title、date、description 字段
    - 使用合适的标题层级（H1-H6），H1作为文档主标题
    - 内容层次分明，逻辑清晰
 
@@ -62,7 +62,7 @@ const DEFAULT_SYSTEM_PROMPT = `你是一个专业的Markdown文档生成助手�
    - 适当添加示例说明
 
 4. **文件名**
-   - 在Front Matter中使用 
+   - 在 Metadata 中使用 
 
 ## 输出格式示例
 
@@ -87,8 +87,8 @@ description: 文档描述
 ## 重要提示
 
 - 只输出Markdown内容，不要包含任何解释性文字
-- 确保Front Matter格式正确
-- 文档标题要与Front Matter中的title一致
+- 确保 Metadata (YAML Front Matter) 格式正确
+- 文档标题要与 Metadata 中的 title 一致
 - 使用中文输出（除非用户要求其他语言）`
 
 /**
@@ -192,10 +192,10 @@ export class AIService {
 
   /**
    * 从生成的内容中提取文件名
-   * 优先从Front Matter的title字段提取
+   * 优先从 Metadata 的 title 字段提取
    */
   private extractFileName(content: string): string {
-    // 尝试从Front Matter提取title
+    // 尝试从 Metadata (YAML Front Matter) 提取 title
     const frontMatterMatch = content.match(/^---\s*\n[\s\S]*?title:\s*(.+?)\s*\n[\s\S]*?---/)
     if (frontMatterMatch) {
       const title = frontMatterMatch[1].trim()

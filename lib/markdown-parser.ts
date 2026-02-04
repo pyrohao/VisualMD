@@ -2,7 +2,7 @@
  * Markdown解析服务
  *
  * 本模块提供Markdown解析功能，包括：
- * 1. YAML Front Matter解析
+ * 1. Metadata (YAML Front Matter) 解析
  * 2. 标题树解析（基于栈的算法）
  * 3. 内容块提取（只提取当前节点自身内容，不包含子节点内容）
  *
@@ -21,7 +21,7 @@ function generateId(): string {
 }
 
 /**
- * 步骤1：提取YAML Front Matter
+ * 步骤1：提取 Metadata (YAML Front Matter)
  * 对应技术文档3.1节 - 步骤1
  *
  * @param content Markdown文本
@@ -31,7 +31,7 @@ export function extractFrontMatter(content: string): {
   metadata: DocumentMetadata
   remainingContent: string
 } {
-  // 使用正则表达式匹配Front Matter
+  // 使用正则表达式匹配 Metadata (YAML Front Matter)
   // 支持两种格式：
   // 1. --- 后面直接跟换行符 (---\n)
   // 2. --- 在行首，后面可能有空白字符再跟换行符 (^---\s*\n)
@@ -56,7 +56,7 @@ export function extractFrontMatter(content: string): {
  * 步骤2：提取所有标题节点
  * 对应技术文档3.1节 - 步骤2
  *
- * @param content Markdown内容（不含Front Matter）
+ * @param content Markdown内容（不含 Metadata）
  * @returns 标题节点数组
  */
 export function extractHeadings(content: string): HeadingNode[] {
@@ -109,11 +109,11 @@ export function extractHeadings(content: string): HeadingNode[] {
  */
 export function buildTree(headings: HeadingNode[], metadata: DocumentMetadata): TreeNode {
   // 创建虚拟根节点（level=0）
-  // 虚拟根节点标题固定为 'Front Matter'，用于显示
+  // 虚拟根节点标题固定为 'Metadata'，用于显示
   const root: TreeNode = {
     id: 'root',
     level: 0,
-    title: 'Front Matter',
+    title: 'Metadata',
     children: [],
     parentId: null,
     isVirtual: true,
@@ -367,7 +367,7 @@ export function extractContentBlocks(
  * @returns 完整的文档状态
  */
 export function parseMarkdown(content: string, fileName?: string): DocumentState {
-  // 步骤1：提取Front Matter
+  // 步骤1：提取 Metadata (YAML Front Matter)
   const { metadata, remainingContent } = extractFrontMatter(content)
 
   // 步骤2：提取标题
@@ -398,7 +398,7 @@ export function parseMarkdown(content: string, fileName?: string): DocumentState
 export function generateMarkdown(document: DocumentState): string {
   const lines: string[] = []
 
-  // 添加Front Matter（如果有元数据）
+  // 添加 Metadata (YAML Front Matter)（如果有元数据）
   if (document.metadata && Object.keys(document.metadata).length > 0) {
     lines.push('---')
     // 简单的YAML序列化

@@ -1,22 +1,21 @@
 /**
  * Markdown生成服务
- * 
+ *
  * 本模块提供从树结构生成Markdown的功能，包括：
- * 1. YAML Front Matter生成
+ * 1. Metadata (YAML Front Matter) 生成
  * 2. 深度优先遍历生成内容（核心算法）
- * 
+ *
  * 对应技术文档第3.2节
  */
 
-import yaml from 'js-yaml'
 import type { TreeNode, DocumentMetadata, DocumentState } from '@/types/tree'
 
 /**
- * 步骤1：生成YAML Front Matter
+ * 步骤1：生成 Metadata (YAML Front Matter)
  * 对应技术文档3.2节 - 步骤1
- * 
+ *
  * @param metadata 文档元数据
- * @returns YAML Front Matter字符串
+ * @returns Metadata (YAML Front Matter) 字符串
  */
 export function generateFrontMatter(metadata: DocumentMetadata): string {
   if (!metadata || Object.keys(metadata).length === 0) {
@@ -24,13 +23,29 @@ export function generateFrontMatter(metadata: DocumentMetadata): string {
   }
 
   try {
-    // 使用js-yaml.dump()将metadata转为YAML字符串
-    const yamlStr = yaml.dump(metadata, {
-      indent: 2,
-      lineWidth: -1, // 不限制行宽
-      noRefs: true,
-      sortKeys: false,
-    })
+    // 自定义 YAML 生成，不使用单引号包裹
+    const lines: string[] = []
+    
+    for (const [key, value] of Object.entries(metadata)) {
+      // 处理多行值
+      const strValue = String(value)
+      if (strValue.includes('\n')) {
+        // 多行值使用 | 符号
+        lines.push(`${key}: |`)
+        strValue.split('\n').forEach(line => {
+          lines.push(`  ${line}`)
+        })
+      } else if (strValue.includes(':') || strValue.includes('#') || strValue.startsWith(' ') || strValue.endsWith(' ')) {
+        // 包含特殊字符的值使用双引号
+        const escaped = strValue.replace(/"/g, '\\"')
+        lines.push(`${key}: "${escaped}"`)
+      } else {
+        // 普通值，不使用引号
+        lines.push(`${key}: ${strValue}`)
+      }
+    }
+    
+    const yamlStr = lines.join('\n') + '\n'
     
     // 包装在 --- 之间
     return `---\n${yamlStr}---\n\n`
@@ -94,7 +109,7 @@ export function generateContent(node: TreeNode, currentLevel: number = 1): strin
 export function generateMarkdown(root: TreeNode, metadata?: DocumentMetadata): string {
   let markdown = ''
 
-  // 添加YAML Front Matter
+  // 添加 Metadata (YAML Front Matter)
   if (metadata) {
     markdown += generateFrontMatter(metadata)
   }
@@ -124,9 +139,9 @@ export function generateFromState(state: DocumentState): string {
 }
 
 /**
- * 仅生成内容部分（不含Front Matter）
+ * 仅生成内容部分（不含 Metadata）
  * 对应技术文档4.2节 - generateContent(root: TreeNode)
- * 
+ *
  * @param root 根节点
  * @returns 内容部分的Markdown文本
  */

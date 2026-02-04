@@ -2,11 +2,11 @@
 
 /**
  * 节点编辑面板组件 - 现代简约风格
- * 重构版：拆分为独立子组件
+ * 重构版：单一数据源模式
  * 支持自动保存（1秒延迟）
  */
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { X, Save, Trash2, Type, FileJson } from 'lucide-react'
 import { Button } from './ui/button'
 import { useDocumentStore } from '@/stores/documentStore'
@@ -16,15 +16,11 @@ import { useSidebarStore } from '@/stores/sidebarStore'
 import { findNodeInTreeOrDetached } from '@/lib/flow-helpers'
 import { toast } from '@/hooks/use-toast'
 import { DeleteConfirmDialog } from './delete-confirm-dialog'
-import { VirtualRootEditor } from './virtual-root-editor'
+import { VirtualRootEditor, type VirtualRootEditorRef, type MetadataEntry } from './virtual-root-editor'
 import { NodeContentEditor } from './node-content-editor'
 
-interface MetadataEntry {
-  key: string
-  value: string
-}
-
 export function NodeEditPanel() {
+  // ========== Store 访问 ==========
   const {
     document,
     selectedNodeId,
@@ -32,107 +28,122 @@ export function NodeEditPanel() {
     updateNode,
     deleteNode,
     updateMetadata,
-    markAsSaved,
+    updateFileName,
     getCurrentMarkdown,
   } = useDocumentStore()
 
   const { getThemeConfig } = useThemeStore()
   const themeConfig = getThemeConfig()
-  const { currentFileId, saveFileContent } = useFileSystemStore()
+  const { currentFileId, saveFileContent, renameFile, files } = useFileSystemStore()
   const { editingTemplateId } = useSidebarStore()
 
-  // 本地编辑状态
-  const [title, setTitle] = useState('')
-  const [content, setContent] = useState('')
-  const [metadataEntries, setMetadataEntries] = useState<MetadataEntry[]>([])
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
-
-  // 获取当前选中的节点（在树和断开节点中查找）
+  // ========== 派生状态 ==========
   const selectedNode = selectedNodeId && document
     ? findNodeInTreeOrDetached(document.root, document.detachedNodes || [], selectedNodeId)
     : null
 
   const isVirtualRoot = selectedNode?.isVirtual || selectedNode?.level === 0
 
-  // 只在选中的节点变化时加载数据
+  // ========== 本地编辑状态（仅用于非虚拟节点）==========
+  const [title, setTitle] = useState('')
+  const [content, setContent] = useState('')
+
+  // ========== Refs ==========
+  const virtualRootEditorRef = useRef<VirtualRootEditorRef>(null)
+  const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const isFirstRender = useRef(true)
+  const lastSavedContentRef = useRef<string>('')
+  
+  // 使用 ref 存储最新值，避免循环依赖
+  const documentRef = useRef(document)
+  const currentFileIdRef = useRef(currentFileId)
+  const filesRef = useRef(files)
+  const editingTemplateIdRef = useRef(editingTemplateId)
+  const isVirtualRootRef = useRef(isVirtualRoot)
+  const selectedNodeIdRef = useRef(selectedNodeId)
+  const titleRef = useRef(title)
+  const contentRef = useRef(content)
+
+  // 同步 refs（合并为一个 useEffect，减少 React 调度开销）
+  useEffect(() => {
+    documentRef.current = document
+    currentFileIdRef.current = currentFileId
+    filesRef.current = files
+    editingTemplateIdRef.current = editingTemplateId
+    isVirtualRootRef.current = isVirtualRoot
+    selectedNodeIdRef.current = selectedNodeId
+    titleRef.current = title
+    contentRef.current = content
+  }, [document, currentFileId, files, editingTemplateId, isVirtualRoot, selectedNodeId, title, content])
+
+  // ========== 初始化数据 ==========
   useEffect(() => {
     if (selectedNode) {
       setTitle(selectedNode.title)
       setContent(selectedNode.content || '')
-      
-      // 加载元数据 - 只在节点切换时执行
-      if (document?.metadata) {
-        const entries = Object.entries(document.metadata).map(([key, value]) => ({
-          key,
-          value: String(value)
-        }))
-        setMetadataEntries(entries)
-      } else {
-        setMetadataEntries([])
-      }
     }
-  }, [selectedNodeId])
+  }, [selectedNodeId, selectedNode?.title, selectedNode?.content])
 
-  // ==================== 自动保存逻辑 ====================
-  const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-  const isFirstRender = useRef(true)
-  const lastSavedContentRef = useRef<string>('')
+  // ========== 保存逻辑（使用 ref 避免循环依赖）==========
+  const doSave = useCallback(() => {
+    const doc = documentRef.current
+    const selNodeId = selectedNodeIdRef.current
+    const isVirtRoot = isVirtualRootRef.current
+    const currTitle = titleRef.current
+    const currContent = contentRef.current
+    const currFileId = currentFileIdRef.current
+    const currFiles = filesRef.current
+    const editTemplateId = editingTemplateIdRef.current
 
-  // 首次渲染标记 - 在组件挂载后设置为 false
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      isFirstRender.current = false
-    }, 100)
-    return () => clearTimeout(timer)
-  }, [])
+    if (!selNodeId || !doc) return
 
-  // 执行保存的函数
-  const doSave = useCallback(async () => {
-    if (!selectedNodeId) return
-
-    // 1. 更新节点
-    if (isVirtualRoot) {
-      const metadata: Record<string, string> = {}
-      metadataEntries.forEach(({ key, value }) => {
-        if (key.trim()) metadata[key.trim()] = value
-      })
-      updateMetadata(metadata)
-    } else {
-      const trimmedTitle = String(title || '').trim()
+    // 1. 更新数据到 documentStore
+    if (!isVirtRoot) {
+      // 普通节点：更新标题和内容
+      const trimmedTitle = currTitle.trim()
       if (trimmedTitle) {
-        updateNode(selectedNodeId, { title: trimmedTitle, content: content || undefined })
+        updateNode(selNodeId, { title: trimmedTitle, content: currContent || undefined })
       }
     }
 
-    // 2. 获取最新内容并保存到文件
+    // 2. 获取最新 Markdown 内容
     const latestContent = getCurrentMarkdown()
-    
-    // 避免重复保存相同内容
+
+    // 3. 避免重复保存
     if (latestContent === lastSavedContentRef.current) {
       return
     }
-    
     lastSavedContentRef.current = latestContent
 
-    if (currentFileId) {
-      saveFileContent(currentFileId, latestContent)
-    } else if (editingTemplateId) {
+    // 4. 同步文件名到 fileSystemStore（如果发生变化）
+    if (currFileId && doc.fileName) {
+      const currentFile = currFiles.find(f => f.id === currFileId)
+      if (currentFile && currentFile.name !== doc.fileName) {
+        renameFile(currFileId, doc.fileName)
+      }
+    }
+
+    // 5. 保存到文件系统
+    if (currFileId) {
+      saveFileContent(currFileId, latestContent)
+    } else if (editTemplateId) {
       useSidebarStore.setState((state) => ({
         templates: state.templates.map(t =>
-          t.id === editingTemplateId
+          t.id === editTemplateId
             ? { ...t, content: latestContent, updatedAt: Date.now() }
             : t
         ),
         isTemplateModified: false,
       }))
     }
-  }, [selectedNodeId, isVirtualRoot, metadataEntries, title, content, updateMetadata, updateNode, getCurrentMarkdown, currentFileId, editingTemplateId, saveFileContent])
+  }, [updateNode, getCurrentMarkdown, renameFile, saveFileContent])
 
-  // 自动保存 effect - 当内容变化时触发
+  // ========== 自动保存 ==========
   useEffect(() => {
-    // 首次渲染不触发
-    if (isFirstRender.current) return
-    // 没有选中节点不保存
+    if (isFirstRender.current) {
+      isFirstRender.current = false
+      return
+    }
     if (!selectedNodeId) return
 
     // 清除之前的定时器
@@ -150,34 +161,56 @@ export function NodeEditPanel() {
         clearTimeout(autoSaveTimeoutRef.current)
       }
     }
-  }, [metadataEntries, title, content, selectedNodeId])
+  }, [title, content, selectedNodeId, doSave])
 
-  // 组件卸载时立即保存
+  // ========== 组件卸载时保存 ==========
   useEffect(() => {
     return () => {
       if (autoSaveTimeoutRef.current) {
         clearTimeout(autoSaveTimeoutRef.current)
-        doSave()
       }
+      doSave()
     }
-  }, [])
+  }, [doSave])
 
-  // 保存处理 - 立即保存（取消自动保存定时器）
+  // ========== 事件处理 ==========
   const handleSave = useCallback(() => {
-    // 清除自动保存定时器
     if (autoSaveTimeoutRef.current) {
       clearTimeout(autoSaveTimeoutRef.current)
       autoSaveTimeoutRef.current = null
     }
-    
-    // 立即执行保存
     doSave()
-    
-    // 显示保存成功提示
     toast({ title: '已保存', description: '修改已保存' })
   }, [doSave])
 
-  // 删除节点
+  const handleClose = useCallback(() => {
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current)
+      autoSaveTimeoutRef.current = null
+    }
+    doSave()
+    selectNode(null)
+  }, [doSave, selectNode])
+
+  // ========== 虚拟节点：元数据变化处理 ==========
+  const handleEntriesChange = useCallback((newEntries: MetadataEntry[]) => {
+    // 实时更新到 documentStore
+    const metadata: Record<string, string> = {}
+    newEntries.forEach(({ key, value }) => {
+      if (key.trim()) metadata[key.trim()] = value
+    })
+    updateMetadata(metadata)
+  }, [updateMetadata])
+
+  // ========== 虚拟节点：文件名变化处理 ==========
+  const handleFileNameChange = useCallback((newFileName: string) => {
+    // 实时更新到 documentStore
+    updateFileName(newFileName)
+  }, [updateFileName])
+
+  // ========== 删除节点 ==========
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+
   const handleDelete = useCallback(() => {
     setShowDeleteConfirm(true)
   }, [])
@@ -191,14 +224,15 @@ export function NodeEditPanel() {
     }
   }, [selectedNodeId, deleteNode, selectNode])
 
-  const handleClose = useCallback(() => {
-    selectNode(null)
-  }, [selectNode])
-
-  // 处理元数据变化
-  const handleMetadataChange = useCallback((newEntries: MetadataEntry[]) => {
-    setMetadataEntries(newEntries)
-  }, [])
+  // ========== 准备虚拟节点的数据（使用 useMemo 缓存）==========
+  const metadataEntries = useMemo(() =>
+    document?.metadata
+      ? Object.entries(document.metadata).map(([key, value]) => ({
+          key,
+          value: String(value),
+        }))
+      : []
+  , [document?.metadata])
 
   if (!selectedNode) {
     return null
@@ -213,7 +247,7 @@ export function NodeEditPanel() {
           borderLeft: `1px solid ${themeConfig.border}`,
         }}
       >
-        {/* 头部 - 固定高度 */}
+        {/* 头部 */}
         <div
           className="flex h-16 items-center justify-between px-6 border-b shrink-0"
           style={{
@@ -234,10 +268,10 @@ export function NodeEditPanel() {
             </div>
             <div>
               <h2 className="text-base font-semibold" style={{ color: themeConfig.heading }}>
-                {isVirtualRoot ? 'Front Matter' : '编辑节点'}
+                {isVirtualRoot ? 'Metadata' : '编辑节点'}
               </h2>
               <p className="text-xs" style={{ color: themeConfig.muted }}>
-                {isVirtualRoot ? 'YAML 元数据' : `H${selectedNode.level} 标题`}
+                {isVirtualRoot ? '元数据' : `H${selectedNode.level} 标题`}
               </p>
             </div>
           </div>
@@ -258,11 +292,13 @@ export function NodeEditPanel() {
           </button>
         </div>
 
-        {/* 编辑区域 - 可滚动 */}
+        {/* 编辑区域 */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           {isVirtualRoot ? (
             <VirtualRootEditor
-              initialEntries={metadataEntries}
+              ref={virtualRootEditorRef}
+              entries={metadataEntries}
+              fileName={document?.fileName || ''}
               themeConfig={{
                 card: themeConfig.card,
                 border: themeConfig.border,
@@ -272,7 +308,8 @@ export function NodeEditPanel() {
                 accent: themeConfig.accent,
                 danger: themeConfig.danger,
               }}
-              onChange={handleMetadataChange}
+              onEntriesChange={handleEntriesChange}
+              onFileNameChange={handleFileNameChange}
             />
           ) : (
             <NodeContentEditor
@@ -291,7 +328,7 @@ export function NodeEditPanel() {
             />
           )}
 
-          {/* 子节点信息卡片 */}
+          {/* 子节点信息 */}
           {selectedNode.children.length > 0 && (
             <div
               className="rounded-xl p-4 border"
@@ -313,7 +350,7 @@ export function NodeEditPanel() {
           )}
         </div>
 
-        {/* 底部操作栏 - 固定高度 */}
+        {/* 底部操作栏 */}
         <div
           className="border-t px-6 py-5 shrink-0"
           style={{
@@ -345,18 +382,20 @@ export function NodeEditPanel() {
             >
               取消
             </Button>
-            <Button
-              variant="outline"
-              onClick={handleDelete}
-              className="h-11 w-11 p-0 transition-all duration-200"
-              style={{
-                backgroundColor: 'transparent',
-                borderColor: themeConfig.danger,
-                color: themeConfig.danger,
-              }}
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
+            {!isVirtualRoot && (
+              <Button
+                variant="outline"
+                onClick={handleDelete}
+                className="h-11 w-11 p-0 transition-all duration-200"
+                style={{
+                  backgroundColor: 'transparent',
+                  borderColor: themeConfig.danger,
+                  color: themeConfig.danger,
+                }}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            )}
           </div>
         </div>
       </div>
@@ -367,7 +406,7 @@ export function NodeEditPanel() {
         onOpenChange={setShowDeleteConfirm}
         itemName={selectedNode?.title || '节点'}
         title="删除节点"
-        description={`确定要删除"${selectedNode?.title || '节点'}及其子节点"吗？`}
+        description={`确定要删除"${selectedNode?.title || '节点'}"及其子节点吗？`}
         confirmText="删除"
         cancelText="取消"
         onConfirm={handleConfirmDelete}

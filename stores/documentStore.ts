@@ -137,7 +137,13 @@ interface DocumentStore {
    * @param metadata 新的元数据
    */
   updateMetadata: (metadata: Record<string, string>) => void
-  
+
+  /**
+   * 更新文件名
+   * @param fileName 新的文件名
+   */
+  updateFileName: (fileName: string) => void
+
   /**
    * 从Markdown文本更新（用于文本编辑器）
    * @param markdown Markdown文本
@@ -1131,14 +1137,33 @@ export const useDocumentStore = create<DocumentStore>()(
             type: 'updateMetadata',
             description: `更新元数据: ${changedKeys}`,
           })
-          
+
           // 完全替换元数据，而不是合并
-          set({ 
-            document: { 
-              ...document, 
+          set({
+            document: {
+              ...document,
               metadata,
-              isModified: true 
-            } 
+              isModified: true
+            }
+          })
+        },
+
+        updateFileName: (fileName: string) => {
+          const { document } = get()
+          if (!document) return
+
+          // 添加历史记录
+          useHistoryStore.getState().addHistory({
+            type: 'updateMetadata',
+            description: `更新文件名: ${fileName}`,
+          })
+
+          set({
+            document: {
+              ...document,
+              fileName,
+              isModified: true
+            }
           })
         },
 

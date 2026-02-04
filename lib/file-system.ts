@@ -284,7 +284,7 @@ export function exportAsMarkdown(markdown: string, fileName?: string): boolean {
  */
 function convertMarkdownToHTML(markdown: string): string {
   let html = markdown
-    // 移除YAML Front Matter
+    // 移除 Metadata (YAML Front Matter)
     .replace(/^---\n[\s\S]*?\n---\n?/, '')
     // 代码块
     .replace(/```(\w+)?\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')

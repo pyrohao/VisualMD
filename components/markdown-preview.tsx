@@ -183,9 +183,9 @@ function getThemeStyles(theme: ThemeMode): string {
 }
 
 /**
- * 移除YAML Front Matter
+ * 移除 Metadata (YAML Front Matter)
  */
-function removeYAMLFrontMatter(markdown: string): string {
+function removeMetadata(markdown: string): string {
   return markdown.replace(/^---\n[\s\S]*?\n---\n?/, '')
 }
 
@@ -215,7 +215,7 @@ export function MarkdownPreview() {
   // 使用 remark 处理 markdown
   useEffect(() => {
     const processMarkdown = async () => {
-      const content = removeYAMLFrontMatter(markdown)
+      const content = removeMetadata(markdown)
       
       const result = await unified()
         .use(remarkParse)

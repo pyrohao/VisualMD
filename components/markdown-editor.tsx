@@ -81,9 +81,9 @@ version: 1.0.0
 
 ## 高级功能
 
-### Front Matter支持
+### Metadata 支持
 
-文档元数据使用YAML Front Matter格式定义。
+文档元数据使用 Metadata (YAML Front Matter) 格式定义。
 
 ### 导出选项
 

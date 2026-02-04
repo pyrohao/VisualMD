@@ -243,18 +243,18 @@ export const useFileSystemStore = create<FileSystemStore>()(
           // 提取文档名称（去掉 .md 后缀）
           const docName = fileName.replace(/\.md$/, '')
 
-          // 生成带 YAML front matter 的内容
+          // 生成带 Metadata 的内容
           const content = `---
 name: ${docName}
-description: 
+description:
 ---
 
 # 新节点
 
 开始编辑...`
 
-          // 更新虚拟根节点标题为 Front Matter（通过修改 root.title）
-          // 注意：这个标题仅用于显示，实际保存时虚拟根节点固定显示为 Front Matter
+          // 更新虚拟根节点标题为 Metadata（通过修改 root.title）
+          // 注意：这个标题仅用于显示，实际保存时虚拟根节点固定显示为 Metadata
 
           const newFile: MarkdownFile = {
             id: nanoid(),

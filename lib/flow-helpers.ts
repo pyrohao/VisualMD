@@ -66,7 +66,7 @@ export function treeToNodesAndEdges(
       type: 'headingNode',
       position,
       data: {
-        label: node.isVirtual ? 'Front Matter' : (node.title || '未命名'),
+        label: node.isVirtual ? 'Metadata' : (node.title || '未命名'),
         level: node.level,
         isCollapsed: node.isCollapsed || false,
         hasChildren: node.children.length > 0,

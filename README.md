@@ -66,7 +66,7 @@
 
 采用统一的解析引擎进行 Markdown 处理：
 
-- **YAML Front Matter 解析** - 支持文档元数据管理
+- **Metadata (YAML Front Matter) 解析** - 支持文档元数据管理
 - **标题树解析** - 基于栈的算法高效构建文档树
 - **内容块提取** - 精确提取节点内容
 
@@ -180,7 +180,7 @@ pnpm start
 
 三步解析算法：
 
-1. **提取 YAML Front Matter** - 使用正则表达式匹配并解析 YAML 元数据
+1. **提取 Metadata (YAML Front Matter)** - 使用正则表达式匹配并解析 YAML 元数据
 2. **提取标题节点** - 使用正则 `^(#{1,6})\s+(.+)$` 匹配所有标题
 3. **构建树结构** - 优化算法：
    - 确定最大标题层级，创建虚拟根节点
@@ -191,7 +191,7 @@ pnpm start
 
 深度优先遍历算法：
 
-1. **生成 Front Matter** - 使用 `js-yaml.dump()` 将元数据转为 YAML 格式
+1. **生成 Metadata (YAML Front Matter)** - 使用 `js-yaml.dump()` 将元数据转为 YAML 格式
 2. **DFS 生成内容** - 递归遍历树结构：
    - 跳过断开节点（`isDetached=true`）
    - 按 `children` 数组顺序渲染子节点
@@ -271,9 +271,9 @@ pnpm start
 
 ## 高级功能
 
-### Front Matter 支持
+### Metadata 支持
 
-文档元数据使用 YAML Front Matter 格式定义：
+文档元数据使用 Metadata (YAML Front Matter) 格式定义：
 
 ```yaml
 ---

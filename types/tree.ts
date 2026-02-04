@@ -40,7 +40,7 @@ export interface TreeNode {
 }
 
 /**
- * 文档元数据（YAML Front Matter）
+ * 文档元数据（Metadata）
  * 对应技术文档2.1节
  */
 export interface DocumentMetadata {
