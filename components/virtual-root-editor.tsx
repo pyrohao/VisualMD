@@ -216,11 +216,14 @@ export const VirtualRootEditor = forwardRef<VirtualRootEditorRef, VirtualRootEdi
         </label>
         <button
           onClick={handleSelectFileName}
-          className="w-full h-10 px-3 text-sm text-left rounded-md border-2 transition-colors overflow-hidden text-ellipsis whitespace-nowrap"
+          className="w-full h-10 px-3 text-sm text-left rounded-md border-2 transition-all duration-200 overflow-hidden text-ellipsis whitespace-nowrap shadow-sm hover:shadow-md"
           style={{
-            backgroundColor: isEditingFileName ? themeConfig.accent + '20' : themeConfig.card,
+            backgroundColor: isEditingFileName ? themeConfig.accent + '30' : themeConfig.card,
             borderColor: isEditingFileName ? themeConfig.accent : themeConfig.border,
             color: themeConfig.text,
+            boxShadow: isEditingFileName
+              ? `0 2px 8px ${themeConfig.accent}40, inset 0 1px 0 ${themeConfig.accent}20`
+              : `0 1px 3px ${themeConfig.border}60, inset 0 1px 0 ${themeConfig.card}`,
           }}
         >
           {fileName || <span style={{ color: themeConfig.muted }}>{t('node.untitledDoc')}</span>}
@@ -235,14 +238,17 @@ export const VirtualRootEditor = forwardRef<VirtualRootEditorRef, VirtualRootEdi
           {t('node.clickKeyOrValue')}
         </label>
         {entries.map((entry, index) => (
-          <div key={index} className="flex items-center gap-2">
+          <div key={index} className="flex items-center gap-2 group">
             <button
               onClick={() => handleSelectEntry(index, 'key')}
-              className="flex-1 h-10 px-3 text-sm text-left rounded-md border-2 transition-colors overflow-hidden text-ellipsis whitespace-nowrap"
+              className="flex-1 h-10 px-3 text-sm text-left rounded-md border-2 transition-all duration-200 overflow-hidden text-ellipsis whitespace-nowrap shadow-sm hover:shadow-md"
               style={{
-                backgroundColor: editIndex === index && editField === 'key' ? themeConfig.accent + '20' : themeConfig.card,
+                backgroundColor: editIndex === index && editField === 'key' ? themeConfig.accent + '30' : themeConfig.card,
                 borderColor: editIndex === index && editField === 'key' ? themeConfig.accent : themeConfig.border,
                 color: themeConfig.text,
+                boxShadow: editIndex === index && editField === 'key'
+                  ? `0 2px 8px ${themeConfig.accent}40, inset 0 1px 0 ${themeConfig.accent}20`
+                  : `0 1px 3px ${themeConfig.border}60, inset 0 1px 0 ${themeConfig.card}`,
               }}
             >
               {entry.key || <span style={{ color: themeConfig.muted }}>{t('node.key')}</span>}
@@ -250,11 +256,14 @@ export const VirtualRootEditor = forwardRef<VirtualRootEditorRef, VirtualRootEdi
             <span style={{ color: themeConfig.muted }}>:</span>
             <button
               onClick={() => handleSelectEntry(index, 'value')}
-              className="flex-[2] h-10 px-3 text-sm text-left rounded-md border-2 transition-colors overflow-hidden text-ellipsis whitespace-nowrap"
+              className="flex-[2] h-10 px-3 text-sm text-left rounded-md border-2 transition-all duration-200 overflow-hidden text-ellipsis whitespace-nowrap shadow-sm hover:shadow-md"
               style={{
-                backgroundColor: editIndex === index && editField === 'value' ? themeConfig.accent + '20' : themeConfig.card,
+                backgroundColor: editIndex === index && editField === 'value' ? themeConfig.accent + '30' : themeConfig.card,
                 borderColor: editIndex === index && editField === 'value' ? themeConfig.accent : themeConfig.border,
                 color: themeConfig.text,
+                boxShadow: editIndex === index && editField === 'value'
+                  ? `0 2px 8px ${themeConfig.accent}40, inset 0 1px 0 ${themeConfig.accent}20`
+                  : `0 1px 3px ${themeConfig.border}60, inset 0 1px 0 ${themeConfig.card}`,
               }}
             >
               {entry.value || <span style={{ color: themeConfig.muted }}>{t('node.value')}</span>}
@@ -263,8 +272,17 @@ export const VirtualRootEditor = forwardRef<VirtualRootEditorRef, VirtualRootEdi
               variant="ghost"
               size="icon"
               onClick={() => deleteEntry(index)}
-              className="h-10 w-10 shrink-0 hover:bg-red-50"
-              style={{ color: themeConfig.danger }}
+              className="h-10 w-10 shrink-0 transition-all duration-200 hover:shadow-md"
+              style={{
+                color: themeConfig.danger,
+                backgroundColor: 'transparent',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = `${themeConfig.danger}20`
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent'
+              }}
             >
               <Trash className="w-4 h-4" />
             </Button>
@@ -275,11 +293,14 @@ export const VirtualRootEditor = forwardRef<VirtualRootEditorRef, VirtualRootEdi
       <div className="flex items-center gap-2 pt-2 border-t" style={{ borderColor: themeConfig.border }}>
         <button
           onClick={() => handleSelectNew('key')}
-          className="flex-1 h-10 px-3 text-sm text-left rounded-md border-2 transition-colors overflow-hidden text-ellipsis whitespace-nowrap"
+          className="flex-1 h-10 px-3 text-sm text-left rounded-md border-2 transition-all duration-200 overflow-hidden text-ellipsis whitespace-nowrap shadow-sm hover:shadow-md"
           style={{
-            backgroundColor: isEditingNew && editingNewField === 'key' ? themeConfig.accent + '20' : themeConfig.card,
+            backgroundColor: isEditingNew && editingNewField === 'key' ? themeConfig.accent + '30' : themeConfig.card,
             borderColor: isEditingNew && editingNewField === 'key' ? themeConfig.accent : themeConfig.border,
             color: themeConfig.text,
+            boxShadow: isEditingNew && editingNewField === 'key'
+              ? `0 2px 8px ${themeConfig.accent}40, inset 0 1px 0 ${themeConfig.accent}20`
+              : `0 1px 3px ${themeConfig.border}60, inset 0 1px 0 ${themeConfig.card}`,
           }}
         >
           {newKey || <span style={{ color: themeConfig.muted }}>{t('node.newKey')}</span>}
@@ -287,11 +308,14 @@ export const VirtualRootEditor = forwardRef<VirtualRootEditorRef, VirtualRootEdi
         <span style={{ color: themeConfig.muted }}>:</span>
         <button
           onClick={() => handleSelectNew('value')}
-          className="flex-[2] h-10 px-3 text-sm text-left rounded-md border-2 transition-colors overflow-hidden text-ellipsis whitespace-nowrap"
+          className="flex-[2] h-10 px-3 text-sm text-left rounded-md border-2 transition-all duration-200 overflow-hidden text-ellipsis whitespace-nowrap shadow-sm hover:shadow-md"
           style={{
-            backgroundColor: isEditingNew && editingNewField === 'value' ? themeConfig.accent + '20' : themeConfig.card,
+            backgroundColor: isEditingNew && editingNewField === 'value' ? themeConfig.accent + '30' : themeConfig.card,
             borderColor: isEditingNew && editingNewField === 'value' ? themeConfig.accent : themeConfig.border,
             color: themeConfig.text,
+            boxShadow: isEditingNew && editingNewField === 'value'
+              ? `0 2px 8px ${themeConfig.accent}40, inset 0 1px 0 ${themeConfig.accent}20`
+              : `0 1px 3px ${themeConfig.border}60, inset 0 1px 0 ${themeConfig.card}`,
           }}
         >
           {newValue || <span style={{ color: themeConfig.muted }}>{t('node.value')}</span>}
@@ -301,8 +325,12 @@ export const VirtualRootEditor = forwardRef<VirtualRootEditorRef, VirtualRootEdi
           size="icon"
           onClick={addEntry}
           disabled={!newKey.trim()}
-          className="h-10 w-10 shrink-0 hover:bg-blue-100 disabled:hover:bg-transparent transition-colors"
-          style={{ color: '#0969da', opacity: newKey.trim() ? 1 : 0.4 }}
+          className="h-10 w-10 shrink-0 transition-all duration-200 hover:shadow-md"
+          style={{
+            color: newKey.trim() ? themeConfig.accent : themeConfig.muted,
+            backgroundColor: newKey.trim() ? `${themeConfig.accent}20` : `${themeConfig.border}30`,
+            opacity: newKey.trim() ? 1 : 0.5,
+          }}
         >
           <Plus className="w-5 h-5" strokeWidth={3} />
         </Button>
@@ -314,13 +342,16 @@ export const VirtualRootEditor = forwardRef<VirtualRootEditorRef, VirtualRootEdi
           {getEditLabel()}
         </label>
         <div
-          className="rounded-xl border-2 overflow-hidden"
+          className="rounded-xl border-2 overflow-hidden transition-all duration-200"
           style={{
             backgroundColor: themeConfig.card,
             borderColor: (editIndex !== null && editField !== null) || (isEditingNew && editingNewField !== null) || isEditingFileName
               ? themeConfig.accent
               : themeConfig.border,
             height: '160px',
+            boxShadow: (editIndex !== null && editField !== null) || (isEditingNew && editingNewField !== null) || isEditingFileName
+              ? `0 4px 12px ${themeConfig.accent}30, inset 0 1px 0 ${themeConfig.accent}15`
+              : `0 2px 6px ${themeConfig.border}40, inset 0 1px 0 ${themeConfig.card}`,
           }}
         >
           <Textarea

@@ -24,24 +24,25 @@ export function LanguageSwitcher() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button 
-          variant="ghost" 
-          size="sm" 
-          className="gap-2 transition-colors"
-          style={{ 
-            color: themeConfig.muted,
-            backgroundColor: 'transparent'
+        <Button
+          variant="ghost"
+          size="sm"
+          className="gap-2 transition-all duration-200 hover:shadow-sm"
+          style={{
+            color: themeConfig.text,
+            backgroundColor: `${themeConfig.accent}15`,
+            border: `1px solid ${themeConfig.border}`,
           }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.color = themeConfig.text
-            e.currentTarget.style.backgroundColor = themeConfig.hover
+            e.currentTarget.style.backgroundColor = `${themeConfig.accent}25`
+            e.currentTarget.style.borderColor = themeConfig.accent
           }}
           onMouseLeave={(e) => {
-            e.currentTarget.style.color = themeConfig.muted
-            e.currentTarget.style.backgroundColor = 'transparent'
+            e.currentTarget.style.backgroundColor = `${themeConfig.accent}15`
+            e.currentTarget.style.borderColor = themeConfig.border
           }}
         >
-          <Globe className="w-4 h-4" />
+          <Globe className="w-4 h-4" style={{ color: themeConfig.accent }} />
           <span>{currentLanguage === 'zh' ? '中文' : 'English'}</span>
         </Button>
       </DropdownMenuTrigger>
@@ -98,25 +99,26 @@ export function LanguageToggle() {
   const themeConfig = getThemeConfig()
 
   return (
-    <Button 
-      variant="ghost" 
-      size="sm" 
-      onClick={toggleLanguage} 
-      className="gap-2 transition-colors"
-      style={{ 
-        color: themeConfig.muted,
-        backgroundColor: 'transparent'
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={toggleLanguage}
+      className="gap-2 transition-all duration-200 hover:shadow-sm"
+      style={{
+        color: themeConfig.text,
+        backgroundColor: `${themeConfig.accent}15`,
+        border: `1px solid ${themeConfig.border}`,
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.color = themeConfig.text
-        e.currentTarget.style.backgroundColor = themeConfig.hover
+        e.currentTarget.style.backgroundColor = `${themeConfig.accent}25`
+        e.currentTarget.style.borderColor = themeConfig.accent
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.color = themeConfig.muted
-        e.currentTarget.style.backgroundColor = 'transparent'
+        e.currentTarget.style.backgroundColor = `${themeConfig.accent}15`
+        e.currentTarget.style.borderColor = themeConfig.border
       }}
     >
-      <Globe className="w-4 h-4" />
+      <Globe className="w-4 h-4" style={{ color: themeConfig.accent }} />
       <span>{currentLanguage === 'zh' ? '中文' : 'EN'}</span>
     </Button>
   )

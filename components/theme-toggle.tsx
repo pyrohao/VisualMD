@@ -15,33 +15,27 @@ import { useThemeStore, type ThemeMode } from '@/stores/themeStore'
 import { useCallback } from 'react'
 
 /**
- * 主题配置
+ * 主题配置 - 图标和标签
  */
-const themeConfig: Record<ThemeMode, { label: string; icon: React.ReactNode; bgColor: string; hoverColor: string }> = {
+const themeIcons: Record<ThemeMode, { label: string; icon: React.ReactNode }> = {
   light: {
     label: '明亮',
     icon: <Sun className="h-4 w-4" />,
-    bgColor: 'bg-amber-100',
-    hoverColor: 'hover:bg-amber-200',
   },
   dark: {
     label: '黑暗',
     icon: <Moon className="h-4 w-4" />,
-    bgColor: 'bg-slate-700',
-    hoverColor: 'hover:bg-slate-600',
   },
   reading: {
     label: '阅读',
     icon: <BookOpen className="h-4 w-4" />,
-    bgColor: 'bg-amber-50',
-    hoverColor: 'hover:bg-amber-100',
   },
 }
 
 export function ThemeToggle() {
-  const { theme, setTheme } = useThemeStore()
-
-  const currentTheme = themeConfig[theme]
+  const { theme, setTheme, getThemeConfig } = useThemeStore()
+  const themeConfig = getThemeConfig()
+  const currentTheme = themeIcons[theme]
 
   const handleClick = useCallback(() => {
     const themes: ThemeMode[] = ['light', 'dark', 'reading']
@@ -55,16 +49,23 @@ export function ThemeToggle() {
       variant="ghost"
       size="sm"
       onClick={handleClick}
-      className={`h-9 gap-2 px-3 transition-all duration-200 ${
-        theme === 'dark'
-          ? 'text-slate-200 bg-slate-700 hover:bg-slate-600 hover:text-white'
-          : theme === 'reading'
-          ? 'text-amber-900 bg-amber-100 hover:bg-amber-200'
-          : 'text-amber-700 bg-amber-50 hover:bg-amber-100'
-      }`}
+      className="h-9 gap-2 px-3 transition-all duration-200 hover:shadow-sm"
+      style={{
+        color: themeConfig.text,
+        backgroundColor: `${themeConfig.accent}15`,
+        border: `1px solid ${themeConfig.border}`,
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.backgroundColor = `${themeConfig.accent}25`
+        e.currentTarget.style.borderColor = themeConfig.accent
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.backgroundColor = `${themeConfig.accent}15`
+        e.currentTarget.style.borderColor = themeConfig.border
+      }}
       title={`当前主题: ${currentTheme.label}，点击切换到下一个主题`}
     >
-      {currentTheme.icon}
+      <span style={{ color: themeConfig.accent }}>{currentTheme.icon}</span>
       <span className="text-sm font-medium">{currentTheme.label}</span>
     </Button>
   )
