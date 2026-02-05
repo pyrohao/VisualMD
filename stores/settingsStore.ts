@@ -187,6 +187,11 @@ interface SettingsStore {
   
   /** 设置生成状态 */
   setIsGenerating: (value: boolean, prompt?: string) => void
+  
+  // ==================== 内部方法 ====================
+  
+  /** 从持久化存储恢复配置（内部使用） */
+  _rehydrate: (persistedState: Partial<SettingsStore>) => void
 }
 
 /**
@@ -209,6 +214,35 @@ export const useSettingsStore = create<SettingsStore>()(
         },
         isGenerating: false,
         generatingPrompt: '',
+        
+        // ==================== 初始化方法 ====================
+        
+        /**
+         * 从持久化存储恢复后合并配置
+         * 保留持久化的测试状态和自定义配置
+         */
+        _rehydrate: (persistedState: Partial<SettingsStore>) => {
+          const currentConfigs = get().providerConfigs
+          const persistedConfigs = persistedState.providerConfigs
+          
+          if (persistedConfigs) {
+            // 合并配置：保留持久化的值，缺失的字段使用默认值
+            const mergedConfigs: Record<AIProvider, ProviderConfig> = {
+              openai: { ...createDefaultProviderConfig('openai'), ...persistedConfigs.openai },
+              volcengine: { ...createDefaultProviderConfig('volcengine'), ...persistedConfigs.volcengine },
+              siliconflow: { ...createDefaultProviderConfig('siliconflow'), ...persistedConfigs.siliconflow },
+              zhipu: { ...createDefaultProviderConfig('zhipu'), ...persistedConfigs.zhipu },
+              qianwen: { ...createDefaultProviderConfig('qianwen'), ...persistedConfigs.qianwen },
+              openrouter: { ...createDefaultProviderConfig('openrouter'), ...persistedConfigs.openrouter },
+              custom: { ...createDefaultProviderConfig('custom'), ...persistedConfigs.custom },
+            }
+            
+            set({
+              providerConfigs: mergedConfigs,
+              activeProvider: persistedState.activeProvider || 'openai',
+            })
+          }
+        },
         
         // ==================== 操作实现 ====================
         
@@ -311,6 +345,12 @@ export const useSettingsStore = create<SettingsStore>()(
           activeProvider: state.activeProvider,
           providerConfigs: state.providerConfigs,
         }),
+        onRehydrateStorage: () => (state) => {
+          // 恢复后调用 _rehydrate 方法合并配置
+          if (state && state._rehydrate) {
+            state._rehydrate(state)
+          }
+        },
       }
     ),
     { name: 'SettingsStore' }
