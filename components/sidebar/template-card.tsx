@@ -54,13 +54,23 @@ export function TemplateCard({
           onClick={onSelect}
           className={cn(
             'group relative p-3 rounded-lg border cursor-pointer transition-all duration-200',
-            'hover:shadow-md hover:border-opacity-50',
             isSelected && 'ring-2 ring-offset-1'
           )}
           style={{
             backgroundColor: themeConfig.card,
-            borderColor: themeConfig.border,
+            borderColor: isSelected ? themeConfig.primary : themeConfig.border,
+            boxShadow: isSelected ? `0 0 0 1px ${themeConfig.primary}30` : undefined,
             ...(isSelected && { ringColor: themeConfig.primary }),
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.borderColor = themeConfig.primary
+            e.currentTarget.style.boxShadow = `0 4px 12px ${themeConfig.primary}25`
+            e.currentTarget.style.transform = 'translateY(-1px)'
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.borderColor = isSelected ? themeConfig.primary : themeConfig.border
+            e.currentTarget.style.boxShadow = isSelected ? `0 0 0 1px ${themeConfig.primary}30` : 'none'
+            e.currentTarget.style.transform = 'translateY(0)'
           }}
         >
 
