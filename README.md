@@ -27,6 +27,10 @@
     <img alt="Zustand" src="https://img.shields.io/badge/Zustand-5.0-FF6B6B"></a>
 </p>
 
+<p align="center">
+  <strong>中文</strong> | <a href="./README.en.md">English</a>
+</p>
+
 ---
 
 ## 简介
