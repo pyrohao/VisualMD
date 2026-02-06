@@ -18,6 +18,8 @@ export interface Tab {
   isModified: boolean
   isNew?: boolean // 是否是新建未保存的文件
   fileId?: string | null // 绑定的文件系统文件ID
+  templateId?: string | null // 绑定的模板ID（用于模板编辑）
+  isTemplate?: boolean // 是否是模板编辑标签
 }
 
 interface TabsStore {

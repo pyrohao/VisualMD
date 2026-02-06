@@ -344,6 +344,25 @@ export function MarkdownEditor() {
   useEffect(() => {
     if (!mounted || !activeTab) return
 
+    // 处理模板编辑状态
+    if (activeTab.isTemplate && activeTab.templateId) {
+      // 切换到模板编辑模式
+      setTemplateEditMode({
+        isActive: true,
+        content: activeTab.content,
+        templateName: activeTab.fileName,
+        templateId: activeTab.templateId,
+      })
+      useTemplateStore.setState({
+        editingTemplateId: activeTab.templateId,
+        isTemplateModified: activeTab.isModified,
+      })
+    } else {
+      // 非模板标签，退出模板编辑模式
+      setTemplateEditMode({ isActive: false, content: '', templateName: '', templateId: null })
+      useTemplateStore.setState({ editingTemplateId: null, isTemplateModified: false })
+    }
+
     // 如果标签页有内容，加载到编辑器（传入 fileId 以恢复状态）
     if (activeTab.content) {
       loadDocument(activeTab.content, activeTab.fileName, activeTab.fileId || undefined)
@@ -397,15 +416,26 @@ export function MarkdownEditor() {
     }
   }, [currentFileId, loadDocument, templateEditMode.isActive])
 
-  // 监听文档修改状态，在模板编辑模式下标记模板为已修改
+  // 监听文档修改状态，在模板编辑模式下标记模板和标签为已修改
   useEffect(() => {
     const { document: currentDoc } = useDocumentStore.getState()
     const isDocModified = currentDoc?.isModified ?? false
     const currentTemplateEditMode = templateEditModeRef.current
 
-    // 如果在模板编辑模式下文档被修改，标记模板为已修改
+    // 如果在模板编辑模式下文档被修改，标记模板和标签为已修改
     if (isDocModified && currentTemplateEditMode.isActive && currentTemplateEditMode.templateId) {
       useTemplateStore.setState({ isTemplateModified: true })
+      
+      // 同时更新标签页的修改状态
+      const { tabs, activeTabId } = useTabsStore.getState()
+      const currentTab = tabs.find(t => t.id === activeTabId)
+      if (currentTab && currentTab.isTemplate && !currentTab.isModified) {
+        useTabsStore.setState((state) => ({
+          tabs: state.tabs.map(t =>
+            t.id === activeTabId ? { ...t, isModified: true } : t
+          ),
+        }))
+      }
     }
   }, [document?.isModified, templateEditMode.isActive])
 
@@ -443,10 +473,23 @@ export function MarkdownEditor() {
         ),
       }))
 
+      // 更新标签页状态 - 标记为已保存并更新内容
+      const { tabs, activeTabId } = useTabsStore.getState()
+      const currentTab = tabs.find(t => t.id === activeTabId)
+      if (currentTab && currentTab.isTemplate) {
+        useTabsStore.setState((state) => ({
+          tabs: state.tabs.map(t =>
+            t.id === activeTabId
+              ? { ...t, content: latestMarkdown, isModified: false }
+              : t
+          ),
+        }))
+      }
+
       // 标记模板为已保存
       useTemplateStore.setState({ isTemplateModified: false })
 
-      setTemplateEditMode({ isActive: false, content: '', templateName: '', templateId: null })
+      // 不关闭模板编辑模式，保持标签页打开
       toast({
         title: '模板已保存',
       })
@@ -505,14 +548,34 @@ export function MarkdownEditor() {
       isTemplateModified: false,
     })
 
-    // 直接进入模板编辑模式，不创建文件
-    // 先清空当前文档，确保重新加载
-    loadDocument('', 'temp')
-    // 使用 setTimeout 确保状态更新后再加载新内容
-    setTimeout(() => {
+    // 创建一个新的标签页来编辑模板
+    const { createTab, tabs } = useTabsStore.getState()
+    
+    // 检查是否已经有相同模板ID的标签页
+    const existingTab = tabs.find(t => t.templateId === templateId)
+    if (existingTab) {
+      // 如果已存在，切换到该标签页
+      useTabsStore.setState({ activeTabId: existingTab.id })
       loadDocument(content, templateName)
       setTemplateEditMode({ isActive: true, content, templateName, templateId })
-    }, 0)
+      return
+    }
+    
+    // 创建新标签页
+    const newTabId = createTab(templateName, content)
+    
+    // 标记为模板编辑标签
+    useTabsStore.setState((state) => ({
+      tabs: state.tabs.map(t =>
+        t.id === newTabId
+          ? { ...t, templateId, isTemplate: true }
+          : t
+      ),
+    }))
+    
+    // 加载模板内容
+    loadDocument(content, templateName)
+    setTemplateEditMode({ isActive: true, content, templateName, templateId })
   }, [loadDocument])
 
   // 处理预览模板

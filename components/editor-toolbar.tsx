@@ -420,6 +420,19 @@ export function EditorToolbar({
                     }}
                   />
                   
+                  {/* 模板图标 */}
+                  {tab.isTemplate && (
+                    <span 
+                      className="text-[10px] px-1 rounded mr-1 flex-shrink-0"
+                      style={{
+                        backgroundColor: themeConfig.primary + '20',
+                        color: themeConfig.primary,
+                      }}
+                    >
+                      模板
+                    </span>
+                  )}
+
                   {/* 文件名 */}
                   <span 
                     className="flex-1 text-xs truncate px-2"

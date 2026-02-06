@@ -13,6 +13,7 @@ import { useDocumentStore } from '@/stores/documentStore'
 import { useThemeStore } from '@/stores/themeStore'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useSidebarStore } from '@/stores/sidebarStore'
+import { useTabsStore } from '@/stores/tabsStore'
 import { useTranslation } from '@/stores/languageStore'
 import { findNodeInTreeOrDetached } from '@/lib/flow-helpers'
 import { toast } from '@/hooks/use-toast'
@@ -127,10 +128,11 @@ export function NodeEditPanel() {
       }
     }
 
-    // 5. 保存到文件系统
+    // 5. 保存到文件系统或模板
     if (currFileId) {
       useFileSystemStore.getState().saveFileContent(currFileId, latestContent)
     } else if (editTemplateId) {
+      // 保存模板内容
       useSidebarStore.setState((state) => ({
         templates: state.templates.map(t =>
           t.id === editTemplateId
@@ -139,6 +141,19 @@ export function NodeEditPanel() {
         ),
         isTemplateModified: false,
       }))
+      
+      // 同时更新标签页状态
+      const { tabs, activeTabId } = useTabsStore.getState()
+      const currentTab = tabs.find(t => t.id === activeTabId)
+      if (currentTab && currentTab.isTemplate && currentTab.templateId === editTemplateId) {
+        useTabsStore.setState((state) => ({
+          tabs: state.tabs.map(t =>
+            t.id === activeTabId
+              ? { ...t, content: latestContent, isModified: false }
+              : t
+          ),
+        }))
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
