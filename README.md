@@ -33,12 +33,20 @@
 
 **Visual MD** 是一款创新的 Markdown 可视化编辑器，它将传统的文本编辑与现代化的节点编辑相结合。通过直观的树状结构展示文档层级，帮助你**一眼看清文档骨架**，**快速理解内容脉络并高效组织文档结构**。
 
-无论是阅读长篇文档、整理知识笔记，还是规划文章结构、设计AI提示词，Visual MD 都能帮助你：
+无论是阅读长篇文档、整理知识笔记，还是规划文章结构、设计提示词，Visual MD 都能帮助你：
 - 📊 **快速概览** - 可视化树状结构让文档结构一目了然
 - 🔍 **精准定位** - 点击节点即可跳转到对应内容
 - ✏️ **高效编辑** - 拖拽调整结构，实时同步更新
 
-### 为什么选择 Visual MD？
+### 预览
+
+<p align="center">
+  <img src="./public/assets/screenshots/read-theme.png" alt="阅读主题" width="96%">
+</p>
+<p align="center">
+  <img src="./public/assets/screenshots/light-theme.png" alt="明亮主题" width="48%">
+  <img src="./public/assets/screenshots/dark-theme.png" alt="黑暗主题" width="48%">
+</p>
 
 - 🎯 **可视化编辑** - 告别纯文本编辑，通过拖拽节点直观组织文档结构
 - 🔄 **双向同步** - 可视化编辑与 Markdown 源码实时同步
@@ -197,20 +205,21 @@ pnpm start
 
 #### 1. Markdown 解析器 (`lib/markdown-parser.ts`)
 
-三步解析算法：
+四步解析算法：
 
-1. **提取 Metadata (YAML Front Matter)** - 使用正则表达式匹配并解析 YAML 元数据
-2. **提取标题节点** - 使用正则 `^(#{1,6})\s+(.+)$` 匹配所有标题
+1. **提取 Metadata (YAML Front Matter)** - 使用正则 `/^---\s*\n([\s\S]*?)\n---/` 匹配，使用 `js-yaml` 解析 YAML 元数据
+2. **提取标题节点** - 使用正则 `/^(#{1,6})\s+(.+)$/gm` 匹配所有标题
 3. **构建树结构** - 优化算法：
    - 确定最大标题层级，创建虚拟根节点
    - 处理孤立节点（无父节点的标题）
-   - 使用 O(n) 时间复杂度构建树
+   - 使用栈结构，O(n) 时间复杂度构建树
+4. **提取内容块** - 为每个节点提取自身内容（不包含子节点内容）
 
 #### 2. Markdown 生成器 (`lib/markdown-generator.ts`)
 
 深度优先遍历算法：
 
-1. **生成 Metadata (YAML Front Matter)** - 使用 `js-yaml.dump()` 将元数据转为 YAML 格式
+1. **生成 Metadata (YAML Front Matter)** - 自定义 YAML 序列化（处理多行值、特殊字符等）
 2. **DFS 生成内容** - 递归遍历树结构：
    - 跳过断开节点（`isDetached=true`）
    - 按 `children` 数组顺序渲染子节点

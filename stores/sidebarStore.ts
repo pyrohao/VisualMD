@@ -121,7 +121,7 @@ const BUILT_IN_TEMPLATES = [
  */
 async function loadBuiltInTemplateContent(fileName: string): Promise<string> {
   try {
-    const response = await fetch(`/templates/${fileName}`)
+    const response = await fetch(`/assets/templates/${fileName}`)
     if (!response.ok) {
       throw new Error(`Failed to load template: ${fileName}`)
     }
