@@ -303,6 +303,43 @@ This project is open source under the [Apache-2.0 License](LICENSE.txt).
 
 ---
 
+## Roadmap
+
+Here are the planned features. Thanks for all the suggestions:
+
+### 🟢 Easy (Planned)
+
+| Feature | Description |
+|---------|-------------|
+| **Collapsible Layout** | Visual canvas can be collapsed for focused editing |
+| **Shortcut Optimization** | Add more keyboard shortcuts |
+| **Theme Tuning** | Optimize existing theme colors |
+
+### 🟡 Medium
+
+| Feature | Description |
+|---------|-------------|
+| **Editor Enhancement** | Replace textarea with Monaco/CodeMirror, support syntax highlighting and completion |
+| **GitHub Sync** | Pure frontend implementation, OAuth + GitHub API for document sync |
+| **Export Optimization** | Support more export formats (PDF, Word) |
+
+### 🟠 Hard
+
+| Feature | Description |
+|---------|-------------|
+| **VS Code Extension** | Integrate visual editing into VS Code |
+| **Mobile Adaptation** | Responsive layout, support tablet devices |
+| **Plugin System** | Support custom plugin extensions |
+
+### 🔴 Very Hard
+
+| Feature | Description |
+|---------|-------------|
+| **Multiplayer Collaboration** | Real-time collaborative editing based on Yjs |
+| **Obsidian Plugin** | As an Obsidian community plugin |
+
+---
+
 ## Acknowledgments
 
 Thanks to the following open source projects:
