@@ -14,10 +14,8 @@ import {
   ReactFlow,
   MiniMap,
   Controls,
-  Background,
   useNodesState,
   useEdgesState,
-  addEdge,
   type Node,
   type Edge,
   type OnConnect,
@@ -25,34 +23,37 @@ import {
   type OnConnectStart,
   type OnConnectEnd,
   type EdgeMouseHandler,
-  BackgroundVariant,
   useReactFlow,
   Panel,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { LayoutGrid, Trash2 } from 'lucide-react'
+import { FileJson, LayoutGrid, Trash2 } from 'lucide-react'
 import { Button } from './ui/button'
 import { MarkdownNode } from './markdown-node'
 import { CreateNodesDialog } from './create-nodes-dialog'
-import { treeToNodesAndEdges, type FlowNodeData, findNodeInDetached } from '@/lib/flow-helpers'
-import { calculateTreeLayout } from '@/lib/layout-engine'
+import {
+  FLOW_HANDLE_IDS,
+  findNodeInDetached,
+  shouldHideVirtualRoot,
+  treeToNodesAndEdges,
+  type FlowNodeData,
+} from '@/lib/flow-helpers'
 import { useDocumentStore } from '@/stores/documentStore'
 import type { TreeNode } from '@/types/tree'
 import { useThemeStore } from '@/stores/themeStore'
 import { useTranslation } from '@/stores/languageStore'
 import { toast } from '@/hooks/use-toast'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuTrigger,
-} from './ui/context-menu'
 
 // 注册自定义节点类型
 const nodeTypes: NodeTypes = {
   headingNode: MarkdownNode as unknown as NodeTypes[string],
 }
+
+const CREATE_CHILD_HANDLE_IDS = new Set<string>([
+  FLOW_HANDLE_IDS.sourceLeft,
+  FLOW_HANDLE_IDS.sourceRight,
+])
 
 export function FlowCanvas() {
   // 从Store获取状态和操作
@@ -72,6 +73,7 @@ export function FlowCanvas() {
   const { getThemeConfig } = useThemeStore()
   const themeConfig = getThemeConfig()
   const { t } = useTranslation()
+  const hideVirtualRoot = document ? shouldHideVirtualRoot(document.root) : false
 
   // 启用键盘快捷键
   useKeyboardShortcuts({
@@ -86,6 +88,7 @@ export function FlowCanvas() {
   })
 
   // 将树结构转换为React Flow节点和边
+
   const { nodes: initialNodes, edges: initialEdges } = useMemo(() => {
     if (!document) {
       return { nodes: [], edges: [] }
@@ -94,33 +97,38 @@ export function FlowCanvas() {
     return treeToNodesAndEdges(document.root, detachedNodes)
   }, [document?.root, (document as any)?.detachedNodes])
 
-  // React Flow状态
+  // React Flow??
+
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes as Node<FlowNodeData>[])
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges)
-  const { fitView, setNodes: setFlowNodes, screenToFlowPosition } = useReactFlow()
+  const { fitView, screenToFlowPosition } = useReactFlow()
 
-  // 用于跟踪拖拽状态
+  // ????????
+
   const dragStartPositions = useRef<Map<string, { x: number; y: number }>>(new Map())
 
-  // 用于跟踪连接起始节点
+  // ??????????
+
   const connectingNodeId = useRef<string | null>(null)
   const connectingHandleId = useRef<string | null>(null)
   const connectionSuccess = useRef<boolean>(false)
-  // 用于存储连接结束时的鼠标位置（用于确定插入点）
+  // ???????????????????????
   const connectEndPosition = useRef<{ x: number; y: number } | null>(null)
 
-  // 创建子节点对话框状态
+  // ??????????
+
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [connectingParentNode, setConnectingParentNode] = useState<TreeNode | null>(null)
 
-  // 选中的边状态
+  // ??????
+
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
-  // 右键菜单状态
+  // ??????
   const [contextMenuEdge, setContextMenuEdge] = useState<Edge | null>(null)
   const [contextMenuOpen, setContextMenuOpen] = useState(false)
   const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 })
 
-  // 当文档变化时更新节点和边
+  // ????????????
   useEffect(() => {
     if (!document) return
 
@@ -128,6 +136,7 @@ export function FlowCanvas() {
     const { nodes: newNodes, edges: newEdges } = treeToNodesAndEdges(document.root, detachedNodes)
 
     // 添加回调函数到节点数据
+
     const nodesWithCallbacks = newNodes.map(node => ({
       ...node,
       data: {
@@ -151,6 +160,7 @@ export function FlowCanvas() {
     }))
 
     // 设置边的基础样式
+
     const edgesWithStyle = newEdges.map(edge => ({
       ...edge,
       style: {
@@ -194,6 +204,9 @@ export function FlowCanvas() {
 
 
   // 获取节点的所有子节点ID（递归）- 从文档树和 edges 中查找
+
+
+
   const getAllChildNodeIds = useCallback((nodeId: string): string[] => {
     if (!document) return []
 
@@ -201,6 +214,7 @@ export function FlowCanvas() {
     const visited = new Set<string>()
 
     // 从文档树中查找子节点
+
     const findChildrenInTree = (root: TreeNode, targetId: string): boolean => {
       if (root.id === targetId) {
         const collectChildren = (node: TreeNode) => {
@@ -224,6 +238,7 @@ export function FlowCanvas() {
     findChildrenInTree(document.root, nodeId)
 
     // 从 edges 中查找子节点（包括断开的节点）
+
     const findChildrenInEdges = (parentId: string) => {
       const directChildren = edges
         .filter((edge) => edge.source === parentId)
@@ -245,6 +260,7 @@ export function FlowCanvas() {
   }, [document, edges])
 
   // 自定义节点变化处理，支持拖拽时子节点跟随移动
+
   const handleNodesChange = useCallback(
     (changes: any[]) => {
       // 处理位置变化
@@ -270,6 +286,7 @@ export function FlowCanvas() {
         }
 
         // 检查是否是拖拽结束
+
         const dragEndChange = positionChanges.find(
           (change) => change.dragging === false && dragStartPositions.current.has(change.id)
         )
@@ -280,6 +297,7 @@ export function FlowCanvas() {
         }
 
         // 处理正在拖拽的节点及其子节点
+
         const draggingChange = positionChanges.find((change) => change.dragging === true)
 
         if (draggingChange) {
@@ -292,6 +310,7 @@ export function FlowCanvas() {
             const deltaY = draggingChange.position.y - startPos.y
 
             // 获取所有子节点ID
+
             const childNodeIds = getAllChildNodeIds(draggedNodeId)
 
             if (childNodeIds.length > 0) {
@@ -330,8 +349,9 @@ export function FlowCanvas() {
   )
 
   // 处理连接开始
+
   const onConnectStart: OnConnectStart = useCallback(
-    (event, params) => {
+    (_event, params) => {
       connectingNodeId.current = params.nodeId
       connectingHandleId.current = params.handleId
     },
@@ -339,14 +359,13 @@ export function FlowCanvas() {
   )
 
   // 处理连接结束（拖拽释放时）
+
   const onConnectEnd: OnConnectEnd = useCallback(
     (event) => {
       const sourceNodeId = connectingNodeId.current
       const sourceHandle = connectingHandleId.current
 
-      // 检查是否是从右侧连接点拖拽的
-      if (!sourceNodeId || sourceHandle !== 'right') {
-        // 重置连接状态
+      if (!sourceNodeId || !sourceHandle || !CREATE_CHILD_HANDLE_IDS.has(sourceHandle)) {
         connectingNodeId.current = null
         connectingHandleId.current = null
         connectionSuccess.current = false
@@ -354,9 +373,7 @@ export function FlowCanvas() {
         return
       }
 
-      // 如果连接已经成功建立，不打开创建对话框
       if (connectionSuccess.current) {
-        // 重置连接状态
         connectingNodeId.current = null
         connectingHandleId.current = null
         connectionSuccess.current = false
@@ -364,7 +381,6 @@ export function FlowCanvas() {
         return
       }
 
-      // 记录鼠标位置（用于确定插入点）
       if (event && 'clientX' in event) {
         const mouseEvent = event as MouseEvent
         const flowPosition = screenToFlowPosition({
@@ -374,22 +390,21 @@ export function FlowCanvas() {
         connectEndPosition.current = flowPosition
       }
 
-      // 查找父节点
-      const parentNode = document?.root ?
-        (() => {
-          const findNode = (root: TreeNode, id: string): TreeNode | null => {
-            if (root.id === id) return root
-            for (const child of root.children) {
-              const found = findNode(child, id)
-              if (found) return found
+      const parentNode = document?.root
+        ? (() => {
+            const findNode = (root: TreeNode, id: string): TreeNode | null => {
+              if (root.id === id) return root
+              for (const child of root.children) {
+                const found = findNode(child, id)
+                if (found) return found
+              }
+              return null
             }
-            return null
-          }
-          return findNode(document.root, sourceNodeId)
-        })() : null
+            return findNode(document.root, sourceNodeId)
+          })()
+        : null
 
       if (!parentNode) {
-        // 重置连接状态
         connectingNodeId.current = null
         connectingHandleId.current = null
         connectionSuccess.current = false
@@ -397,13 +412,11 @@ export function FlowCanvas() {
         return
       }
 
-      // 检查层级限制
       if (parentNode.level >= 6) {
         toast({
           title: t('common.maxLevelReached'),
           variant: 'destructive',
         })
-        // 重置连接状态
         connectingNodeId.current = null
         connectingHandleId.current = null
         connectionSuccess.current = false
@@ -411,14 +424,12 @@ export function FlowCanvas() {
         return
       }
 
-      // 打开创建子节点对话框
       setConnectingParentNode(parentNode)
       setIsCreateDialogOpen(true)
     },
-    [document, screenToFlowPosition]
+    [document, screenToFlowPosition, t]
   )
 
-  // 处理创建子节点确认
   const handleCreateNodesConfirm = useCallback((titles: string[]) => {
     if (!connectingParentNode) return
 
@@ -439,6 +450,7 @@ export function FlowCanvas() {
       }).sort((a, b) => a.y - b.y)
 
       // 找到应该插入的位置
+
       const endY = connectEndPosition.current.y
       for (let i = 0; i < siblingsWithY.length; i++) {
         if (endY < siblingsWithY[i].y) {
@@ -453,6 +465,7 @@ export function FlowCanvas() {
     }
 
     // 批量创建子节点
+
     const createdNodeIds: string[] = []
     for (let i = 0; i < titles.length; i++) {
       const title = titles[i]
@@ -480,18 +493,21 @@ export function FlowCanvas() {
     connectionSuccess.current = false
 
     // 如果有创建的节点，选中最后一个
+
     if (createdNodeIds.length > 0) {
       selectNode(createdNodeIds[createdNodeIds.length - 1])
     }
   }, [connectingParentNode, selectNode, nodes])
 
   // 处理创建子节点取消
+
   const handleCreateNodesCancel = useCallback(() => {
     setIsCreateDialogOpen(false)
     setConnectingParentNode(null)
   }, [])
 
   // 处理节点连接（用于连接断开的节点）
+
   const onConnect: OnConnect = useCallback(
     (connection) => {
       const { source, target } = connection
@@ -502,11 +518,13 @@ export function FlowCanvas() {
       connectionSuccess.current = true
 
       // 检查是否是断开节点的重新连接
+
       const detachedNodes = (document as any).detachedNodes || []
       const isSourceDetached = detachedNodes.some((n: TreeNode) => n.id === source)
       const isTargetDetached = detachedNodes.some((n: TreeNode) => n.id === target)
 
       // 获取两个节点的 level
+
       const getNodeLevel = (id: string): number => {
         // 先在树中查找
         const findInTree = (root: TreeNode): number | null => {
@@ -521,6 +539,7 @@ export function FlowCanvas() {
         if (levelInTree !== null) return levelInTree
 
         // 在断开节点中查找
+
         const findInDetached = (nodes: TreeNode[]): number | null => {
           for (const node of nodes) {
             if (node.id === id) return node.level
@@ -553,12 +572,14 @@ export function FlowCanvas() {
       }
 
       // 如果源节点是断开的，尝试连接到目标节点
+
       if (isSourceDetached) {
         connectNode(childId, parentId)
         return
       }
 
       // 如果目标节点是断开的，尝试将目标节点连接到源节点
+
       if (isTargetDetached) {
         connectNode(childId, parentId)
         return
@@ -581,6 +602,7 @@ export function FlowCanvas() {
       if (!sourceNode || !targetNode) return
 
       // 检查层级关系：只能连接到大一级的节点
+
       const expectedLevel = sourceNode.level + 1
       if (targetNode.level !== expectedLevel) {
         toast({
@@ -605,11 +627,13 @@ export function FlowCanvas() {
   )
 
   // 处理边的点击（选中边）
+
   const onEdgeClick: EdgeMouseHandler = useCallback((_, edge) => {
     setSelectedEdgeId(edge.id)
   }, [])
 
   // 处理边的右键点击（显示菜单）
+
   const onEdgeContextMenu = useCallback((event: React.MouseEvent, edge: Edge) => {
     event.preventDefault()
     setSelectedEdgeId(edge.id)
@@ -619,12 +643,14 @@ export function FlowCanvas() {
   }, [])
 
   // 处理删除选中的边
+
   const handleDeleteEdge = useCallback(() => {
     if (!contextMenuEdge || !document) return
 
     const targetId = contextMenuEdge.target
 
     // 查找目标节点（先在树中查找，再在断开节点中查找）
+
     const findNode = (root: TreeNode, id: string): TreeNode | null => {
       if (root.id === id) return root
       for (const child of root.children) {
@@ -638,6 +664,7 @@ export function FlowCanvas() {
     let isDetachedEdge = false
     
     // 如果不在树中，在断开节点中查找
+    
     if (!targetNode && document.detachedNodes) {
       targetNode = findNodeInDetached(document.detachedNodes, targetId)
       isDetachedEdge = true
@@ -650,6 +677,7 @@ export function FlowCanvas() {
     }
 
     // 获取当前节点的位置，并计算偏移后的新位置
+
     const currentNode = nodes.find(n => n.id === targetId)
     const newPosition = currentNode?.position
       ? {
@@ -659,6 +687,7 @@ export function FlowCanvas() {
       : undefined
 
     // 先更新节点位置（带偏移）
+
     if (newPosition) {
       updateNode(targetId, { position: newPosition })
     }
@@ -671,6 +700,7 @@ export function FlowCanvas() {
   }, [contextMenuEdge, document, detachNode, nodes, updateNode])
 
   // 处理画布点击（取消选择）
+
   const onPaneClick = useCallback(() => {
     selectNode(null)
     setSelectedEdgeId(null)
@@ -679,19 +709,23 @@ export function FlowCanvas() {
   }, [selectNode])
 
   // 处理节点点击
+
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
     selectNode(node.id)
     setSelectedEdgeId(null)
   }, [selectNode])
 
   // 一键整理布局
+
   const handleLayout = useCallback(() => {
     const latestDocument = useDocumentStore.getState().document
     if (!latestDocument) return
 
     // 重新计算布局（包含断开的节点）
+
     const detachedNodes = (latestDocument as any).detachedNodes || []
-    const positions = calculateTreeLayout(latestDocument.root, detachedNodes)
+    const { nodes: layoutNodes } = treeToNodesAndEdges(latestDocument.root, detachedNodes)
+    const positions = new Map(layoutNodes.map((node) => [node.id, node.position]))
 
     // 更新节点位置
     setNodes((nds) =>
@@ -727,6 +761,7 @@ export function FlowCanvas() {
   // 这样可以保持用户手动调整的位置不变
 
   // 如果没有文档，显示空状态
+
   if (!document) {
     return (
       <div className="h-full w-full flex items-center justify-center" style={{ backgroundColor: themeConfig.background }}>
@@ -766,7 +801,7 @@ export function FlowCanvas() {
         defaultEdgeOptions={{
           animated: true,
           style: { stroke: themeConfig.muted, strokeWidth: 2 },
-          type: 'smoothstep',
+          type: 'default',
         }}
         colorMode="light"
         proOptions={{ hideAttribution: true }}
@@ -802,20 +837,38 @@ export function FlowCanvas() {
 
         {/* 一键整理布局按钮 */}
         <Panel position="top-left" className="m-4">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleLayout}
-            className="gap-2 shadow-md hover:shadow-lg transition-shadow"
-            style={{
-              backgroundColor: themeConfig.card,
-              borderColor: themeConfig.border,
-              color: themeConfig.text,
-            }}
-          >
-            <LayoutGrid className="h-4 w-4" />
-            {t('canvas.layout')}
-          </Button>
+          <div className="flex gap-2">
+            {hideVirtualRoot && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => selectNode('root')}
+                className="gap-2 shadow-md hover:shadow-lg transition-shadow"
+                style={{
+                  backgroundColor: themeConfig.card,
+                  borderColor: themeConfig.border,
+                  color: themeConfig.text,
+                }}
+              >
+                <FileJson className="h-4 w-4" />
+                {t('node.metadata')}
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleLayout}
+              className="gap-2 shadow-md hover:shadow-lg transition-shadow"
+              style={{
+                backgroundColor: themeConfig.card,
+                borderColor: themeConfig.border,
+                color: themeConfig.text,
+              }}
+            >
+              <LayoutGrid className="h-4 w-4" />
+              {t('canvas.layout')}
+            </Button>
+          </div>
         </Panel>
 
         {/* 小地图 */}

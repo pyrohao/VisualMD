@@ -1058,6 +1058,14 @@ export const useDocumentStore = create<DocumentStore>()(
             
             // 计算子节点的新位置：在父节点右侧，垂直方向根据现有子节点数量偏移
             const existingChildrenCount = parentNode.children.length
+            let horizontalDirection = 1
+            const resolveChildX = (nextChildX: number) => nextChildX + (horizontalDirection - 1) * 240
+            const firstChildPosition = parentNode.children[0]?.position
+            if (firstChildPosition) {
+              horizontalDirection = firstChildPosition.x < parentPosition.x ? -1 : 1
+            } else if (detachedNode.position) {
+              horizontalDirection = detachedNode.position.x < parentPosition.x ? -1 : 1
+            }
             const childX = parentPosition.x + 240 // 水平间距 240px
             const childY = parentPosition.y + existingChildrenCount * 100 // 垂直间距 100px
             
@@ -1068,7 +1076,7 @@ export const useDocumentStore = create<DocumentStore>()(
                 ...detachedNode,
                 parentId: parentId,
                 isDetached: false,
-                position: { x: childX, y: childY }
+                position: { x: resolveChildX(childX), y: childY }
               }]
             }
             updatedDetachedNodes[updatedParentIndex] = updatedParent

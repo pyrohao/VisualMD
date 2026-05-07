@@ -1,33 +1,39 @@
 /**
  * 树形布局算法
  *
- * 本模块提供树形布局计算功能，包括：
- * 1. 横向思维导图布局算法
- * 2. 节点位置计算
- *
- * 对应技术文档第3.3节
+ * 提供脑图式布局计算：
+ * 1. 根节点居中
+ * 2. 一级分支左右平铺
+ * 3. 同侧子树沿分支方向继续展开
  */
 
 import type { TreeNode, Position } from '@/types/tree'
+
+export type BranchDirection = 'left' | 'right' | 'center'
 
 /**
  * 布局配置参数
  */
 export interface LayoutConfig {
-  /** 每层宽度（水平间距，默认280px） */
+  /** 每层宽度（水平间距） */
   levelWidth: number
-  /** 节点高度（默认100px） */
+  /** 估算节点高度 */
   nodeHeight: number
-  /** 兄弟节点垂直间距（默认20px） */
+  /** 兄弟节点垂直间距 */
   siblingGap: number
-  /** 起始X偏移（默认50px） */
+  /** 左侧边距 */
   startX: number
-  /** 起始Y偏移（默认50px） */
+  /** 顶部边距 */
   startY: number
 }
 
+export interface LayoutResult {
+  positions: Map<string, Position>
+  directions: Map<string, BranchDirection>
+}
+
 /**
- * 默认布局配置 - 横向思维导图风格
+ * 默认布局配置 - 脑图风格
  */
 export const DEFAULT_LAYOUT_CONFIG: LayoutConfig = {
   levelWidth: 240,
@@ -37,13 +43,6 @@ export const DEFAULT_LAYOUT_CONFIG: LayoutConfig = {
   startY: 40,
 }
 
-/**
- * 计算节点的子树高度（垂直方向）
- *
- * @param node 节点
- * @param config 布局配置
- * @returns 子树高度
- */
 function calculateSubtreeHeight(node: TreeNode, config: LayoutConfig): number {
   if (node.children.length === 0 || node.isCollapsed) {
     return config.nodeHeight + config.siblingGap
@@ -57,158 +56,247 @@ function calculateSubtreeHeight(node: TreeNode, config: LayoutConfig): number {
   return Math.max(config.nodeHeight + config.siblingGap, childrenHeight)
 }
 
+function calculateBranchDepth(node: TreeNode): number {
+  if (node.children.length === 0 || node.isCollapsed) {
+    return 1
+  }
+
+  return 1 + Math.max(...node.children.map(calculateBranchDepth))
+}
+
+function splitRootChildren(children: TreeNode[]): {
+  leftChildren: TreeNode[]
+  rightChildren: TreeNode[]
+} {
+  const splitIndex = Math.floor(children.length / 2)
+
+  return {
+    leftChildren: children.slice(0, splitIndex),
+    rightChildren: children.slice(splitIndex),
+  }
+}
+
+function inferDirectionFromX(
+  parentX: number,
+  childX: number,
+  fallback: BranchDirection
+): BranchDirection {
+  if (childX < parentX) {
+    return 'left'
+  }
+
+  if (childX > parentX) {
+    return 'right'
+  }
+
+  return fallback
+}
+
 /**
- * 横向思维导图布局算法
- * 根节点在左侧，子节点向右展开
- *
- * 算法：计算横向树形布局
- * 时间复杂度：O(n)，n为节点数量
- *
- * @param root 根节点
- * @param detachedNodes 断开的节点数组（可选）
- * @param config 布局配置
- * @returns 节点ID到位置的映射
+ * 计算脑图布局及分支方向
+ */
+export function calculateTreeLayoutResult(
+  root: TreeNode,
+  detachedNodes: TreeNode[] = [],
+  config: LayoutConfig = DEFAULT_LAYOUT_CONFIG
+): LayoutResult {
+  const positions = new Map<string, Position>()
+  const directions = new Map<string, BranchDirection>()
+
+  const { leftChildren, rightChildren } = splitRootChildren(root.children)
+  const maxLeftDepth = Math.max(0, ...leftChildren.map(calculateBranchDepth))
+  const centerX = config.startX + maxLeftDepth * config.levelWidth
+
+  const layoutBranch = (
+    node: TreeNode,
+    depth: number,
+    startY: number,
+    direction: Exclude<BranchDirection, 'center'>
+  ): number => {
+    directions.set(node.id, direction)
+
+    const x =
+      direction === 'left'
+        ? centerX - depth * config.levelWidth
+        : centerX + depth * config.levelWidth
+
+    if (node.children.length === 0 || node.isCollapsed) {
+      positions.set(node.id, { x, y: startY })
+      return config.nodeHeight + config.siblingGap
+    }
+
+    let currentY = startY
+
+    for (const child of node.children) {
+      const childHeight = calculateSubtreeHeight(child, config)
+      layoutBranch(child, depth + 1, currentY, direction)
+      currentY += childHeight
+    }
+
+    const occupiedHeight = currentY - startY
+    const totalHeight = Math.max(config.nodeHeight + config.siblingGap, occupiedHeight)
+    const y = startY + Math.max(0, (totalHeight - config.nodeHeight) / 2)
+
+    positions.set(node.id, { x, y })
+    return totalHeight
+  }
+
+  const layoutGroup = (
+    nodes: TreeNode[],
+    direction: Exclude<BranchDirection, 'center'>,
+    startY: number
+  ): number => {
+    let currentY = startY
+
+    for (const node of nodes) {
+      const subtreeHeight = calculateSubtreeHeight(node, config)
+      layoutBranch(node, 1, currentY, direction)
+      currentY += subtreeHeight
+    }
+
+    return currentY - startY
+  }
+
+  directions.set(root.id, 'center')
+
+  if (root.children.length === 0 || root.isCollapsed) {
+    positions.set(root.id, { x: centerX, y: config.startY })
+  } else {
+    const leftHeight = leftChildren.reduce(
+      (sum, child) => sum + calculateSubtreeHeight(child, config),
+      0
+    )
+    const rightHeight = rightChildren.reduce(
+      (sum, child) => sum + calculateSubtreeHeight(child, config),
+      0
+    )
+
+    const contentHeight = Math.max(
+      config.nodeHeight + config.siblingGap,
+      leftHeight,
+      rightHeight
+    )
+
+    if (leftChildren.length > 0) {
+      layoutGroup(leftChildren, 'left', config.startY + (contentHeight - leftHeight) / 2)
+    }
+
+    if (rightChildren.length > 0) {
+      layoutGroup(rightChildren, 'right', config.startY + (contentHeight - rightHeight) / 2)
+    }
+
+    positions.set(root.id, {
+      x: centerX,
+      y: config.startY + Math.max(0, (contentHeight - config.nodeHeight) / 2),
+    })
+  }
+
+  const preserveDetachedPosition = (
+    node: TreeNode,
+    parentPosition: Position | null,
+    fallbackDirection: BranchDirection
+  ) => {
+    const fallbackX = parentPosition
+      ? parentPosition.x + (fallbackDirection === 'left' ? -config.levelWidth : config.levelWidth)
+      : centerX + config.levelWidth * 1.5
+    const fallbackY = parentPosition ? parentPosition.y : config.startY
+    const position = node.position ?? { x: fallbackX, y: fallbackY }
+    const direction = parentPosition
+      ? inferDirectionFromX(parentPosition.x, position.x, fallbackDirection)
+      : inferDirectionFromX(centerX, position.x, fallbackDirection)
+
+    positions.set(node.id, position)
+    directions.set(node.id, direction)
+
+    node.children.forEach((child, index) => {
+      const childFallbackPosition = child.position ?? {
+        x: position.x + (direction === 'left' ? -config.levelWidth : config.levelWidth),
+        y: position.y + (index + 1) * (config.nodeHeight + config.siblingGap),
+      }
+
+      preserveDetachedPosition(
+        { ...child, position: childFallbackPosition },
+        position,
+        direction
+      )
+    })
+  }
+
+  const layoutDetachedBranch = (
+    node: TreeNode,
+    depth: number,
+    startY: number,
+    startX: number,
+    direction: Exclude<BranchDirection, 'center'>
+  ): number => {
+    const x =
+      direction === 'left'
+        ? startX - depth * config.levelWidth
+        : startX + depth * config.levelWidth
+
+    positions.set(node.id, { x, y: startY })
+    directions.set(node.id, direction)
+
+    if (node.children.length === 0 || node.isCollapsed) {
+      return config.nodeHeight + config.siblingGap
+    }
+
+    let currentY = startY
+
+    for (const child of node.children) {
+      const childHeight = calculateSubtreeHeight(child, config)
+      layoutDetachedBranch(child, depth + 1, currentY, startX, direction)
+      currentY += childHeight
+    }
+
+    const occupiedHeight = currentY - startY
+    const totalHeight = Math.max(config.nodeHeight + config.siblingGap, occupiedHeight)
+    const y = startY + Math.max(0, (totalHeight - config.nodeHeight) / 2)
+
+    positions.set(node.id, { x, y })
+    return totalHeight
+  }
+
+  if (detachedNodes.length > 0) {
+    let maxX = centerX
+    let nextDetachedY = config.startY
+
+    for (const position of positions.values()) {
+      maxX = Math.max(maxX, position.x)
+      nextDetachedY = Math.max(nextDetachedY, position.y)
+    }
+
+    const detachedStartX = maxX + config.levelWidth * 1.5
+
+    detachedNodes.forEach((detachedNode) => {
+      if (detachedNode.position) {
+        preserveDetachedPosition(detachedNode, null, 'right')
+        const subtreeBottom = detachedNode.position.y + calculateSubtreeHeight(detachedNode, config)
+        nextDetachedY = Math.max(nextDetachedY, subtreeBottom)
+        return
+      }
+
+      layoutDetachedBranch(detachedNode, 0, nextDetachedY, detachedStartX, 'right')
+      nextDetachedY += calculateSubtreeHeight(detachedNode, config)
+    })
+  }
+
+  return { positions, directions }
+}
+
+/**
+ * 兼容旧调用：只返回位置映射
  */
 export function calculateTreeLayout(
   root: TreeNode,
   detachedNodes: TreeNode[] = [],
   config: LayoutConfig = DEFAULT_LAYOUT_CONFIG
 ): Map<string, Position> {
-  const positions = new Map<string, Position>()
-
-  /**
-   * 递归计算节点位置
-   *
-   * @param node 当前节点
-   * @param depth 当前深度（层级）
-   * @param startY 起始Y坐标
-   * @returns 该子树占用的总高度
-   */
-  function calculateNodePosition(node: TreeNode, depth: number, startY: number): number {
-    // X坐标：基于层级的水平位置
-    const x = config.startX + depth * config.levelWidth
-
-    if (node.children.length === 0 || node.isCollapsed) {
-      // 叶子节点或折叠节点
-      const y = startY + config.nodeHeight / 2
-      positions.set(node.id, { x, y })
-      return config.nodeHeight + config.siblingGap
-    }
-
-    // 计算所有子节点的位置
-    let currentY = startY
-    const childPositions: { node: TreeNode; y: number; height: number }[] = []
-
-    for (const child of node.children) {
-      const childHeight = calculateSubtreeHeight(child, config)
-      const childY = currentY + childHeight / 2 - config.nodeHeight / 2
-      childPositions.push({
-        node: child,
-        y: childY + config.nodeHeight / 2,
-        height: childHeight,
-      })
-      calculateNodePosition(child, depth + 1, currentY)
-      currentY += childHeight
-    }
-
-    // 父节点Y位置：所有子节点的中心
-    const firstChild = childPositions[0]
-    const lastChild = childPositions[childPositions.length - 1]
-    const y = (firstChild.y + lastChild.y) / 2
-
-    positions.set(node.id, { x, y })
-
-    return currentY - startY
-  }
-
-  // 从根节点开始布局
-  calculateNodePosition(root, 0, config.startY)
-
-  // 计算断开的节点的位置（保留原位置）
-  if (detachedNodes.length > 0) {
-    detachedNodes.forEach((detachedNode) => {
-      // 如果节点已有位置信息，保留原位置
-      if (detachedNode.position) {
-        // 递归保留断开节点及其子节点的位置
-        function preserveDetachedPosition(node: TreeNode, parentX: number, parentY: number) {
-          // 使用相对位置或绝对位置
-          const x = node.position?.x ?? parentX + config.levelWidth
-          const y = node.position?.y ?? parentY
-          
-          positions.set(node.id, { x, y })
-
-          // 递归处理子节点
-          if (node.children && node.children.length > 0) {
-            node.children.forEach((child, index) => {
-              preserveDetachedPosition(child, x, y + index * (config.nodeHeight + config.siblingGap))
-            })
-          }
-        }
-
-        preserveDetachedPosition(detachedNode, detachedNode.position.x, detachedNode.position.y)
-      } else {
-        // 如果没有位置信息，放在右侧独立区域
-        // 找到已连接节点的最大 X 坐标
-        let maxX = config.startX
-        for (const pos of positions.values()) {
-          maxX = Math.max(maxX, pos.x)
-        }
-
-        // 断开节点的起始位置（在已连接节点右侧留出间距）
-        const detachedStartX = maxX + config.levelWidth * 1.5
-        const detachedStartY = config.startY
-
-        // 计算断开节点及其子树的位置
-        const subtreeHeight = calculateSubtreeHeight(detachedNode, config)
-        
-        // 断开节点放在独立列
-        function calculateDetachedPosition(node: TreeNode, depth: number, startY: number): number {
-          const x = detachedStartX + depth * config.levelWidth
-
-          if (node.children.length === 0 || node.isCollapsed) {
-            const y = startY + config.nodeHeight / 2
-            positions.set(node.id, { x, y })
-            return config.nodeHeight + config.siblingGap
-          }
-
-          let currentY = startY
-          const childPositions: { node: TreeNode; y: number; height: number }[] = []
-
-          for (const child of node.children) {
-            const childHeight = calculateSubtreeHeight(child, config)
-            const childY = currentY + childHeight / 2 - config.nodeHeight / 2
-            childPositions.push({
-              node: child,
-              y: childY + config.nodeHeight / 2,
-              height: childHeight,
-            })
-            calculateDetachedPosition(child, depth + 1, currentY)
-            currentY += childHeight
-          }
-
-          const firstChild = childPositions[0]
-          const lastChild = childPositions[childPositions.length - 1]
-          const y = (firstChild.y + lastChild.y) / 2
-
-          positions.set(node.id, { x, y })
-
-          return currentY - startY
-        }
-
-        calculateDetachedPosition(detachedNode, 0, detachedStartY)
-      }
-    })
-  }
-
-  return positions
+  return calculateTreeLayoutResult(root, detachedNodes, config).positions
 }
 
 /**
- * 计算节点在画布上的边界框
- * 用于自动调整视图
- *
- * @param positions 位置映射
- * @returns 边界框 { minX, minY, maxX, maxY }
+ * 计算节点边界框
  */
 export function calculateBounds(positions: Map<string, Position>): {
   minX: number
