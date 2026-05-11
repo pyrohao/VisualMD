@@ -836,7 +836,7 @@ export function FlowCanvas() {
         />
 
         {/* 一键整理布局按钮 */}
-        <Panel position="top-left" className="m-4">
+        <Panel position="top-left" className="ml-4 mt-20">
           <div className="flex gap-2">
             {hideVirtualRoot && (
               <Button

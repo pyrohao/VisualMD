@@ -8,11 +8,9 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { ReactFlowProvider } from '@xyflow/react'
 import { EditorToolbar } from './editor-toolbar'
 import { IconSidebar } from './sidebar/icon-sidebar'
 import { PanelContainer } from './sidebar/panel-container'
-import { FlowCanvas } from './flow-canvas'
 import { MarkdownPreview } from './markdown-preview'
 import { NodeEditPanel } from './node-edit-panel'
 import { SearchDialog } from './search-dialog'
@@ -25,6 +23,7 @@ import { useTabsStore } from '@/stores/tabsStore'
 import { initTheme, useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { useSidebarStore as useTemplateStore } from '@/stores/sidebarStore'
 import { EmptyTabView } from './empty-tab-view'
+import { EditorCanvasShell } from './editor-canvas-shell'
 
 /**
  * 默认示例Markdown内容（英文版）
@@ -644,9 +643,7 @@ export function MarkdownEditor() {
             return showEmptyView ? (
               <EmptyTabView tabId={activeTabId || 'blank'} onOpenSearch={() => setSearchDialogOpen(true)} />
             ) : (
-              <ReactFlowProvider>
-                <FlowCanvas />
-              </ReactFlowProvider>
+              <EditorCanvasShell document={document} />
             )
           })()}
         </div>
