@@ -7,7 +7,7 @@
  * 设计参考 Obsidian 的左侧边栏
  */
 
-import { FolderOpen, LayoutTemplate, Sparkles, Settings, ListTree, HelpCircle } from 'lucide-react'
+import { FolderOpen, LayoutTemplate, Sparkles, Settings, ListTree, HelpCircle, GitBranch } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useSidebarStore, type SidebarPanel } from '@/stores/sidebarStore'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
@@ -28,6 +28,7 @@ const getIcons = (t: (key: string) => string): IconItem[] => [
   { id: 'outline', icon: ListTree, label: t('sidebar.outline'), shortcut: 'Ctrl+2' },
   { id: 'templates', icon: LayoutTemplate, label: t('sidebar.templates'), shortcut: 'Ctrl+3' },
   { id: 'ai', icon: Sparkles, label: t('sidebar.aiGenerate'), shortcut: 'Ctrl+4' },
+  { id: 'git', icon: GitBranch, label: t('sidebar.git'), shortcut: 'Ctrl+5' },
 ]
 
 const getBottomIcons = (t: (key: string) => string): IconItem[] => [

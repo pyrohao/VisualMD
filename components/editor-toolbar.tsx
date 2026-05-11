@@ -18,6 +18,7 @@ import {
   X,
   ChevronDown,
   FileText,
+  GitBranch,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useSidebarStore } from '@/stores/sidebarStore'
@@ -421,6 +422,18 @@ export function EditorToolbar({
                   />
                   
                   {/* 模板图标 */}
+                  {tab.sourceType === 'git' && (
+                    <span
+                      className="text-[10px] px-1 rounded mr-1 flex-shrink-0"
+                      style={{
+                        backgroundColor: themeConfig.success + '20',
+                        color: themeConfig.success,
+                      }}
+                    >
+                      Git
+                    </span>
+                  )}
+
                   {tab.isTemplate && (
                     <span 
                       className="text-[10px] px-1 rounded mr-1 flex-shrink-0"
@@ -574,10 +587,17 @@ export function EditorToolbar({
                     backgroundColor: tab.id === activeTabId ? themeConfig.primary + '15' : 'transparent',
                   }}
                 >
-                  <FileText
-                    className="mr-2 h-4 w-4 flex-shrink-0"
-                    style={{ color: tab.id === activeTabId ? themeConfig.primary : themeConfig.muted }}
-                  />
+                  {tab.sourceType === 'git' ? (
+                    <GitBranch
+                      className="mr-2 h-4 w-4 flex-shrink-0"
+                      style={{ color: tab.id === activeTabId ? themeConfig.primary : themeConfig.muted }}
+                    />
+                  ) : (
+                    <FileText
+                      className="mr-2 h-4 w-4 flex-shrink-0"
+                      style={{ color: tab.id === activeTabId ? themeConfig.primary : themeConfig.muted }}
+                    />
+                  )}
                   <span className="truncate">{tab.fileName}</span>
                   {tab.isModified && (
                     <span style={{ color: themeConfig.primary }} className="ml-1">

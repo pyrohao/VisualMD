@@ -8,7 +8,7 @@
  */
 
 import { motion, AnimatePresence } from 'framer-motion'
-import { useSidebarStore, type SidebarPanel } from '@/stores/sidebarStore'
+import { useSidebarStore } from '@/stores/sidebarStore'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { FilePanel } from './file-panel'
 import { useState, useEffect } from 'react'
@@ -16,18 +16,11 @@ import { TemplatePanel } from './template-panel'
 import { AIPanel } from './ai-panel'
 import { SettingsPanel } from './settings-panel'
 import { OutlinePanel } from './outline-panel'
+import { GitPanel } from './git-panel'
 
 interface PanelContainerProps {
   onEditTemplate?: (content: string, templateName: string, templateId: string) => void
   onPreviewTemplate?: (content: string, templateName: string) => void
-}
-
-const PANELS: Record<Exclude<SidebarPanel, 'help'>, React.ComponentType<any>> = {
-  files: FilePanel,
-  outline: OutlinePanel,
-  templates: TemplatePanel,
-  ai: AIPanel,
-  settings: SettingsPanel,
 }
 
 export function PanelContainer({ onEditTemplate, onPreviewTemplate }: PanelContainerProps) {
@@ -45,8 +38,6 @@ export function PanelContainer({ onEditTemplate, onPreviewTemplate }: PanelConta
   if (!isPanelExpanded) {
     return null
   }
-
-  // const ActivePanel = PANELS[activePanel]
 
   return (
     <motion.div
@@ -72,6 +63,7 @@ export function PanelContainer({ onEditTemplate, onPreviewTemplate }: PanelConta
           {activePanel === 'files' && <FilePanel />}
           {activePanel === 'outline' && <OutlinePanel />}
           {activePanel === 'ai' && <AIPanel />}
+          {activePanel === 'git' && <GitPanel />}
           {activePanel === 'settings' && <SettingsPanel />}
         </motion.div>
       </AnimatePresence>

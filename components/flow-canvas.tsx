@@ -42,6 +42,8 @@ import { useDocumentStore } from '@/stores/documentStore'
 import type { TreeNode } from '@/types/tree'
 import { useThemeStore } from '@/stores/themeStore'
 import { useTranslation } from '@/stores/languageStore'
+import { useGitStore } from '@/stores/gitStore'
+import { useTabsStore } from '@/stores/tabsStore'
 import { toast } from '@/hooks/use-toast'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
 
@@ -80,6 +82,18 @@ export function FlowCanvas() {
     enableUndoRedo: true,
     enableSave: true,
     onSave: () => {
+      const activeTab = useTabsStore.getState().getActiveTab()
+      if (activeTab?.sourceType === 'git' && activeTab.fileId) {
+        const latestMarkdown = useDocumentStore.getState().getCurrentMarkdown()
+        useGitStore.getState().updateDraftContent(activeTab.fileId, latestMarkdown)
+        useTabsStore.getState().updateTabContent(activeTab.id, latestMarkdown)
+        markAsSaved()
+        toast({
+          title: t('git.draftSaved'),
+        })
+        return
+      }
+
       markAsSaved()
       toast({
         title: t('toast.saved'),

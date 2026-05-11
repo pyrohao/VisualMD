@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 /**
  * Markdown编辑器主组件
@@ -18,8 +18,11 @@ import { NodeEditPanel } from './node-edit-panel'
 import { SearchDialog } from './search-dialog'
 import { Button } from './ui/button'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { toast } from '@/hooks/use-toast'
 import { useDocumentStore } from '@/stores/documentStore'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
+import { useGitStore } from '@/stores/gitStore'
+import { useTranslation } from '@/stores/languageStore'
 import { useSidebarStore } from '@/stores/sidebarStore'
 import { useTabsStore } from '@/stores/tabsStore'
 import { initTheme, useThemeStore, themeConfigs } from '@/stores/themeStore'
@@ -305,10 +308,12 @@ export function MarkdownEditor() {
   // 获取Store
   const { loadDocument, document, selectedNodeId, getCurrentMarkdown, getIsModified, updateNode } = useDocumentStore()
   const { currentFileId, files, saveFile, markFileAsSaved, openFile, createFile } = useFileSystemStore()
+  const { setCurrentDocumentId, updateDraftContent } = useGitStore()
   const { isPanelExpanded, panelWidth } = useSidebarStore()
   const { activeTabId, getActiveTab, tabs } = useTabsStore()
   const currentMarkdown = getCurrentMarkdown()
   const isModified = getIsModified()
+  const { t } = useTranslation()
 
   // 获取当前激活的标签页
   const activeTab = getActiveTab()
@@ -369,10 +374,16 @@ export function MarkdownEditor() {
     }
 
     // 同步文件面板选中状态
-    if (activeTab.fileId) {
+    if (activeTab.sourceType === 'git') {
+      setCurrentDocumentId(activeTab.fileId || null)
+      useFileSystemStore.setState({ currentFileId: null })
+    } else if (activeTab.fileId) {
       openFile(activeTab.fileId)
+      setCurrentDocumentId(null)
+    } else {
+      setCurrentDocumentId(null)
     }
-  }, [activeTabId, mounted, loadDocument, openFile])
+  }, [activeTabId, mounted, loadDocument, openFile, setCurrentDocumentId])
 
   // 创建默认文件（只在客户端挂载后且确实没有文件时执行一次）
   useEffect(() => {
@@ -436,6 +447,13 @@ export function MarkdownEditor() {
           ),
         }))
       }
+      return
+    }
+
+    const { tabs, activeTabId } = useTabsStore.getState()
+    const currentTab = tabs.find(t => t.id === activeTabId)
+    if (isDocModified && currentTab && !currentTab.isModified) {
+      useTabsStore.getState().markTabAsModified(currentTab.id, true)
     }
   }, [document?.isModified, templateEditMode.isActive])
 
@@ -454,12 +472,14 @@ export function MarkdownEditor() {
   // 处理保存
   const handleSave = useCallback(() => {
     // 获取最新的 markdown 内容（从 store 实时获取，避免闭包问题）
-    const { getCurrentMarkdown: getLatestMarkdown } = useDocumentStore.getState()
+    const { getCurrentMarkdown: getLatestMarkdown, markAsSaved } = useDocumentStore.getState()
     const latestMarkdown = getLatestMarkdown()
     
     // 从 ref 获取最新的 templateEditMode（避免闭包问题）
     const currentTemplateEditMode = templateEditModeRef.current
     const currentFileId = currentFileIdRef.current
+    const { activeTabId, tabs, updateTabContent, markTabAsSaved } = useTabsStore.getState()
+    const currentTab = tabs.find(t => t.id === activeTabId)
 
     if (currentTemplateEditMode.isActive && currentTemplateEditMode.templateId) {
       // 保存模板编辑到模板存储 - 直接使用 setState 避免闭包问题
@@ -496,6 +516,17 @@ export function MarkdownEditor() {
       return
     }
 
+    if (currentTab?.sourceType === 'git' && currentTab.fileId) {
+      updateDraftContent(currentTab.fileId, latestMarkdown)
+      updateTabContent(currentTab.id, latestMarkdown)
+      markTabAsSaved(currentTab.id)
+      markAsSaved()
+      toast({
+        title: t('git.draftSaved'),
+      })
+      return
+    }
+
     if (currentFileId) {
       // 先保存文件内容到 store
       useFileSystemStore.setState((state) => ({
@@ -507,10 +538,9 @@ export function MarkdownEditor() {
       }))
 
       // 再保存编辑器状态（断开节点等）
-      const { markAsSaved } = useDocumentStore.getState()
       markAsSaved()
     }
-  }, []) // 空依赖数组，使用 ref 获取最新状态
+  }, [t, updateDraftContent]) // 空依赖数组，使用 ref 获取最新状态
 
   // 监听 Ctrl+S 保存
   useEffect(() => {
@@ -526,11 +556,19 @@ export function MarkdownEditor() {
       }
       if ((e.ctrlKey || e.metaKey) && e.key === '2') {
         e.preventDefault()
-        useSidebarStore.getState().setActivePanel('templates')
+        useSidebarStore.getState().setActivePanel('outline')
       }
       if ((e.ctrlKey || e.metaKey) && e.key === '3') {
         e.preventDefault()
+        useSidebarStore.getState().setActivePanel('templates')
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === '4') {
+        e.preventDefault()
         useSidebarStore.getState().setActivePanel('ai')
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === '5') {
+        e.preventDefault()
+        useSidebarStore.getState().setActivePanel('git')
       }
     }
     window.addEventListener('keydown', handleKeyDown)
@@ -710,5 +748,3 @@ export function MarkdownEditor() {
   )
 }
 
-// 添加缺失的导入
-import { toast } from '@/hooks/use-toast'

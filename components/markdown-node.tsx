@@ -113,6 +113,14 @@ function MarkdownNodeComponent({ id, data, selected }: MarkdownNodeProps) {
   const leftAccentWidth = branchDirection === 'left' ? '2px' : '5px'
   const rightAccentWidth = branchDirection === 'left' ? '5px' : '2px'
   const handleStyle = { backgroundColor: borderColor }
+  const visibleHandleTop = '50%'
+  const hiddenHandleStyle = {
+    opacity: 0,
+    width: 16,
+    height: 16,
+    border: 'none',
+    backgroundColor: 'transparent',
+  }
 
   return (
     <div
@@ -132,29 +140,29 @@ function MarkdownNodeComponent({ id, data, selected }: MarkdownNodeProps) {
         type="target"
         position={Position.Left}
         id={FLOW_HANDLE_IDS.targetLeft}
-        className="!h-3 !w-3 !border-2 !border-white"
-        style={{ ...handleStyle, top: '35%' }}
+        className="!border-0"
+        style={{ ...hiddenHandleStyle, top: visibleHandleTop }}
       />
       <Handle
         type="source"
         position={Position.Left}
         id={FLOW_HANDLE_IDS.sourceLeft}
         className="!h-3 !w-3 !border-2 !border-white"
-        style={{ ...handleStyle, top: '65%' }}
+        style={{ ...handleStyle, top: visibleHandleTop }}
       />
       <Handle
         type="target"
         position={Position.Right}
         id={FLOW_HANDLE_IDS.targetRight}
-        className="!h-3 !w-3 !border-2 !border-white"
-        style={{ ...handleStyle, top: '35%' }}
+        className="!border-0"
+        style={{ ...hiddenHandleStyle, top: visibleHandleTop }}
       />
       <Handle
         type="source"
         position={Position.Right}
         id={FLOW_HANDLE_IDS.sourceRight}
         className="!h-3 !w-3 !border-2 !border-white"
-        style={{ ...handleStyle, top: '65%' }}
+        style={{ ...handleStyle, top: visibleHandleTop }}
       />
 
       <div className="px-3 py-2.5">

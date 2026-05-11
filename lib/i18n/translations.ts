@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 国际化翻译配置
  * 采用增量式翻译策略：
  * - 核心词汇必须翻译（如：保存、取消、删除等）
@@ -137,6 +137,7 @@ export interface Translations {
     outline: string
     templates: string
     ai: string
+    git: string
     settings: string
     help: string
     aiGenerate: string
@@ -221,6 +222,46 @@ export interface Translations {
     zhipu: string
     qianwen: string
     custom: string
+    gitIntegration: string
+    gitConnection: string
+    openGitPanel: string
+    openGitSettings: string
+    gitConfigured: string
+    gitNotConfigured: string
+  }
+  git: {
+    provider: string
+    token: string
+    namespace: string
+    repository: string
+    branch: string
+    baseUrl: string
+    customFlavor: string
+    connect: string
+    reconnect: string
+    connected: string
+    loadRepos: string
+    reposLoaded: string
+    availableBranches: string
+    repositoryTree: string
+    notConnected: string
+    connectFirst: string
+    emptyRepoTree: string
+    pendingChanges: string
+    noGitFileOpen: string
+    uncommitted: string
+    commitToRepo: string
+    commitMessagePlaceholder: string
+    commitSuccess: string
+    commitFailed: string
+    draftSaved: string
+    createFile: string
+    createFolder: string
+    fileCreated: string
+    folderCreated: string
+    enterNewPath: string
+    targetDirectory: string
+    targetDirectoryRoot: string
   }
   // Toast 消息
   toast: {
@@ -379,6 +420,7 @@ export const translations: Record<Language, Translations> = {
       outline: '大纲',
       templates: '模板',
       ai: 'AI',
+      git: 'Git',
       settings: '设置',
       help: '帮助',
       aiGenerate: 'AI 文档生成',
@@ -460,6 +502,46 @@ export const translations: Record<Language, Translations> = {
       zhipu: '智谱AI',
       qianwen: '通义千问',
       custom: '自定义',
+      gitIntegration: 'Git 集成',
+      gitConnection: 'Git 连接配置',
+      openGitPanel: '打开 Git 面板',
+      openGitSettings: '前往 Git 设置',
+      gitConfigured: 'Git 配置已填写，可在这里直接连接仓库',
+      gitNotConfigured: '请先填写 Git Provider、Token 和仓库信息',
+    },
+    git: {
+      provider: 'Provider',
+      token: 'Access Token',
+      namespace: 'Owner / Namespace',
+      repository: 'Repository',
+      branch: 'Branch',
+      baseUrl: 'API Base URL',
+      customFlavor: 'Custom API',
+      connect: 'Connect',
+      reconnect: 'Reconnect',
+      connected: 'Connected',
+      loadRepos: 'Load Repos',
+      reposLoaded: 'Repositories loaded',
+      availableBranches: 'Branches',
+      repositoryTree: 'Repository Tree',
+      notConnected: 'Not connected',
+      connectFirst: 'Connect a repository first',
+      emptyRepoTree: 'No files loaded',
+      pendingChanges: 'Pending Changes',
+      noGitFileOpen: 'No Git file open',
+      uncommitted: 'Uncommitted',
+      commitToRepo: 'Commit To Repository',
+      commitMessagePlaceholder: 'Commit message',
+      commitSuccess: 'Commit successful',
+      commitFailed: 'Commit failed',
+      draftSaved: 'Draft saved locally',
+      createFile: 'Create Git File',
+      createFolder: 'Create Git Folder',
+      fileCreated: 'Git file created',
+      folderCreated: 'Git folder created',
+      enterNewPath: 'Enter new path for',
+      targetDirectory: 'Target directory',
+      targetDirectoryRoot: 'Target directory: repository root',
     },
     toast: {
       saved: '已保存',
@@ -614,6 +696,7 @@ export const translations: Record<Language, Translations> = {
       outline: 'Outline',
       templates: 'Templates',
       ai: 'AI',
+      git: 'Git',
       settings: 'Settings',
       help: 'Help',
       aiGenerate: 'AI Document Generation',
@@ -695,6 +778,46 @@ export const translations: Record<Language, Translations> = {
       zhipu: 'Zhipu AI',
       qianwen: 'Tongyi Qianwen',
       custom: 'Custom',
+      gitIntegration: 'Git Integration',
+      gitConnection: 'Git Connection',
+      openGitPanel: 'Open Git Panel',
+      openGitSettings: 'Open Git Settings',
+      gitConfigured: 'Git configuration is ready. Connect to a repository from here.',
+      gitNotConfigured: 'Fill in provider, token, and repository first.',
+    },
+    git: {
+      provider: 'Provider',
+      token: 'Access Token',
+      namespace: 'Owner / Namespace',
+      repository: 'Repository',
+      branch: 'Branch',
+      baseUrl: 'API Base URL',
+      customFlavor: 'Custom API',
+      connect: 'Connect',
+      reconnect: 'Reconnect',
+      connected: 'Connected',
+      loadRepos: 'Load Repos',
+      reposLoaded: 'Repositories loaded',
+      availableBranches: 'Branches',
+      repositoryTree: 'Repository Tree',
+      notConnected: 'Not connected',
+      connectFirst: 'Connect a repository first',
+      emptyRepoTree: 'No files loaded',
+      pendingChanges: 'Pending Changes',
+      noGitFileOpen: 'No Git file open',
+      uncommitted: 'Uncommitted',
+      commitToRepo: 'Commit To Repository',
+      commitMessagePlaceholder: 'Commit message',
+      commitSuccess: 'Commit successful',
+      commitFailed: 'Commit failed',
+      draftSaved: 'Draft saved locally',
+      createFile: 'Create Git File',
+      createFolder: 'Create Git Folder',
+      fileCreated: 'Git file created',
+      folderCreated: 'Git folder created',
+      enterNewPath: 'Enter new path for',
+      targetDirectory: 'Target directory',
+      targetDirectoryRoot: 'Target directory: repository root',
     },
     toast: {
       saved: 'Saved',

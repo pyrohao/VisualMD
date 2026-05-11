@@ -14,6 +14,7 @@ import { useThemeStore } from '@/stores/themeStore'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useSidebarStore } from '@/stores/sidebarStore'
 import { useTabsStore } from '@/stores/tabsStore'
+import { useGitStore } from '@/stores/gitStore'
 import { useTranslation } from '@/stores/languageStore'
 import { findNodeInTreeOrDetached } from '@/lib/flow-helpers'
 import { toast } from '@/hooks/use-toast'
@@ -38,6 +39,7 @@ export function NodeEditPanel() {
   const { getThemeConfig } = useThemeStore()
   const themeConfig = getThemeConfig()
   const { currentFileId, saveFileContent, renameFile, files } = useFileSystemStore()
+  const { currentDocumentId: currentGitDocumentId } = useGitStore()
   const { editingTemplateId } = useSidebarStore()
   const { t } = useTranslation()
 
@@ -131,6 +133,16 @@ export function NodeEditPanel() {
     // 5. 保存到文件系统或模板
     if (currFileId) {
       useFileSystemStore.getState().saveFileContent(currFileId, latestContent)
+    } else if (useGitStore.getState().currentDocumentId) {
+      const gitDocumentId = useGitStore.getState().currentDocumentId
+      if (gitDocumentId) {
+        useGitStore.getState().updateDraftContent(gitDocumentId, latestContent)
+      }
+      const currentTabId = useTabsStore.getState().activeTabId
+      if (currentTabId) {
+        useTabsStore.getState().updateTabContent(currentTabId, latestContent)
+        useTabsStore.getState().markTabAsModified(currentTabId, true)
+      }
     } else if (editTemplateId) {
       // 保存模板内容
       useSidebarStore.setState((state) => ({
@@ -202,6 +214,16 @@ export function NodeEditPanel() {
     // 5. 保存到文件系统
     if (currFileId) {
       useFileSystemStore.getState().saveFileContent(currFileId, latestContent)
+    } else if (useGitStore.getState().currentDocumentId) {
+      const gitDocumentId = useGitStore.getState().currentDocumentId
+      if (gitDocumentId) {
+        useGitStore.getState().updateDraftContent(gitDocumentId, latestContent)
+      }
+      const currentTabId = useTabsStore.getState().activeTabId
+      if (currentTabId) {
+        useTabsStore.getState().updateTabContent(currentTabId, latestContent)
+        useTabsStore.getState().markTabAsModified(currentTabId, true)
+      }
     } else if (editTemplateId) {
       useSidebarStore.setState((state) => ({
         templates: state.templates.map(t =>
@@ -421,7 +443,8 @@ export function NodeEditPanel() {
                 danger: themeConfig.danger,
               }}
               onEntriesChange={handleEntriesChange}
-              onFileNameChange={handleFileNameChange}
+              onFileNameChange={currentGitDocumentId ? undefined : handleFileNameChange}
+              fileNameEditable={!currentGitDocumentId}
             />
           ) : (
             <NodeContentEditor

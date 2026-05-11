@@ -1,12 +1,8 @@
 import React from "react"
 import type { Metadata } from 'next'
-import { Geist, Geist_Mono } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import { Toaster } from '@/components/ui/toaster'
 import './globals.css'
-
-const geistSans = Geist({ subsets: ["latin"] });
-const geistMono = Geist_Mono({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: 'Markdown Visual Editor - 可视化Markdown编辑器',
@@ -29,7 +25,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-CN" suppressHydrationWarning>
-      <body className={`${geistSans.className} ${geistMono.className} font-sans antialiased`}>
+      <body className="font-sans antialiased">
         {children}
         <Toaster />
         <Analytics />

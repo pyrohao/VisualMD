@@ -319,13 +319,14 @@ export function moveNodeInTree(
   if (!nodeToMove) {
     return tree
   }
+  const movedNode = nodeToMove
 
   const treeWithoutNode = deleteNodeFromTree(tree, nodeId)
 
   function addNodeToParent(node: TreeNode): TreeNode {
     if (node.id === newParentId) {
       const newChildren = [...node.children]
-      newChildren.splice(index, 0, nodeToMove)
+      newChildren.splice(index, 0, movedNode)
       return { ...node, children: newChildren }
     }
 

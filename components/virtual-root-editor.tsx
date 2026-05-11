@@ -24,6 +24,7 @@ export interface MetadataEntry {
 interface VirtualRootEditorProps {
   entries: MetadataEntry[]
   fileName?: string
+  fileNameEditable?: boolean
   themeConfig: {
     card: string
     border: string
@@ -44,6 +45,7 @@ export interface VirtualRootEditorRef {
 export const VirtualRootEditor = forwardRef<VirtualRootEditorRef, VirtualRootEditorProps>(function VirtualRootEditor({
   entries,
   fileName,
+  fileNameEditable = true,
   themeConfig,
   onEntriesChange,
   onFileNameChange,
@@ -215,7 +217,12 @@ export const VirtualRootEditor = forwardRef<VirtualRootEditorRef, VirtualRootEdi
           {t('node.fileName')}
         </label>
         <button
-          onClick={handleSelectFileName}
+          onClick={() => {
+            if (fileNameEditable) {
+              handleSelectFileName()
+            }
+          }}
+          disabled={!fileNameEditable}
           className="w-full h-10 px-3 text-sm text-left rounded-md border-2 transition-all duration-200 overflow-hidden text-ellipsis whitespace-nowrap shadow-sm hover:shadow-md"
           style={{
             backgroundColor: isEditingFileName ? themeConfig.accent + '30' : themeConfig.card,
@@ -224,6 +231,7 @@ export const VirtualRootEditor = forwardRef<VirtualRootEditorRef, VirtualRootEdi
             boxShadow: isEditingFileName
               ? `0 2px 8px ${themeConfig.accent}40, inset 0 1px 0 ${themeConfig.accent}20`
               : `0 1px 3px ${themeConfig.border}60, inset 0 1px 0 ${themeConfig.card}`,
+            opacity: fileNameEditable ? 1 : 0.7,
           }}
         >
           {fileName || <span style={{ color: themeConfig.muted }}>{t('node.untitledDoc')}</span>}
