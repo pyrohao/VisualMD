@@ -9,6 +9,7 @@
 
 import { create } from 'zustand'
 import { devtools, persist } from 'zustand/middleware'
+import { decryptSecret, encryptSecret, normalizeEncryptedSecret } from '@/lib/secret-storage'
 
 /**
  * AI提供商类型
@@ -120,31 +121,6 @@ function createDefaultProviderConfig(id: AIProvider): ProviderConfig {
 }
 
 /**
- * 简单的加密/解密函数（使用Base64 + 简单混淆）
- * 注意：这不是强加密，只是防止明文存储
- */
-function encrypt(text: string): string {
-  if (!text) return ''
-  try {
-    const encoded = btoa(text)
-    return `enc:${encoded}`
-  } catch {
-    return text
-  }
-}
-
-function decrypt(text: string): string {
-  if (!text) return ''
-  if (!text.startsWith('enc:')) return text
-  try {
-    const encoded = text.slice(4)
-    return atob(encoded)
-  } catch {
-    return text
-  }
-}
-
-/**
  * Settings Store 接口
  */
 interface SettingsStore {
@@ -236,9 +212,19 @@ export const useSettingsStore = create<SettingsStore>()(
               openrouter: { ...createDefaultProviderConfig('openrouter'), ...persistedConfigs.openrouter },
               custom: { ...createDefaultProviderConfig('custom'), ...persistedConfigs.custom },
             }
+
+            const normalizedConfigs = Object.fromEntries(
+              Object.entries(mergedConfigs).map(([provider, config]) => [
+                provider,
+                {
+                  ...config,
+                  apiKey: normalizeEncryptedSecret(config.apiKey || ''),
+                },
+              ])
+            ) as Record<AIProvider, ProviderConfig>
             
             set({
-              providerConfigs: mergedConfigs,
+              providerConfigs: normalizedConfigs,
               activeProvider: persistedState.activeProvider || 'openai',
             })
           }
@@ -257,9 +243,9 @@ export const useSettingsStore = create<SettingsStore>()(
               [provider]: {
                 ...state.providerConfigs[provider],
                 ...config,
-                // 加密API Key
+                // 持久层不保存明文
                 apiKey: config.apiKey !== undefined
-                  ? encrypt(config.apiKey)
+                  ? encryptSecret(config.apiKey)
                   : state.providerConfigs[provider].apiKey,
                 // 如果修改了配置，重置测试状态
                 isTested: config.apiKey !== undefined || config.baseUrl !== undefined || config.model !== undefined
@@ -271,16 +257,16 @@ export const useSettingsStore = create<SettingsStore>()(
         },
         
         getDecryptedApiKey: (provider) => {
-          return decrypt(get().providerConfigs[provider].apiKey)
+          return decryptSecret(get().providerConfigs[provider].apiKey)
         },
         
         getActiveProviderApiKey: () => {
-          return decrypt(get().providerConfigs[get().activeProvider].apiKey)
+          return decryptSecret(get().providerConfigs[get().activeProvider].apiKey)
         },
         
         validateProviderConfig: (provider) => {
           const config = get().providerConfigs[provider]
-          const apiKey = decrypt(config.apiKey)
+          const apiKey = decryptSecret(config.apiKey)
           return !!(
             apiKey &&
             config.baseUrl &&
@@ -291,7 +277,7 @@ export const useSettingsStore = create<SettingsStore>()(
         validateActiveProvider: () => {
           const { activeProvider, providerConfigs } = get()
           const config = providerConfigs[activeProvider]
-          const apiKey = decrypt(config.apiKey)
+          const apiKey = decryptSecret(config.apiKey)
           return !!(
             apiKey &&
             config.baseUrl &&

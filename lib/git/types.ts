@@ -50,6 +50,11 @@ export interface GitDraftFile extends GitFileRef {
   originalContent: string
   draftContent: string
   isDirty: boolean
+  remoteContent?: string
+  remoteSha?: string
+  hasRemoteUpdates?: boolean
+  hasConflict?: boolean
+  lastCheckedAt?: number
 }
 
 export interface GitProviderClient {

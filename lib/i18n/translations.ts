@@ -255,6 +255,12 @@ export interface Translations {
     commitSuccess: string
     commitFailed: string
     draftSaved: string
+    fetchRemote: string
+    remoteUpdated: string
+    remoteUpToDate: string
+    conflictDetected: string
+    localChangesPreserved: string
+    lastFetched: string
     createFile: string
     createFolder: string
     fileCreated: string
@@ -535,6 +541,12 @@ export const translations: Record<Language, Translations> = {
       commitSuccess: 'Commit successful',
       commitFailed: 'Commit failed',
       draftSaved: 'Draft saved locally',
+      fetchRemote: 'Fetch Remote',
+      remoteUpdated: 'Remote file updated',
+      remoteUpToDate: 'Remote file is up to date',
+      conflictDetected: 'Conflict detected',
+      localChangesPreserved: 'Local draft preserved',
+      lastFetched: 'Last fetched',
       createFile: 'Create Git File',
       createFolder: 'Create Git Folder',
       fileCreated: 'Git file created',
@@ -811,6 +823,12 @@ export const translations: Record<Language, Translations> = {
       commitSuccess: 'Commit successful',
       commitFailed: 'Commit failed',
       draftSaved: 'Draft saved locally',
+      fetchRemote: 'Fetch Remote',
+      remoteUpdated: 'Remote file updated',
+      remoteUpToDate: 'Remote file is up to date',
+      conflictDetected: 'Conflict detected',
+      localChangesPreserved: 'Local draft preserved',
+      lastFetched: 'Last fetched',
       createFile: 'Create Git File',
       createFolder: 'Create Git Folder',
       fileCreated: 'Git file created',

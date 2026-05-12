@@ -131,10 +131,13 @@ export function NodeEditPanel() {
     }
 
     // 5. 保存到文件系统或模板
-    if (currFileId) {
+    const activeTab = useTabsStore.getState().getActiveTab()
+    const activeGitDocumentId = activeTab?.sourceType === 'git' ? activeTab.fileId || null : null
+
+    if (currFileId && !activeGitDocumentId) {
       useFileSystemStore.getState().saveFileContent(currFileId, latestContent)
-    } else if (useGitStore.getState().currentDocumentId) {
-      const gitDocumentId = useGitStore.getState().currentDocumentId
+    } else if (activeGitDocumentId) {
+      const gitDocumentId = activeGitDocumentId
       if (gitDocumentId) {
         useGitStore.getState().updateDraftContent(gitDocumentId, latestContent)
       }
@@ -212,10 +215,13 @@ export function NodeEditPanel() {
     }
 
     // 5. 保存到文件系统
-    if (currFileId) {
+    const activeTab = useTabsStore.getState().getActiveTab()
+    const activeGitDocumentId = activeTab?.sourceType === 'git' ? activeTab.fileId || null : null
+
+    if (currFileId && !activeGitDocumentId) {
       useFileSystemStore.getState().saveFileContent(currFileId, latestContent)
-    } else if (useGitStore.getState().currentDocumentId) {
-      const gitDocumentId = useGitStore.getState().currentDocumentId
+    } else if (activeGitDocumentId) {
+      const gitDocumentId = activeGitDocumentId
       if (gitDocumentId) {
         useGitStore.getState().updateDraftContent(gitDocumentId, latestContent)
       }

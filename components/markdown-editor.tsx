@@ -346,7 +346,13 @@ export function MarkdownEditor() {
 
   // 监听标签页切换，加载对应内容到编辑器
   useEffect(() => {
-    if (!mounted || !activeTab) return
+    if (!mounted) return
+
+    if (!activeTab) {
+      setCurrentDocumentId(null)
+      useFileSystemStore.setState({ currentFileId: null })
+      return
+    }
 
     // 处理模板编辑状态
     if (activeTab.isTemplate && activeTab.templateId) {
@@ -368,9 +374,7 @@ export function MarkdownEditor() {
     }
 
     // 如果标签页有内容，加载到编辑器（传入 fileId 以恢复状态）
-    if (activeTab.content) {
-      loadDocument(activeTab.content, activeTab.fileName, activeTab.fileId || undefined)
-    }
+    loadDocument(activeTab.content || '', activeTab.fileName, activeTab.fileId || undefined)
 
     // 同步文件面板选中状态
     if (activeTab.sourceType === 'git') {
@@ -380,6 +384,7 @@ export function MarkdownEditor() {
       openFile(activeTab.fileId)
       setCurrentDocumentId(null)
     } else {
+      useFileSystemStore.setState({ currentFileId: null })
       setCurrentDocumentId(null)
     }
   }, [activeTabId, mounted, loadDocument, openFile, setCurrentDocumentId])

@@ -69,6 +69,7 @@ export function SettingsPanel() {
     branches: gitBranches,
     repos: gitRepos,
     setConfig: setGitConfig,
+    getDecryptedToken,
     validateAndLoad: validateGitAndLoad,
     loadRepos: loadGitRepos,
   } = useGitStore()
@@ -486,7 +487,7 @@ export function SettingsPanel() {
                 <div className="relative">
                   <Input
                     type={showGitToken ? 'text' : 'password'}
-                    value={gitConfig.token}
+                    value={getDecryptedToken()}
                     onChange={(e) => setGitConfig({ token: e.target.value })}
                     placeholder="PAT / Access Token"
                     className="h-9 pr-10 text-xs"

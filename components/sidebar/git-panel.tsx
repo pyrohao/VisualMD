@@ -2,8 +2,10 @@
 
 import { useEffect, useState } from 'react'
 import {
+  AlertTriangle,
   ChevronDown,
   ChevronRight,
+  Download,
   FilePlus2,
   FileText,
   FolderGit2,
@@ -216,14 +218,18 @@ export function GitPanel() {
     isConnecting,
     isLoadingTree,
     isCommitting,
+    isFetchingRemote,
     error,
     connected,
+    lastFetchedAt,
     clearError,
     validateAndLoad,
     loadTree,
     toggleExpandedPath,
     openFile,
     setCurrentDocumentId,
+    fetchRemoteFile,
+    syncRemoteStatus,
     commitCurrentFile,
     createFile,
     renameFile,
@@ -238,6 +244,16 @@ export function GitPanel() {
   useEffect(() => {
     setMounted(true)
   }, [])
+
+  useEffect(() => {
+    if (!connected || !currentDocumentId) return
+
+    const timer = window.setInterval(() => {
+      void syncRemoteStatus()
+    }, 60_000)
+
+    return () => window.clearInterval(timer)
+  }, [connected, currentDocumentId, syncRemoteStatus])
 
   useEffect(() => {
     if (!error) return
@@ -297,6 +313,50 @@ export function GitPanel() {
 
       setCommitMessage('')
       toast({ title: t('git.commitSuccess') })
+    } catch {
+      // handled by store error state
+    }
+  }
+
+  const handleFetch = async () => {
+    if (!currentDocumentId) return
+
+    try {
+      const nextDraft = await fetchRemoteFile(currentDocumentId)
+      if (!nextDraft) return
+
+      if (nextDraft.hasConflict) {
+        toast({
+          title: t('git.conflictDetected'),
+          description: t('git.localChangesPreserved'),
+          variant: 'destructive',
+        })
+        return
+      }
+
+      if (nextDraft.hasRemoteUpdates) {
+        openGitFileInTab({
+          fileName: nextDraft.name,
+          content: nextDraft.draftContent,
+          isModified: nextDraft.isDirty,
+          isNew: false,
+          fileId: nextDraft.documentId,
+          sourceType: 'git',
+          gitMeta: {
+            provider: nextDraft.provider,
+            ownerOrNamespace: nextDraft.ownerOrNamespace,
+            repo: nextDraft.repo,
+            branch: nextDraft.branch,
+            path: nextDraft.path,
+            sha: nextDraft.sha,
+          },
+        })
+        loadDocument(nextDraft.draftContent, nextDraft.name, nextDraft.documentId)
+        toast({ title: t('git.remoteUpdated') })
+        return
+      }
+
+      toast({ title: t('git.remoteUpToDate') })
     } catch {
       // handled by store error state
     }
@@ -506,6 +566,27 @@ export function GitPanel() {
               >
                 {isLoadingTree ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
               </button>
+
+              <button
+                type="button"
+                className="flex h-8 w-8 items-center justify-center rounded-md border transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                style={{
+                  borderColor: themeConfig.border,
+                  color: themeConfig.text,
+                  backgroundColor: themeConfig.background,
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = themeConfig.hover
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = themeConfig.background
+                }}
+                onClick={() => void handleFetch()}
+                disabled={!currentDocumentId || isFetchingRemote}
+                title={t('git.fetchRemote')}
+              >
+                {isFetchingRemote ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+              </button>
             </div>
           </div>
 
@@ -546,6 +627,38 @@ export function GitPanel() {
                 : t('git.noGitFileOpen')}
             </div>
           </div>
+
+          {currentDraft?.hasConflict ? (
+            <div
+              className="flex items-start gap-2 rounded-md border px-3 py-2 text-xs"
+              style={{
+                borderColor: `${themeConfig.danger}40`,
+                backgroundColor: `${themeConfig.danger}10`,
+                color: themeConfig.danger,
+              }}
+            >
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>{t('git.conflictDetected')} · {t('git.localChangesPreserved')}</span>
+            </div>
+          ) : currentDraft?.hasRemoteUpdates ? (
+            <div
+              className="flex items-start gap-2 rounded-md border px-3 py-2 text-xs"
+              style={{
+                borderColor: `${themeConfig.warning}40`,
+                backgroundColor: `${themeConfig.warning}10`,
+                color: themeConfig.warning,
+              }}
+            >
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>{t('git.remoteUpdated')}</span>
+            </div>
+          ) : null}
+
+          {currentDraft?.lastCheckedAt ? (
+            <div className="text-[11px]" style={{ color: themeConfig.muted }}>
+              {t('git.lastFetched')}: {new Date(lastFetchedAt || currentDraft.lastCheckedAt).toLocaleString()}
+            </div>
+          ) : null}
 
           <Input
             value={commitMessage}
