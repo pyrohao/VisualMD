@@ -27,7 +27,6 @@ import { initTheme, useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { useSidebarStore as useTemplateStore } from '@/stores/sidebarStore'
 import { EmptyTabView } from './empty-tab-view'
 import { EditorCanvasShell } from './editor-canvas-shell'
-import { toast } from '@/hooks/use-toast'
 
 /**
  * 默认示例Markdown内容（英文版）
