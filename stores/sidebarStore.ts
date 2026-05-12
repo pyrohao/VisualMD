@@ -22,6 +22,8 @@ export interface Template {
   updatedAt: number
 }
 
+export const SIDEBAR_PANEL_MIN_WIDTH = 260
+
 interface SidebarStore {
   // ==================== 面板状态 ====================
 
@@ -143,7 +145,7 @@ export const useSidebarStore = create<SidebarStore>()(
 
         activePanel: 'files',
         isPanelExpanded: true,
-        panelWidth: 260,
+        panelWidth: SIDEBAR_PANEL_MIN_WIDTH,
 
         templates: [],
         selectedTemplateId: null,
@@ -167,7 +169,7 @@ export const useSidebarStore = create<SidebarStore>()(
         },
 
         setPanelWidth: (width) => {
-          set({ panelWidth: Math.max(200, Math.min(400, width)) })
+          set({ panelWidth: Math.max(SIDEBAR_PANEL_MIN_WIDTH, Math.round(width)) })
         },
 
         // ==================== 模板操作 ====================

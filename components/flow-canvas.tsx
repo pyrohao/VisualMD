@@ -850,7 +850,16 @@ export function FlowCanvas() {
         />
 
         {/* 一键整理布局按钮 */}
-        <Panel position="top-left" className="ml-4 mt-20">
+        <Panel
+          position="top-right"
+          className="z-20"
+          style={{
+            top: 16,
+            right: 16,
+            margin: 0,
+            zIndex: 20,
+          }}
+        >
           <div className="flex gap-2">
             {hideVirtualRoot && (
               <Button

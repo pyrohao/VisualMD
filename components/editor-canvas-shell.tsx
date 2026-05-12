@@ -33,7 +33,7 @@ export function EditorCanvasShell({ document }: EditorCanvasShellProps) {
 
   return (
     <div className="relative h-full w-full" style={{ backgroundColor: themeConfig.background }}>
-      <div className="absolute left-4 top-4 z-20">
+      <div className="absolute left-4 top-4 z-10">
         <CanvasViewSwitcher />
       </div>
 
