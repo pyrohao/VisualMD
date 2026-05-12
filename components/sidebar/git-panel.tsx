@@ -208,12 +208,13 @@ export function GitPanel() {
 
   const { setActivePanel } = useSidebarStore()
   const { loadDocument } = useDocumentStore()
-  const { openGitFileInTab, getActiveTab, activeTabId, closeTab } = useTabsStore()
+  const { openGitFileInTab, openFileInTab, getActiveTab, activeTabId, closeTab } = useTabsStore()
   const {
     config,
     treeByPath,
     expandedPaths,
     drafts,
+    stagedChanges,
     currentDocumentId,
     isConnecting,
     isLoadingTree,
@@ -228,6 +229,7 @@ export function GitPanel() {
     toggleExpandedPath,
     openFile,
     setCurrentDocumentId,
+    unstageChange,
     fetchRemoteFile,
     syncRemoteStatus,
     commitCurrentFile,
@@ -359,6 +361,44 @@ export function GitPanel() {
       toast({ title: t('git.remoteUpToDate') })
     } catch {
       // handled by store error state
+    }
+  }
+
+  const handleOpenStagedChange = async (changeId: string) => {
+    const change = stagedChanges.find((item) => item.id === changeId)
+    if (!change) return
+
+    if (change.kind === 'git-draft' && change.documentId) {
+      const draft = drafts[change.documentId]
+      if (!draft) return
+
+      openGitFileInTab({
+        fileName: draft.name,
+        content: draft.draftContent,
+        isModified: draft.isDirty,
+        isNew: false,
+        fileId: draft.documentId,
+        sourceType: 'git',
+        gitMeta: {
+          provider: draft.provider,
+          ownerOrNamespace: draft.ownerOrNamespace,
+          repo: draft.repo,
+          branch: draft.branch,
+          path: draft.path,
+          sha: draft.sha,
+        },
+      })
+      setCurrentDocumentId(draft.documentId)
+      loadDocument(draft.draftContent, draft.name, draft.documentId)
+      return
+    }
+
+    if (change.kind === 'local-file' && change.localFileId) {
+      const file = useFileSystemStore.getState().files.find((item) => item.id === change.localFileId)
+      if (!file) return
+      useFileSystemStore.getState().openFile(change.localFileId)
+      openFileInTab(file.name, file.content, change.localFileId)
+      loadDocument(file.content, file.name, change.localFileId)
     }
   }
 
@@ -617,6 +657,51 @@ export function GitPanel() {
           className="space-y-3 rounded-lg border p-3"
           style={{ borderColor: themeConfig.border, backgroundColor: themeConfig.card }}
         >
+          <div>
+            <div className="text-sm font-medium" style={{ color: themeConfig.text }}>
+              Stage Changes
+            </div>
+            <div className="text-xs" style={{ color: themeConfig.muted }}>
+              {stagedChanges.length ? `${stagedChanges.length} staged` : 'No staged changes'}
+            </div>
+          </div>
+
+          <div className="max-h-[180px] space-y-2 overflow-y-auto rounded-md border p-2" style={{ borderColor: themeConfig.border }}>
+            {stagedChanges.length ? stagedChanges.map((change) => (
+              <div
+                key={change.id}
+                className="flex items-center gap-2 rounded-md border px-2 py-2"
+                style={{ borderColor: themeConfig.border, backgroundColor: themeConfig.background }}
+              >
+                <button
+                  type="button"
+                  className="min-w-0 flex-1 text-left"
+                  onClick={() => void handleOpenStagedChange(change.id)}
+                >
+                  <div className="truncate text-sm" style={{ color: themeConfig.text }}>
+                    {change.label}
+                  </div>
+                  <div className="truncate text-[11px]" style={{ color: themeConfig.muted }}>
+                    {change.repoPath}
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  className="rounded p-1 transition-colors"
+                  style={{ color: themeConfig.danger }}
+                  onClick={() => unstageChange(change.id)}
+                  title="Unstage"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )) : (
+              <div className="py-6 text-center text-sm" style={{ color: themeConfig.muted }}>
+                No staged changes
+              </div>
+            )}
+          </div>
+
           <div>
             <div className="text-sm font-medium" style={{ color: themeConfig.text }}>
               {t('git.pendingChanges')}

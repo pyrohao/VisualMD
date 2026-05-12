@@ -10,10 +10,12 @@ import { useState, useRef, useEffect } from 'react'
 import { FileText } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
+import { useGitStore } from '@/stores/gitStore'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { useTranslation } from '@/stores/languageStore'
 import type { MarkdownFile } from '@/types/file-system'
 import { DeleteConfirmDialog } from '../delete-confirm-dialog'
+import { PromptDialog } from '../ui/prompt-dialog'
 import { toast } from '@/hooks/use-toast'
 
 interface FileItemProps {
@@ -28,6 +30,7 @@ export function FileItem({ file, isActive, isModified, onClick }: FileItemProps)
   const [editName, setEditName] = useState(file.name)
   const [showContextMenu, setShowContextMenu] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [showStagePrompt, setShowStagePrompt] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   const { getThemeConfig } = useThemeStore()
@@ -40,6 +43,7 @@ export function FileItem({ file, isActive, isModified, onClick }: FileItemProps)
   }, [])
   
   const { renameFile, deleteFile, exportFile } = useFileSystemStore()
+  const { stageLocalFile } = useGitStore()
 
   // 处理点击
   const handleClick = () => {
@@ -73,6 +77,15 @@ export function FileItem({ file, isActive, isModified, onClick }: FileItemProps)
   // 处理导出
   const handleExport = () => {
     exportFile(file.id)
+  }
+
+  const handleStageToGit = (repoPath: string) => {
+    const nextPath = repoPath.trim() || file.name
+    stageLocalFile(file.id, nextPath)
+    toast({
+      title: 'Staged to Git',
+      description: nextPath,
+    })
   }
 
   // 处理右键菜单
@@ -182,6 +195,15 @@ export function FileItem({ file, isActive, isModified, onClick }: FileItemProps)
           >
             {t('common.export')}
           </button>
+          <button
+            onClick={() => {
+              setShowStagePrompt(true)
+              setShowContextMenu(false)
+            }}
+            className="w-full px-4 py-1.5 text-left text-sm hover:bg-white/10 transition-colors"
+          >
+            Stage to Git
+          </button>
           <div className="my-1 border-t" style={{ borderColor: themeConfig.border }} />
           <button
             onClick={() => {
@@ -204,6 +226,18 @@ export function FileItem({ file, isActive, isModified, onClick }: FileItemProps)
         confirmText={t('common.delete')}
         cancelText={t('common.cancel')}
         onConfirm={handleConfirmDelete}
+      />
+
+      <PromptDialog
+        isOpen={showStagePrompt}
+        onClose={() => setShowStagePrompt(false)}
+        onConfirm={handleStageToGit}
+        title="Stage to Git"
+        description="Enter repository path for this file"
+        defaultValue={file.name}
+        confirmText="Stage"
+        cancelText={t('common.cancel')}
+        placeholder="docs/example.md"
       />
     </>
   )

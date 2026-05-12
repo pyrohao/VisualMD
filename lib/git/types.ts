@@ -57,6 +57,17 @@ export interface GitDraftFile extends GitFileRef {
   lastCheckedAt?: number
 }
 
+export interface StagedGitChange {
+  id: string
+  kind: 'git-draft' | 'local-file'
+  label: string
+  repoPath: string
+  documentId?: string
+  localFileId?: string
+  localFileName?: string
+  updatedAt: number
+}
+
 export interface GitProviderClient {
   validateConnection(config: GitProviderConfig): Promise<void>
   listRepos(config: GitProviderConfig): Promise<GitRepoRef[]>

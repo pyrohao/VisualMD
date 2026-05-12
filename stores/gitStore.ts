@@ -1,9 +1,10 @@
 import { create } from 'zustand'
 import { devtools, persist } from 'zustand/middleware'
 import { getGitProviderClient } from '@/lib/git/providers'
-import type { GitBranchRef, GitDraftFile, GitProviderConfig, GitRepoRef, GitTreeItem } from '@/lib/git/types'
+import type { GitBranchRef, GitDraftFile, GitProviderConfig, GitRepoRef, GitTreeItem, StagedGitChange } from '@/lib/git/types'
 import { buildGitDocumentId, getGitFileName, normalizeGitPath } from '@/lib/git/utils'
 import { decryptSecret, encryptSecret, normalizeEncryptedSecret } from '@/lib/secret-storage'
+import { useFileSystemStore } from './fileSystemStore'
 
 interface GitStore {
   config: GitProviderConfig
@@ -12,6 +13,7 @@ interface GitStore {
   treeByPath: Record<string, GitTreeItem[]>
   expandedPaths: string[]
   drafts: Record<string, GitDraftFile>
+  stagedChanges: StagedGitChange[]
   currentDocumentId: string | null
   isConnecting: boolean
   isLoadingTree: boolean
@@ -31,6 +33,9 @@ interface GitStore {
   openFile: (path: string) => Promise<GitDraftFile>
   setCurrentDocumentId: (documentId: string | null) => void
   updateDraftContent: (documentId: string, content: string) => void
+  stageGitDraft: (documentId: string) => void
+  stageLocalFile: (fileId: string, repoPath: string) => void
+  unstageChange: (changeId: string) => void
   refreshCurrentFile: () => Promise<void>
   fetchRemoteFile: (documentId?: string) => Promise<GitDraftFile | null>
   syncRemoteStatus: () => Promise<void>
@@ -77,6 +82,7 @@ export const useGitStore = create<GitStore>()(
         treeByPath: {},
         expandedPaths: [],
         drafts: {},
+        stagedChanges: [],
         currentDocumentId: null,
         isConnecting: false,
         isLoadingTree: false,
@@ -256,6 +262,70 @@ export const useGitStore = create<GitStore>()(
               },
             }
           })
+
+          const nextDraft = get().drafts[documentId]
+          if (nextDraft?.isDirty) {
+            get().stageGitDraft(documentId)
+          } else {
+            const stagedItem = get().stagedChanges.find((item) => item.kind === 'git-draft' && item.documentId === documentId)
+            if (stagedItem) {
+              get().unstageChange(stagedItem.id)
+            }
+          }
+        },
+
+        stageGitDraft: (documentId) => {
+          set((state) => {
+            const draft = state.drafts[documentId]
+            if (!draft || !draft.isDirty) return state
+
+            const existing = state.stagedChanges.find((item) => item.kind === 'git-draft' && item.documentId === documentId)
+            const nextChange: StagedGitChange = {
+              id: existing?.id || `git-draft:${documentId}`,
+              kind: 'git-draft',
+              label: draft.name,
+              repoPath: draft.path,
+              documentId,
+              updatedAt: Date.now(),
+            }
+
+            return {
+              stagedChanges: existing
+                ? state.stagedChanges.map((item) => item.id === existing.id ? nextChange : item)
+                : [...state.stagedChanges, nextChange],
+            }
+          })
+        },
+
+        stageLocalFile: (fileId, repoPath) => {
+          const file = useFileSystemStore.getState().files.find((item) => item.id === fileId)
+          if (!file) return
+
+          const normalizedRepoPath = normalizeGitPath(repoPath)
+          set((state) => {
+            const existing = state.stagedChanges.find((item) => item.kind === 'local-file' && item.localFileId === fileId)
+            const nextChange: StagedGitChange = {
+              id: existing?.id || `local-file:${fileId}`,
+              kind: 'local-file',
+              label: file.name,
+              repoPath: normalizedRepoPath,
+              localFileId: fileId,
+              localFileName: file.name,
+              updatedAt: Date.now(),
+            }
+
+            return {
+              stagedChanges: existing
+                ? state.stagedChanges.map((item) => item.id === existing.id ? nextChange : item)
+                : [...state.stagedChanges, nextChange],
+            }
+          })
+        },
+
+        unstageChange: (changeId) => {
+          set((state) => ({
+            stagedChanges: state.stagedChanges.filter((item) => item.id !== changeId),
+          }))
         },
 
         refreshCurrentFile: async () => {
@@ -331,38 +401,69 @@ export const useGitStore = create<GitStore>()(
         },
 
         commitCurrentFile: async (message) => {
-          const { currentDocumentId, drafts, config } = get()
+          const { currentDocumentId, drafts, config, stagedChanges } = get()
           const draft = currentDocumentId ? drafts[currentDocumentId] : null
-          if (!draft) throw new Error('No Git file is currently open')
           if (!message.trim()) throw new Error('Commit message is required')
+          if (!stagedChanges.length && !draft) throw new Error('No Git file is currently open')
 
           set({ isCommitting: true, error: null })
           try {
             const runtimeConfig = toRuntimeConfig(config)
             const client = getGitProviderClient(runtimeConfig)
-            const result = await client.createOrUpdateFile(
-              runtimeConfig,
-              draft.path,
-              draft.draftContent,
-              message.trim(),
-              draft.sha
-            )
+            for (const change of stagedChanges) {
+              if (change.kind === 'git-draft' && change.documentId) {
+                const stagedDraft = get().drafts[change.documentId]
+                if (!stagedDraft) continue
+
+                const result = await client.createOrUpdateFile(
+                  runtimeConfig,
+                  stagedDraft.path,
+                  stagedDraft.draftContent,
+                  message.trim(),
+                  stagedDraft.sha
+                )
+
+                set((state) => ({
+                  drafts: {
+                    ...state.drafts,
+                    [stagedDraft.documentId]: {
+                      ...state.drafts[stagedDraft.documentId],
+                      sha: result.sha || stagedDraft.sha,
+                      content: stagedDraft.draftContent,
+                      originalContent: stagedDraft.draftContent,
+                      remoteContent: stagedDraft.draftContent,
+                      remoteSha: result.sha || stagedDraft.sha,
+                      isDirty: false,
+                      hasRemoteUpdates: false,
+                      hasConflict: false,
+                      lastCheckedAt: Date.now(),
+                    },
+                  },
+                }))
+                continue
+              }
+
+              if (change.kind === 'local-file' && change.localFileId) {
+                const file = useFileSystemStore.getState().files.find((item) => item.id === change.localFileId)
+                if (!file) continue
+
+                await client.createOrUpdateFile(
+                  runtimeConfig,
+                  change.repoPath,
+                  file.content,
+                  message.trim()
+                )
+              }
+            }
+
             set((state) => ({
-              drafts: {
-                ...state.drafts,
-                [draft.documentId]: {
-                  ...draft,
-                  sha: result.sha || draft.sha,
-                  content: draft.draftContent,
-                  originalContent: draft.draftContent,
-                  remoteContent: draft.draftContent,
-                  remoteSha: result.sha || draft.sha,
-                  isDirty: false,
-                  hasRemoteUpdates: false,
-                  hasConflict: false,
-                  lastCheckedAt: Date.now(),
-                },
-              },
+              stagedChanges: state.stagedChanges.filter((item) => {
+                if (item.kind === 'git-draft' && item.documentId) {
+                  const stagedDraft = get().drafts[item.documentId]
+                  return !!stagedDraft?.isDirty
+                }
+                return false
+              }),
               lastFetchedAt: Date.now(),
             }))
             await get().loadTree('')
@@ -443,6 +544,18 @@ export const useGitStore = create<GitStore>()(
             }
             return {
               drafts: nextDrafts,
+              stagedChanges: state.stagedChanges.map((item) =>
+                item.kind === 'git-draft' && item.documentId === draft.documentId
+                  ? {
+                      ...item,
+                      id: `git-draft:${nextDocumentId}`,
+                      documentId: nextDocumentId,
+                      repoPath: nextPath,
+                      label: getGitFileName(nextPath),
+                      updatedAt: Date.now(),
+                    }
+                  : item
+              ),
               currentDocumentId: state.currentDocumentId === draft.documentId ? nextDocumentId : state.currentDocumentId,
             }
           })
@@ -461,6 +574,7 @@ export const useGitStore = create<GitStore>()(
             if (draft) delete nextDrafts[draft.documentId]
             return {
               drafts: nextDrafts,
+              stagedChanges: state.stagedChanges.filter((item) => !(item.kind === 'git-draft' && item.documentId === draft?.documentId)),
               currentDocumentId: currentDocumentId === draft?.documentId ? null : currentDocumentId,
             }
           })

@@ -15,6 +15,7 @@ import { devtools, persist } from 'zustand/middleware'
 import { nanoid } from 'nanoid'
 import type { Folder, MarkdownFile, Workspace, DropPosition } from '@/types/file-system'
 import { useDocumentStore } from './documentStore'
+import { useGitStore } from './gitStore'
 
 /**
  * 生成唯一的文件名（处理重复）
@@ -365,6 +366,9 @@ description:
             files: newFiles,
             currentFileId: currentFileId === id ? null : currentFileId,
           })
+          useGitStore.setState((state) => ({
+            stagedChanges: state.stagedChanges.filter((item) => !(item.kind === 'local-file' && item.localFileId === id)),
+          }))
         },
         
         moveFileToFolder: (fileId: string, folderId: string | null) => {
