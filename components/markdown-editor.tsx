@@ -18,12 +18,13 @@ import { Button } from './ui/button'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useDocumentStore } from '@/stores/documentStore'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
-import { useSidebarStore } from '@/stores/sidebarStore'
+import { SIDEBAR_PANEL_MIN_WIDTH, useSidebarStore } from '@/stores/sidebarStore'
 import { useTabsStore } from '@/stores/tabsStore'
 import { initTheme, useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { useSidebarStore as useTemplateStore } from '@/stores/sidebarStore'
 import { EmptyTabView } from './empty-tab-view'
 import { EditorCanvasShell } from './editor-canvas-shell'
+import { toast } from '@/hooks/use-toast'
 
 /**
  * 默认示例Markdown内容（英文版）
@@ -286,9 +287,16 @@ description: 简要描述
 欢迎加入我们的社区，分享使用心得、获取帮助，与其他用户交流。我们期待你的反馈和建议，让这款工具变得更好。
 `
 
+const LEFT_ICON_BAR_WIDTH = 48
+const RIGHT_PANEL_MIN_WIDTH = 480
+const CENTER_PANEL_MIN_WIDTH = 360
+const RESIZE_HANDLE_HIT_AREA = 14
+
 export function MarkdownEditor() {
   // 面板收起状态
   const [rightCollapsed, setRightCollapsed] = useState(false)
+  const [rightPanelWidth, setRightPanelWidth] = useState(RIGHT_PANEL_MIN_WIDTH)
+  const [isResizing, setIsResizing] = useState(false)
   // 客户端挂载状态，用于避免 hydration 不匹配
   const [mounted, setMounted] = useState(false)
   // 模板编辑模式
@@ -300,11 +308,22 @@ export function MarkdownEditor() {
   }>({ isActive: false, content: '', templateName: '', templateId: null })
   // 搜索对话框状态
   const [searchDialogOpen, setSearchDialogOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const leftPanelMinWidthRef = useRef(LEFT_ICON_BAR_WIDTH + SIDEBAR_PANEL_MIN_WIDTH)
+  const rightPanelMinWidthRef = useRef(RIGHT_PANEL_MIN_WIDTH)
+  const resizeHandleRef = useRef<HTMLDivElement | null>(null)
+  const dragStateRef = useRef<{
+    side: 'left' | 'right'
+    startX: number
+    startLeftWidth: number
+    startRightWidth: number
+    pointerId: number
+  } | null>(null)
 
   // 获取Store
   const { loadDocument, document, selectedNodeId, getCurrentMarkdown, getIsModified, updateNode } = useDocumentStore()
   const { currentFileId, files, saveFile, markFileAsSaved, openFile, createFile } = useFileSystemStore()
-  const { isPanelExpanded, panelWidth } = useSidebarStore()
+  const { isPanelExpanded, panelWidth, setPanelWidth } = useSidebarStore()
   const { activeTabId, getActiveTab, tabs } = useTabsStore()
   const currentMarkdown = getCurrentMarkdown()
   const isModified = getIsModified()
@@ -594,7 +613,116 @@ export function MarkdownEditor() {
   const safeThemeConfig = mounted ? themeConfig : themeConfigs.light
 
   // 计算左侧面板总宽度
-  const leftPanelWidth = isPanelExpanded ? 48 + panelWidth : 48
+  const leftPanelWidth = isPanelExpanded ? LEFT_ICON_BAR_WIDTH + panelWidth : LEFT_ICON_BAR_WIDTH
+
+  const getMaxSidebarWidths = useCallback(() => {
+    const containerWidth = containerRef.current?.clientWidth ?? 0
+    const availableWidth = Math.max(0, containerWidth - CENTER_PANEL_MIN_WIDTH)
+
+    return {
+      left: Math.max(leftPanelMinWidthRef.current, availableWidth - rightPanelWidth),
+      right: Math.max(rightPanelMinWidthRef.current, availableWidth - leftPanelWidth),
+    }
+  }, [leftPanelWidth, rightPanelWidth])
+
+  useEffect(() => {
+    const { left, right } = getMaxSidebarWidths()
+
+    if (leftPanelWidth > left && isPanelExpanded) {
+      setPanelWidth(Math.max(leftPanelMinWidthRef.current - LEFT_ICON_BAR_WIDTH, left - LEFT_ICON_BAR_WIDTH))
+    }
+
+    if (rightPanelWidth > right) {
+      setRightPanelWidth(Math.max(rightPanelMinWidthRef.current, right))
+    }
+  }, [getMaxSidebarWidths, isPanelExpanded, leftPanelWidth, rightPanelWidth, setPanelWidth])
+
+  const clearResizeState = useCallback(() => {
+    const dragState = dragStateRef.current
+    const handle = resizeHandleRef.current
+
+    if (dragState && handle?.hasPointerCapture?.(dragState.pointerId)) {
+      handle.releasePointerCapture(dragState.pointerId)
+    }
+
+    dragStateRef.current = null
+
+    const body = globalThis.document?.body ?? null
+    if (body) {
+      body.style.cursor = ''
+      body.style.userSelect = ''
+    }
+
+    resizeHandleRef.current = null
+    setIsResizing(false)
+  }, [])
+
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      const dragState = dragStateRef.current
+      const container = containerRef.current
+      if (!dragState || !container) return
+
+      const totalWidth = container.getBoundingClientRect().width
+
+      if (dragState.side === 'left') {
+        const nextLeftWidth = dragState.startLeftWidth + (event.clientX - dragState.startX)
+        const maxLeftWidth = Math.max(
+          leftPanelMinWidthRef.current,
+          totalWidth - dragState.startRightWidth - CENTER_PANEL_MIN_WIDTH
+        )
+        const clampedLeftWidth = Math.min(Math.max(leftPanelMinWidthRef.current, nextLeftWidth), maxLeftWidth)
+        setPanelWidth(clampedLeftWidth - LEFT_ICON_BAR_WIDTH)
+        return
+      }
+
+      const nextRightWidth = dragState.startRightWidth + (dragState.startX - event.clientX)
+      const maxRightWidth = Math.max(
+        rightPanelMinWidthRef.current,
+        totalWidth - dragState.startLeftWidth - CENTER_PANEL_MIN_WIDTH
+      )
+      const clampedRightWidth = Math.min(Math.max(rightPanelMinWidthRef.current, nextRightWidth), maxRightWidth)
+      setRightPanelWidth(clampedRightWidth)
+    }
+
+    const handlePointerUp = () => clearResizeState()
+    const handlePointerCancel = () => clearResizeState()
+    const handleWindowBlur = () => clearResizeState()
+
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handlePointerUp)
+    window.addEventListener('pointercancel', handlePointerCancel)
+    window.addEventListener('blur', handleWindowBlur)
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handlePointerUp)
+      window.removeEventListener('pointercancel', handlePointerCancel)
+      window.removeEventListener('blur', handleWindowBlur)
+    }
+  }, [clearResizeState, setPanelWidth])
+
+  const startResize = useCallback((side: 'left' | 'right', event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+
+    const handle = event.currentTarget
+    handle.setPointerCapture(event.pointerId)
+    resizeHandleRef.current = handle
+    dragStateRef.current = {
+      side,
+      startX: event.clientX,
+      startLeftWidth: leftPanelWidth,
+      startRightWidth: rightPanelWidth,
+      pointerId: event.pointerId,
+    }
+    const body = globalThis.document?.body ?? null
+    if (body) {
+      body.style.cursor = 'col-resize'
+      body.style.userSelect = 'none'
+    }
+    setIsResizing(true)
+  }, [leftPanelWidth, rightPanelWidth])
 
   return (
     <div className="flex h-screen flex-col" style={{ backgroundColor: safeThemeConfig.background }}>
@@ -612,7 +740,7 @@ export function MarkdownEditor() {
       />
 
       {/* 主内容区 */}
-      <div className="relative flex flex-1 overflow-hidden">
+      <div ref={containerRef} className="relative flex flex-1 overflow-hidden">
         {/* 左侧 Obsidian 风格侧边栏 */}
         <div
           className="flex h-full flex-shrink-0 transition-all duration-300"
@@ -629,11 +757,29 @@ export function MarkdownEditor() {
         </div>
 
         {/* 中间面板 - React Flow画布或空白页 */}
+        {isPanelExpanded && (
+          <div
+            className="absolute inset-y-0 z-20"
+            style={{
+              left: leftPanelWidth - RESIZE_HANDLE_HIT_AREA / 2,
+              width: RESIZE_HANDLE_HIT_AREA,
+              cursor: 'col-resize',
+            }}
+            onPointerDown={(event) => startResize('left', event)}
+            onMouseEnter={(event) => {
+              event.currentTarget.style.backgroundColor = `${safeThemeConfig.border}22`
+            }}
+            onMouseLeave={(event) => {
+              event.currentTarget.style.backgroundColor = 'transparent'
+            }}
+          />
+        )}
+
         <div
-          className="absolute inset-y-0"
+          className="absolute inset-y-0 min-w-0"
           style={{
             left: leftPanelWidth,
-            right: rightCollapsed ? 0 : 480,
+            right: rightCollapsed ? 0 : rightPanelWidth,
             backgroundColor: safeThemeConfig.background,
             transition: 'left 0.3s ease, right 0.3s ease',
           }}
@@ -649,16 +795,50 @@ export function MarkdownEditor() {
         </div>
 
         {/* 右侧面板 - 预览 */}
+        {isResizing && (
+          <div
+            className="absolute inset-0 z-30"
+            style={{ cursor: 'col-resize' }}
+            onPointerDown={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+            }}
+            onClick={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+            }}
+          />
+        )}
+
         <div
           className={`absolute right-0 top-0 bottom-0 border-l transition-all duration-300 ${
-            rightCollapsed ? 'w-0 overflow-hidden opacity-0' : 'w-[480px] opacity-100'
+            rightCollapsed ? 'w-0 overflow-hidden opacity-0' : 'opacity-100'
           }`}
           style={{
+            width: rightCollapsed ? 0 : rightPanelWidth,
             backgroundColor: safeThemeConfig.card,
             borderColor: safeThemeConfig.border,
           }}
         >
           {/* 右侧面板收起按钮 */}
+          {!rightCollapsed && (
+            <div
+              className="absolute inset-y-0 left-0 z-20"
+              style={{
+                width: RESIZE_HANDLE_HIT_AREA,
+                transform: `translateX(-${RESIZE_HANDLE_HIT_AREA / 2}px)`,
+                cursor: 'col-resize',
+              }}
+              onPointerDown={(event) => startResize('right', event)}
+              onMouseEnter={(event) => {
+                event.currentTarget.style.backgroundColor = `${safeThemeConfig.border}22`
+              }}
+              onMouseLeave={(event) => {
+                event.currentTarget.style.backgroundColor = 'transparent'
+              }}
+            />
+          )}
+
           {!rightCollapsed && (
             <Button
               variant="ghost"
@@ -707,5 +887,3 @@ export function MarkdownEditor() {
   )
 }
 
-// 添加缺失的导入
-import { toast } from '@/hooks/use-toast'
