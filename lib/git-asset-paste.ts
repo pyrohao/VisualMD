@@ -28,8 +28,9 @@ export async function getGitMarkdownImagePasteResult({
     const relativePath = draftDir && repoPath.startsWith(`${draftDir}/`)
       ? repoPath.slice(draftDir.length + 1)
       : repoPath
+    const encodedPath = encodeURI(relativePath)
 
-    return `![${altText}](${relativePath})`
+    return `![${altText}](${encodedPath})`
   }))
 
   return insertMarkdownAtSelection(value, selectionStart, selectionEnd, snippets)

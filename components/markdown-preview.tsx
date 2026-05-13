@@ -267,7 +267,14 @@ async function resolveGitImageUrls(
       continue
     }
 
-    const repoPath = normalizeGitPath(joinGitPath(draftDir, src))
+    let decodedSrc = src
+    try {
+      decodedSrc = decodeURI(src)
+    } catch {
+      decodedSrc = src
+    }
+
+    const repoPath = normalizeGitPath(joinGitPath(draftDir, decodedSrc))
     let blobUrl = cache.get(repoPath)
 
     if (!blobUrl) {

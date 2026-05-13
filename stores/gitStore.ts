@@ -5,6 +5,7 @@ import type { GitBatchCommitAction, GitBranchRef, GitDraftFile, GitProviderConfi
 import { arrayBufferToBase64, buildGitDocumentId, getGitFileName, joinGitPath, normalizeGitPath } from '@/lib/git/utils'
 import { decryptSecret, encryptSecret, normalizeEncryptedSecret } from '@/lib/secret-storage'
 import { useFileSystemStore } from './fileSystemStore'
+import { useTabsStore } from './tabsStore'
 
 interface GitStore {
   config: GitProviderConfig
@@ -83,8 +84,15 @@ function draftReferencesRepoPath(draftPath: string, content: string, repoPath: s
   const relativePath = draftDir && repoPath.startsWith(`${draftDir}/`)
     ? repoPath.slice(draftDir.length + 1)
     : repoPath
+  const encodedRelativePath = encodeURI(relativePath)
+  const encodedRepoPath = encodeURI(repoPath)
 
-  return content.includes(relativePath) || content.includes(repoPath)
+  return (
+    content.includes(relativePath) ||
+    content.includes(repoPath) ||
+    content.includes(encodedRelativePath) ||
+    content.includes(encodedRepoPath)
+  )
 }
 
 function getFolderPlaceholderPath(path: string) {
@@ -473,8 +481,30 @@ export const useGitStore = create<GitStore>()(
 
         uploadAsset: async (documentId, file) => {
           const { config, drafts } = get()
-          const draft = drafts[documentId]
-          if (!draft) throw new Error('Git draft not found')
+          let draft = drafts[documentId]
+
+          if (!draft) {
+            const { tabs, activeTabId } = useTabsStore.getState()
+            const fallbackTab =
+              tabs.find((item) => item.sourceType === 'git' && item.fileId === documentId) ||
+              tabs.find((item) => item.id === activeTabId && item.sourceType === 'git' && item.fileId === documentId)
+
+            if (!fallbackTab?.gitMeta?.path) {
+              throw new Error('Git draft not found')
+            }
+
+            draft = await get().openFile(fallbackTab.gitMeta.path)
+
+            if (fallbackTab.content !== draft.draftContent) {
+              get().updateDraftContent(documentId, fallbackTab.content)
+              draft = get().drafts[documentId] || {
+                ...draft,
+                content: fallbackTab.content,
+                draftContent: fallbackTab.content,
+                isDirty: fallbackTab.content !== draft.originalContent,
+              }
+            }
+          }
 
           const runtimeConfig = toRuntimeConfig(config)
           const client = getGitProviderClient(runtimeConfig)
