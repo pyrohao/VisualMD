@@ -21,7 +21,7 @@ import { joinGitPath, normalizeGitPath } from '@/lib/git/utils'
 import { getGitProviderClient } from '@/lib/git/providers'
 import { decryptSecret } from '@/lib/secret-storage'
 import { getGitMarkdownImagePasteResult } from '@/lib/git-asset-paste'
-import type { GitDraftFile } from '@/lib/git/types'
+import type { GitDraftFile, StagedGitChange } from '@/lib/git/types'
 import type { Tab } from '@/stores/tabsStore'
 
 type PreviewMode = 'preview' | 'edit'
@@ -214,7 +214,8 @@ function guessMimeType(path: string) {
 async function resolveGitImageUrls(
   html: string,
   activeTab: Tab | null,
-  currentDraft: GitDraftFile | null
+  currentDraft: GitDraftFile | null,
+  stagedChanges: StagedGitChange[]
 ) {
   if (activeTab?.sourceType !== 'git' || !activeTab.fileId || !activeTab.gitMeta) {
     return { content: html, blobUrls: [] as string[] }
@@ -226,12 +227,14 @@ async function resolveGitImageUrls(
     token: decryptSecret(config.token),
   }
   const client = getGitProviderClient(runtimeConfig)
-  if (!client.getBinaryFile) {
-    return { content: html, blobUrls: [] as string[] }
-  }
 
   const blobUrls: string[] = []
   const cache = new Map<string, string>()
+  const stagedAssets = new Map(
+    stagedChanges
+      .filter((item) => item.kind === 'git-asset' && item.documentId === activeTab.fileId)
+      .map((item) => [item.repoPath, item] as const)
+  )
   const draftPath = currentDraft?.path || activeTab.gitMeta.path
   const draftDir = draftPath.includes('/')
     ? draftPath.split('/').slice(0, -1).join('/')
@@ -258,15 +261,29 @@ async function resolveGitImageUrls(
     let blobUrl = cache.get(repoPath)
 
     if (!blobUrl) {
-      try {
-        const binaryFile = await client.getBinaryFile(runtimeConfig, repoPath)
-        blobUrl = base64ToBlobUrl(binaryFile.contentBase64, binaryFile.mimeType || guessMimeType(repoPath))
+      const stagedAsset = stagedAssets.get(repoPath)
+
+      if (stagedAsset?.contentBase64) {
+        blobUrl = base64ToBlobUrl(stagedAsset.contentBase64, stagedAsset.mimeType || guessMimeType(repoPath))
         cache.set(repoPath, blobUrl)
         blobUrls.push(blobUrl)
-      } catch {
-        image.setAttribute('data-git-src', repoPath)
-        image.setAttribute('src', 'data:,')
-        continue
+      } else {
+        if (!client.getBinaryFile) {
+          image.setAttribute('data-git-src', repoPath)
+          image.setAttribute('src', 'data:,')
+          continue
+        }
+
+        try {
+          const binaryFile = await client.getBinaryFile(runtimeConfig, repoPath)
+          blobUrl = base64ToBlobUrl(binaryFile.contentBase64, binaryFile.mimeType || guessMimeType(repoPath))
+          cache.set(repoPath, blobUrl)
+          blobUrls.push(blobUrl)
+        } catch {
+          image.setAttribute('data-git-src', repoPath)
+          image.setAttribute('src', 'data:,')
+          continue
+        }
       }
     }
 
@@ -280,7 +297,7 @@ export function MarkdownPreview() {
   const { document, updateFromMarkdown } = useDocumentStore()
   const { theme, getThemeConfig } = useThemeStore()
   const { tabs, activeTabId } = useTabsStore()
-  const { drafts } = useGitStore()
+  const { drafts, stagedChanges } = useGitStore()
   const [mounted, setMounted] = useState(false)
   const [mode, setMode] = useState<PreviewMode>('preview')
   const [html, setHtml] = useState('')
@@ -300,6 +317,12 @@ export function MarkdownPreview() {
   const currentDraft = activeTab?.sourceType === 'git' && activeTab.fileId
     ? drafts[activeTab.fileId] || null
     : null
+  const stagedAssetVersion = activeTab?.fileId
+    ? stagedChanges
+      .filter((item) => item.kind === 'git-asset' && item.documentId === activeTab.fileId)
+      .map((item) => `${item.id}:${item.updatedAt}`)
+      .join('|')
+    : ''
 
   useEffect(() => {
     setEditContent(markdown)
@@ -320,7 +343,8 @@ export function MarkdownPreview() {
       const { content, blobUrls } = await resolveGitImageUrls(
         String(markdownResult),
         activeTab,
-        currentDraft
+        currentDraft,
+        stagedChanges
       )
       currentBlobUrls = blobUrls
 
@@ -350,6 +374,7 @@ export function MarkdownPreview() {
     activeTab?.gitMeta?.branch,
     currentDraft?.path,
     currentDraft?.sha,
+    stagedAssetVersion,
   ])
 
   const handleModeChange = useCallback((newMode: PreviewMode) => {

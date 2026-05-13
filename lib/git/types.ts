@@ -59,7 +59,7 @@ export interface GitDraftFile extends GitFileRef {
 
 export interface StagedGitChange {
   id: string
-  kind: 'git-draft' | 'local-file' | 'git-delete-file' | 'git-delete-folder'
+  kind: 'git-draft' | 'local-file' | 'git-asset' | 'git-delete-file' | 'git-delete-folder'
   label: string
   repoPath: string
   documentId?: string
@@ -67,6 +67,8 @@ export interface StagedGitChange {
   localFileName?: string
   originalContent?: string
   originalSha?: string
+  contentBase64?: string
+  mimeType?: string
   updatedAt: number
 }
 

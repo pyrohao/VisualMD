@@ -75,6 +75,18 @@ function toRuntimeConfig(config: GitProviderConfig): GitProviderConfig {
   }
 }
 
+function draftReferencesRepoPath(draftPath: string, content: string, repoPath: string) {
+  const normalizedDraftPath = normalizeGitPath(draftPath)
+  const draftDir = normalizedDraftPath.includes('/')
+    ? normalizedDraftPath.split('/').slice(0, -1).join('/')
+    : ''
+  const relativePath = draftDir && repoPath.startsWith(`${draftDir}/`)
+    ? repoPath.slice(draftDir.length + 1)
+    : repoPath
+
+  return content.includes(relativePath) || content.includes(repoPath)
+}
+
 export const useGitStore = create<GitStore>()(
   devtools(
     persist(
@@ -263,6 +275,13 @@ export const useGitStore = create<GitStore>()(
                 ...state.drafts,
                 [documentId]: nextDraft,
               },
+              stagedChanges: state.stagedChanges.filter((item) => {
+                if (item.kind !== 'git-asset' || item.documentId !== documentId) {
+                  return true
+                }
+
+                return draftReferencesRepoPath(draft.path, content, item.repoPath)
+              }),
             }
           })
 
@@ -471,13 +490,23 @@ export const useGitStore = create<GitStore>()(
           const assetFileName = `${baseName}-${Date.now()}.${safeExtension}`
           const repoPath = joinGitPath(draftDir, '.visualmd-assets', assetFileName)
           const contentBase64 = arrayBufferToBase64(await file.arrayBuffer())
+          const mimeType = file.type || undefined
 
-          await client.createOrUpdateBinaryFile(
-            runtimeConfig,
-            repoPath,
-            contentBase64,
-            `Upload asset ${assetFileName}`
-          )
+          set((state) => ({
+            stagedChanges: [
+              ...state.stagedChanges.filter((item) => item.id !== `git-asset:${documentId}:${repoPath}`),
+              {
+                id: `git-asset:${documentId}:${repoPath}`,
+                kind: 'git-asset',
+                label: assetFileName,
+                repoPath,
+                documentId,
+                contentBase64,
+                mimeType,
+                updatedAt: Date.now(),
+              },
+            ],
+          }))
 
           return { repoPath }
         },
@@ -607,6 +636,20 @@ export const useGitStore = create<GitStore>()(
                   file.content,
                   message.trim()
                 )
+              }
+
+              if (change.kind === 'git-asset' && change.contentBase64) {
+                if (!client.createOrUpdateBinaryFile) {
+                  throw new Error('Current Git provider does not support binary uploads')
+                }
+
+                await client.createOrUpdateBinaryFile(
+                  runtimeConfig,
+                  change.repoPath,
+                  change.contentBase64,
+                  message.trim()
+                )
+                continue
               }
 
               if (change.kind === 'git-delete-file') {
