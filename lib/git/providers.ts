@@ -1,6 +1,7 @@
 import type {
   CustomGitFlavor,
   GitBranchRef,
+  GitBatchCommitAction,
   GitFileRef,
   GitProviderClient,
   GitProviderConfig,
@@ -133,6 +134,131 @@ async function githubLikeDeleteFile(config: GitProviderConfig, baseUrl: string, 
   }))
 }
 
+async function githubLikeGetReferenceSha(config: GitProviderConfig, baseUrl: string) {
+  const headers = getHeaders(config)
+  const url = `${baseUrl}/repos/${encodeURIComponent(config.ownerOrNamespace)}/${encodeURIComponent(config.repo)}/git/ref/heads/${encodeURIComponent(config.branch)}`
+  const result = await safeJson<any>(await fetch(url, { headers }))
+  return String(result.object?.sha || '')
+}
+
+async function githubLikeGetCommitTreeSha(config: GitProviderConfig, baseUrl: string, commitSha: string) {
+  const headers = getHeaders(config)
+  const url = `${baseUrl}/repos/${encodeURIComponent(config.ownerOrNamespace)}/${encodeURIComponent(config.repo)}/git/commits/${commitSha}`
+  const result = await safeJson<any>(await fetch(url, { headers }))
+  return String(result.tree?.sha || '')
+}
+
+async function githubLikeCreateBlob(
+  config: GitProviderConfig,
+  baseUrl: string,
+  content: string,
+  encoding: 'utf-8' | 'base64'
+) {
+  const headers = getHeaders(config)
+  const url = `${baseUrl}/repos/${encodeURIComponent(config.ownerOrNamespace)}/${encodeURIComponent(config.repo)}/git/blobs`
+  const result = await safeJson<any>(await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ content, encoding }),
+  }))
+  return String(result.sha || '')
+}
+
+async function githubLikeCreateTree(
+  config: GitProviderConfig,
+  baseUrl: string,
+  baseTree: string,
+  tree: Array<Record<string, unknown>>
+) {
+  const headers = getHeaders(config)
+  const url = `${baseUrl}/repos/${encodeURIComponent(config.ownerOrNamespace)}/${encodeURIComponent(config.repo)}/git/trees`
+  const result = await safeJson<any>(await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      base_tree: baseTree,
+      tree,
+    }),
+  }))
+  return String(result.sha || '')
+}
+
+async function githubLikeCreateCommit(
+  config: GitProviderConfig,
+  baseUrl: string,
+  message: string,
+  treeSha: string,
+  parentSha: string
+) {
+  const headers = getHeaders(config)
+  const url = `${baseUrl}/repos/${encodeURIComponent(config.ownerOrNamespace)}/${encodeURIComponent(config.repo)}/git/commits`
+  const result = await safeJson<any>(await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      message,
+      tree: treeSha,
+      parents: [parentSha],
+    }),
+  }))
+  return String(result.sha || '')
+}
+
+async function githubLikeUpdateReference(config: GitProviderConfig, baseUrl: string, commitSha: string) {
+  const headers = getHeaders(config)
+  const url = `${baseUrl}/repos/${encodeURIComponent(config.ownerOrNamespace)}/${encodeURIComponent(config.repo)}/git/refs/heads/${encodeURIComponent(config.branch)}`
+  await safeJson<any>(await fetch(url, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({
+      sha: commitSha,
+      force: false,
+    }),
+  }))
+}
+
+async function githubLikeCommitBatch(
+  config: GitProviderConfig,
+  baseUrl: string,
+  message: string,
+  actions: GitBatchCommitAction[]
+) {
+  const headSha = await githubLikeGetReferenceSha(config, baseUrl)
+  const baseTreeSha = await githubLikeGetCommitTreeSha(config, baseUrl, headSha)
+  const treeEntries = await Promise.all(actions.map(async (action) => {
+    if (action.kind === 'delete') {
+      return {
+        path: normalizeGitPath(action.path),
+        mode: '100644',
+        type: 'blob',
+        sha: null,
+      }
+    }
+
+    if (!action.content) {
+      throw new Error(`Missing content for ${action.path}`)
+    }
+
+    const blobSha = await githubLikeCreateBlob(
+      config,
+      baseUrl,
+      action.content,
+      action.encoding === 'base64' ? 'base64' : 'utf-8'
+    )
+
+    return {
+      path: normalizeGitPath(action.path),
+      mode: '100644',
+      type: 'blob',
+      sha: blobSha,
+    }
+  }))
+
+  const nextTreeSha = await githubLikeCreateTree(config, baseUrl, baseTreeSha, treeEntries)
+  const nextCommitSha = await githubLikeCreateCommit(config, baseUrl, message, nextTreeSha, headSha)
+  await githubLikeUpdateReference(config, baseUrl, nextCommitSha)
+}
+
 async function gitlabListRepos(config: GitProviderConfig, baseUrl: string): Promise<GitRepoRef[]> {
   const headers = getHeaders(config)
   const url = `${baseUrl}/projects?membership=true&simple=true&per_page=100`
@@ -255,6 +381,36 @@ async function gitlabCommitActions(config: GitProviderConfig, baseUrl: string, m
   }))
 }
 
+async function gitlabCommitBatch(
+  config: GitProviderConfig,
+  baseUrl: string,
+  message: string,
+  actions: GitBatchCommitAction[]
+) {
+  await gitlabCommitActions(
+    config,
+    baseUrl,
+    message,
+    actions.map((action) => {
+      if (action.kind === 'delete') {
+        return {
+          action: 'delete',
+          file_path: normalizeGitPath(action.path),
+          ...(action.previousSha ? { last_commit_id: action.previousSha } : {}),
+        }
+      }
+
+      return {
+        action: action.isCreate ? 'create' : 'update',
+        file_path: normalizeGitPath(action.path),
+        content: action.content,
+        encoding: action.encoding === 'base64' ? 'base64' : 'text',
+        ...(action.previousSha ? { last_commit_id: action.previousSha } : {}),
+      }
+    })
+  )
+}
+
 function createGithubLikeClient(baseUrl: string): GitProviderClient {
   return {
     async validateConnection(config) {
@@ -280,6 +436,9 @@ function createGithubLikeClient(baseUrl: string): GitProviderClient {
     },
     createOrUpdateBinaryFile(config, path, contentBase64, message, sha) {
       return githubLikePutEncodedFile(config, baseUrl, path, contentBase64, message, sha)
+    },
+    commitBatch(config, message, actions) {
+      return githubLikeCommitBatch(config, baseUrl, message, actions)
     },
     deleteFile(config, path, message, sha) {
       return githubLikeDeleteFile(config, baseUrl, path, message, sha)
@@ -330,6 +489,9 @@ function createGitlabClient(baseUrl: string): GitProviderClient {
     },
     createOrUpdateBinaryFile(config, path, contentBase64, message, sha) {
       return gitlabCreateOrUpdateWithEncoding(config, baseUrl, path, contentBase64, message, 'base64', sha)
+    },
+    commitBatch(config, message, actions) {
+      return gitlabCommitBatch(config, baseUrl, message, actions)
     },
     deleteFile(config, path, message) {
       return gitlabDelete(config, baseUrl, path, message)

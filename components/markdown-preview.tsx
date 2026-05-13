@@ -8,6 +8,7 @@ import { unified } from 'unified'
 import remarkParse from 'remark-parse'
 import remarkGfm from 'remark-gfm'
 import remarkRehype from 'remark-rehype'
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import rehypeStringify from 'rehype-stringify'
 import { BookOpen, Pencil } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -25,6 +26,15 @@ import type { GitDraftFile, StagedGitChange } from '@/lib/git/types'
 import type { Tab } from '@/stores/tabsStore'
 
 type PreviewMode = 'preview' | 'edit'
+
+const previewSanitizeSchema = {
+  ...defaultSchema,
+  protocols: {
+    ...defaultSchema.protocols,
+    href: ['http', 'https', 'mailto'],
+    src: ['http', 'https', 'data'],
+  },
+}
 
 function getThemeStyles(theme: ThemeMode): string {
   const config = themeConfigs[theme]
@@ -336,8 +346,9 @@ export function MarkdownPreview() {
       const markdownResult = await unified()
         .use(remarkParse)
         .use(remarkGfm)
-        .use(remarkRehype, { allowDangerousHtml: true })
-        .use(rehypeStringify, { allowDangerousHtml: true })
+        .use(remarkRehype)
+        .use(rehypeSanitize, previewSanitizeSchema)
+        .use(rehypeStringify)
         .process(removeMetadata(markdown))
 
       const { content, blobUrls } = await resolveGitImageUrls(

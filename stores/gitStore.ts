@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { devtools, persist } from 'zustand/middleware'
 import { getGitProviderClient } from '@/lib/git/providers'
-import type { GitBranchRef, GitDraftFile, GitProviderConfig, GitRepoRef, GitTreeItem, StagedGitChange } from '@/lib/git/types'
+import type { GitBatchCommitAction, GitBranchRef, GitDraftFile, GitProviderConfig, GitRepoRef, GitTreeItem, StagedGitChange } from '@/lib/git/types'
 import { arrayBufferToBase64, buildGitDocumentId, getGitFileName, joinGitPath, normalizeGitPath } from '@/lib/git/utils'
 import { decryptSecret, encryptSecret, normalizeEncryptedSecret } from '@/lib/secret-storage'
 import { useFileSystemStore } from './fileSystemStore'
@@ -85,6 +85,10 @@ function draftReferencesRepoPath(draftPath: string, content: string, repoPath: s
     : repoPath
 
   return content.includes(relativePath) || content.includes(repoPath)
+}
+
+function getFolderPlaceholderPath(path: string) {
+  return joinGitPath(normalizeGitPath(path), '.gitkeep')
 }
 
 export const useGitStore = create<GitStore>()(
@@ -593,36 +597,32 @@ export const useGitStore = create<GitStore>()(
           try {
             const runtimeConfig = toRuntimeConfig(config)
             const client = getGitProviderClient(runtimeConfig)
+            if (!client.commitBatch) {
+              throw new Error('Current Git provider does not support atomic batch commits')
+            }
+
+            const batchActions: GitBatchCommitAction[] = []
+            const committedChangeIds = new Set(stagedChanges.map((item) => item.id))
+            const committedDraftSnapshots = new Map<string, { path: string; content: string }>()
+            const deletedDocumentIds = new Set<string>()
+
             for (const change of stagedChanges) {
               if (change.kind === 'git-draft' && change.documentId) {
                 const stagedDraft = get().drafts[change.documentId]
                 if (!stagedDraft) continue
 
-                const result = await client.createOrUpdateFile(
-                  runtimeConfig,
-                  stagedDraft.path,
-                  stagedDraft.draftContent,
-                  message.trim(),
-                  stagedDraft.sha
-                )
-
-                set((state) => ({
-                  drafts: {
-                    ...state.drafts,
-                    [stagedDraft.documentId]: {
-                      ...state.drafts[stagedDraft.documentId],
-                      sha: result.sha || stagedDraft.sha,
-                      content: stagedDraft.draftContent,
-                      originalContent: stagedDraft.draftContent,
-                      remoteContent: stagedDraft.draftContent,
-                      remoteSha: result.sha || stagedDraft.sha,
-                      isDirty: false,
-                      hasRemoteUpdates: false,
-                      hasConflict: false,
-                      lastCheckedAt: Date.now(),
-                    },
-                  },
-                }))
+                committedDraftSnapshots.set(change.documentId, {
+                  path: stagedDraft.path,
+                  content: stagedDraft.draftContent,
+                })
+                batchActions.push({
+                  kind: 'upsert',
+                  path: stagedDraft.path,
+                  content: stagedDraft.draftContent,
+                  encoding: 'text',
+                  previousSha: stagedDraft.sha,
+                  isCreate: false,
+                })
                 continue
               }
 
@@ -630,49 +630,113 @@ export const useGitStore = create<GitStore>()(
                 const file = useFileSystemStore.getState().files.find((item) => item.id === change.localFileId)
                 if (!file) continue
 
-                await client.createOrUpdateFile(
-                  runtimeConfig,
-                  change.repoPath,
-                  file.content,
-                  message.trim()
-                )
+                batchActions.push({
+                  kind: 'upsert',
+                  path: change.repoPath,
+                  content: file.content,
+                  encoding: 'text',
+                  isCreate: true,
+                })
+                continue
               }
 
               if (change.kind === 'git-asset' && change.contentBase64) {
-                if (!client.createOrUpdateBinaryFile) {
-                  throw new Error('Current Git provider does not support binary uploads')
-                }
-
-                await client.createOrUpdateBinaryFile(
-                  runtimeConfig,
-                  change.repoPath,
-                  change.contentBase64,
-                  message.trim()
-                )
+                batchActions.push({
+                  kind: 'upsert',
+                  path: change.repoPath,
+                  content: change.contentBase64,
+                  encoding: 'base64',
+                  isCreate: true,
+                })
                 continue
               }
 
               if (change.kind === 'git-delete-file') {
-                await client.deleteFile(runtimeConfig, change.repoPath, message.trim(), change.originalSha)
+                batchActions.push({
+                  kind: 'delete',
+                  path: change.repoPath,
+                  previousSha: change.originalSha,
+                })
+                if (change.documentId) {
+                  deletedDocumentIds.add(change.documentId)
+                }
                 continue
               }
 
               if (change.kind === 'git-delete-folder') {
-                await client.deleteFolder(runtimeConfig, change.repoPath, message.trim())
+                batchActions.push({
+                  kind: 'delete',
+                  path: getFolderPlaceholderPath(change.repoPath),
+                })
                 continue
               }
             }
 
-            set((state) => ({
-              stagedChanges: state.stagedChanges.filter((item) => {
-                if (item.kind === 'git-draft' && item.documentId) {
-                  const stagedDraft = get().drafts[item.documentId]
-                  return !!stagedDraft?.isDirty
+            if (!batchActions.length) {
+              throw new Error('No staged changes to commit')
+            }
+
+            await client.commitBatch(runtimeConfig, message.trim(), batchActions)
+
+            const refreshedDrafts = new Map<string, { sha?: string; content: string }>()
+            for (const [documentId, snapshot] of committedDraftSnapshots) {
+              const remoteFile = await client.getFile(runtimeConfig, snapshot.path)
+              refreshedDrafts.set(documentId, {
+                sha: remoteFile.sha,
+                content: remoteFile.content,
+              })
+            }
+
+            set((state) => {
+              const nextDrafts = { ...state.drafts }
+
+              deletedDocumentIds.forEach((documentId) => {
+                delete nextDrafts[documentId]
+              })
+
+              refreshedDrafts.forEach((remoteDraft, documentId) => {
+                const currentDraft = nextDrafts[documentId]
+                const snapshot = committedDraftSnapshots.get(documentId)
+                if (!currentDraft || !snapshot) return
+
+                const keepLocalEdits = currentDraft.draftContent !== snapshot.content
+                const nextContent = keepLocalEdits ? currentDraft.draftContent : remoteDraft.content
+
+                nextDrafts[documentId] = {
+                  ...currentDraft,
+                  sha: remoteDraft.sha || currentDraft.sha,
+                  content: nextContent,
+                  originalContent: remoteDraft.content,
+                  draftContent: nextContent,
+                  remoteContent: remoteDraft.content,
+                  remoteSha: remoteDraft.sha || currentDraft.remoteSha,
+                  isDirty: keepLocalEdits,
+                  hasRemoteUpdates: false,
+                  hasConflict: false,
+                  lastCheckedAt: Date.now(),
                 }
-                return false
-              }),
-              lastFetchedAt: Date.now(),
-            }))
+              })
+
+              return {
+                drafts: nextDrafts,
+                stagedChanges: state.stagedChanges.filter((item) => {
+                  if (!committedChangeIds.has(item.id)) {
+                    return true
+                  }
+
+                  if (item.kind === 'git-draft' && item.documentId) {
+                    return !!nextDrafts[item.documentId]?.isDirty
+                  }
+
+                  return false
+                }),
+                currentDocumentId:
+                  state.currentDocumentId && deletedDocumentIds.has(state.currentDocumentId)
+                    ? null
+                    : state.currentDocumentId,
+                lastFetchedAt: Date.now(),
+              }
+            })
             await get().loadTree('')
           } catch (error) {
             const message = error instanceof Error ? error.message : 'Failed to commit file'
@@ -680,11 +744,12 @@ export const useGitStore = create<GitStore>()(
             const looksLikeConflict =
               lowerMessage.includes('conflict') ||
               lowerMessage.includes('sha') ||
-              lowerMessage.includes('outdated') ||
-              lowerMessage.includes('does not match') ||
-              lowerMessage.includes('failed to update') ||
-              lowerMessage.includes('already exists') ||
-              lowerMessage.includes('last_commit_id')
+                lowerMessage.includes('outdated') ||
+                lowerMessage.includes('does not match') ||
+                lowerMessage.includes('failed to update') ||
+                lowerMessage.includes('already exists') ||
+                lowerMessage.includes('last_commit_id') ||
+                lowerMessage.includes('fast forward')
 
             if (looksLikeConflict) {
               if (!draft) {

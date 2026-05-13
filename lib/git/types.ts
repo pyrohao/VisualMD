@@ -72,6 +72,15 @@ export interface StagedGitChange {
   updatedAt: number
 }
 
+export interface GitBatchCommitAction {
+  kind: 'upsert' | 'delete'
+  path: string
+  content?: string
+  encoding?: 'text' | 'base64'
+  previousSha?: string
+  isCreate?: boolean
+}
+
 export interface GitProviderClient {
   validateConnection(config: GitProviderConfig): Promise<void>
   listRepos(config: GitProviderConfig): Promise<GitRepoRef[]>
@@ -93,6 +102,7 @@ export interface GitProviderClient {
     message: string,
     sha?: string
   ): Promise<{ sha?: string }>
+  commitBatch?(config: GitProviderConfig, message: string, actions: GitBatchCommitAction[]): Promise<void>
   deleteFile(config: GitProviderConfig, path: string, message: string, sha?: string): Promise<void>
   renameFile(config: GitProviderConfig, oldPath: string, newPath: string, message: string, content: string, sha?: string): Promise<void>
   createFolder(config: GitProviderConfig, path: string, message: string): Promise<void>
