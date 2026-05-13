@@ -1,4 +1,4 @@
-# Visual MD — Visual Markdown Editor
+# Visual MD · Visual Markdown Editor
 
 <p align="center">
   <img src="./public/apple-icon.png" alt="Visual MD" width="120">
@@ -9,7 +9,9 @@
 </p>
 
 <p align="center">
-  <a href="#core-features">Core Features</a> ·
+  <a href="#why-visual-md">Why Visual MD</a> ·
+  <a href="#core-capabilities">Core Capabilities</a> ·
+  <a href="#git-workflow">Git Workflow</a> ·
   <a href="#quick-start">Quick Start</a> ·
   <a href="#technical-architecture">Technical Architecture</a>
 </p>
@@ -33,14 +35,22 @@
 
 ---
 
-## Introduction
+## Why Visual MD
 
-**Visual MD** is an innovative visual Markdown editor that combines traditional text editing with modern node-based editing. It displays document hierarchy through an intuitive tree structure, helping you **see the document skeleton at a glance**, **quickly understand content flow, and efficiently organize document structure**.
+**Visual MD** is not just Markdown with a nicer UI. It turns Markdown into a workspace where structure can be seen, moved, reviewed, and versioned more naturally.
 
-Whether reading long documents, organizing knowledge notes, planning article structures, or designing prompts, Visual MD helps you:
-- 📊 **Quick Overview** - Visual tree structure makes document structure clear at a glance
-- 🔍 **Precise Navigation** - Click nodes to jump to corresponding content
-- ✏️ **Efficient Editing** - Drag to adjust structure, sync updates in real-time
+It is designed around a few recurring pain points:
+
+- **Long Markdown files are hard to read and refactor**
+- **Structural edits are expensive in plain text**
+- **Image pasting in Markdown is usually clumsy**
+- **Many browser editors can edit Git files, but not with real staging semantics**
+
+Visual MD approaches this differently:
+
+- Use trees and canvases to understand document structure.
+- Keep Markdown as the source of truth so content stays portable and reviewable.
+- Treat Git-backed document editing closer to a real SCM workflow.
 
 ### Preview
 
@@ -52,106 +62,110 @@ Whether reading long documents, organizing knowledge notes, planning article str
   <img src="./public/assets/screenshots/dark-theme.png" alt="Dark Theme" width="48%">
 </p>
 
-- 🎯 **Visual Editing** - Say goodbye to pure text editing, organize document structure intuitively through drag-and-drop nodes
-- 🔄 **Bidirectional Sync** - Visual editing and Markdown source code sync in real-time
-- ⚡ **High Performance** - Smooth canvas interaction experience based on React Flow
-- 🎨 **Theme Customization** - Support multiple color themes to meet different aesthetic needs
+---
+
+## Core Capabilities
+
+### 1. Visual tree editing
+
+- Built on **React Flow** to turn heading hierarchy into an interactive structure tree
+- Drag nodes to reorganize content
+- Batch-create child nodes, reorder sections, and clean up layout quickly
+- One-click layout organization for large documents
+
+### 2. Bidirectional editing
+
+- **Visual mode** for structural editing
+- **Text mode** for direct Markdown editing
+- **Read / Edit preview switching** inside one panel
+- Changes stay synchronized across representations
+
+### 3. HTML prototype rendering
+
+- Switch the canvas into **Prototype** mode to derive a page-like prototype from Markdown structure and content.
+- Headings, paragraphs, tables, checklists, and code blocks can be rendered into a more interface-oriented HTML prototype layout.
+- `@proto` commands can declare inputs, buttons, toggles, tabs, cards, stats, and similar interactive elements.
+- This makes it practical to move between documentation, requirements, and low-fidelity interface sketching without maintaining separate artifacts.
+
+### 4. Detached node management
+
+- Temporarily pull nodes out of the tree and manage them separately
+- Reattach them later to any valid parent
+- Built-in level validation helps prevent broken structure
+
+### 5. Markdown plus metadata
+
+- Parse and generate YAML front matter
+- Keep headings, body blocks, and metadata in sync
+- Works well for technical docs, knowledge notes, prompt assets, and structured writing
+
+### 6. Templates and AI generation
+
+- Built-in templates for fast document bootstrapping
+- Import custom `.md` templates
+- Generate structured Markdown with multiple AI providers
+- Encrypted local API key storage and connection testing
+
+### 7. Themes and multilingual UI
+
+- Reading, light, and dark themes
+- Chinese / English UI switching
+- Preview styling follows theme changes for a consistent reading experience
 
 ---
 
-## Core Features
+## Git Workflow
 
-### 1. Visual Node Tree
+This is one of the biggest upgrades in the current version.
 
-- Use **React Flow** to display document structure
-- Support dragging nodes to reorganize content
-- Horizontal tree layout, clearly showing document hierarchy
-- One-click organize feature, automatically optimize node layout
+Visual MD is no longer just “able to open Markdown files from Git”. It now starts to behave much closer to a real SCM-oriented document workflow.
 
-### 2. Bidirectional Editing Mode
+### Supported today
 
-The editor supports seamless switching between two editing modes:
+- Connect to **GitHub / GitLab / Gitee / custom Git APIs (GitLab- or Gitea-style)**
+- Browse repository trees and open Markdown files
+- Fetch remote updates, detect conflicts, preserve local drafts
+- Stage content changes
+- Stage file deletions and folder deletions
+- Unstage and restore deleted content
+- **Single batch commit**: text edits, images, and deletions are submitted together instead of producing multiple fragmented commits
 
-- **Visual Mode** - Edit document structure intuitively through node graphs
-- **Text Mode** - Edit Markdown source code directly
+### Image paste workflow
 
-Changes in both modes sync in real-time, ensuring data consistency.
+This is one of the strongest user-facing improvements:
 
-### 3. Detached Node Management
+1. Open a Git-tracked Markdown document in edit mode.
+2. Paste an image directly.
+3. Visual MD generates a separate asset path and inserts a normal Markdown image reference.
+4. Switch to preview and the image is immediately visible.
+5. Before commit, the image exists only in the local staged state, not in remote history.
+6. On commit, text and asset changes are submitted together in one atomic operation.
 
-Innovative node detachment and reconnection features:
+### What this solves
 
-- **Detach Node** - Separate nodes from the tree structure, keeping them in the detached nodes panel
-- **Reconnect** - Reconnect detached nodes to any parent node at any time
-- **Level Validation** - Automatically validate parent-child node level relationships
-- **Independent Management** - Detached nodes panel centrally manages all floating nodes
+- **No more base64 blobs inside Markdown body content**
+- **No more accidental remote commits just because an image was pasted**
+- **Deleted files are staged first instead of disappearing remotely immediately**
+- **A single commit now represents a complete document change**
 
-### 4. Smart Node Operations
+### Preview safety
 
-Rich node operation features:
+- Markdown preview is now sanitized with an allowlist policy
+- Dangerous raw HTML is no longer passed through by default
+- Common Markdown rendering still works while the XSS surface is significantly reduced
 
-- **Batch Creation** - Create multiple child nodes at once
-- **Flexible Deletion** - Delete only current node (child nodes become detached) or delete entire branch
-- **Node Sorting** - Drag to adjust node order
-- **Edge Operations** - Right-click edges to delete connections, select edges to highlight
+---
 
-### 5. Template System
+## Good Fit For
 
-Provide rich document templates for quick start:
+Visual MD works especially well for:
 
-**Built-in Templates**:
-- **Capability Skill** - Capability skill document template
-- **Constraint Skill** - Constraint skill document template
-- **Decision Skill** - Decision skill document template
-- **Procedural Skill** - Procedural skill document template
-- **Prompt Template** - Prompt template
-
-**Template Features**:
-- One-click apply template to create new documents
-- Support importing custom templates (.md files)
-- Real-time preview and editing of template content
-
-### 6. AI Document Generation
-
-Support multiple AI providers, intelligently generate structured documents:
-
-**Built-in Supported Providers**:
-- **OpenAI** - GPT series models
-- **Volcano Engine** - Doubao, DeepSeek series
-- **Silicon Flow** - DeepSeek, Qwen series
-- **Zhipu AI** - GLM series
-- **Tongyi Qianwen** - Qwen series
-- **OpenRouter** - Multi-vendor model aggregation
-- **Custom** - Support any OpenAI compatible API
-
-**Feature Highlights**:
-- Intelligent content generation, automatically generate structured Markdown documents
-- Independent configuration for each provider (API address, model, temperature parameters, etc.)
-- Configuration testing feature to verify connection availability
-- API key encrypted storage
-
-### 7. Multi-language Support
-
-- **Interface Language** - Support Chinese and English interface switching
-- **AI Language Detection** - AI automatically selects output language based on user input language
-- **Unicode Support** - Full support for international characters
-
-### 8. File System Management
-
-- Support multi-file tabs
-- Folder tree browsing
-- File creation, renaming, deletion
-- Auto-save and modification markers
-- Export to Markdown or HTML format
-
-### 9. History and Undo/Redo
-
-Complete editing history management:
-
-- **Undo/Redo** - Support multi-step undo and redo operations
-- **History Limit** - Maximum 50 records to prevent memory overflow
-- **Batch Operation Merge** - Continuous operations automatically merge into single record
-- **Operation Description** - Clearly display undoable operation types
+- Technical documentation
+- Knowledge bases and study notes
+- Prompt / skill / workflow documents
+- Low-fidelity page prototypes and interaction sketches
+- Long-form writing that needs frequent restructuring
+- Teams maintaining Markdown assets directly in Git repositories
 
 ---
 
@@ -160,140 +174,130 @@ Complete editing history management:
 ### Requirements
 
 - **Node.js** >= 22
-- **pnpm** >= 8 (recommended)
+- **pnpm** >= 8
 
-### Installation
+### Install and run
 
 ```bash
-# Clone the project
 git clone <repository-url>
-cd markdown-editor-design
-
-# Install dependencies
+cd VisualMD
 pnpm install
-
-# Start development server
 pnpm dev
 ```
 
-Open browser and visit [http://localhost:3000](http://localhost:3000) to use.
+Open [http://localhost:3000](http://localhost:3000)
 
-### Build Production Version
+### Production build
 
 ```bash
-# Build
 pnpm build
-
-# Start production server
 pnpm start
+```
+
+### Common commands
+
+```bash
+pnpm dev
+pnpm build
+pnpm start
+pnpm lint
 ```
 
 ---
 
 ## Technical Architecture
 
-### Tech Stack
+### Tech stack
 
 | Category | Technology |
 |------|------|
-| **Framework** | Next.js 16.0, React 19.2 |
-| **Language** | TypeScript 5 |
-| **Styling** | Tailwind CSS 4.1, Radix UI |
-| **State Management** | Zustand 5.0 |
-| **Visualization** | React Flow 12.3 (@xyflow/react) |
-| **Markdown** | unified, remark, rehype, js-yaml |
-| **Animation** | Framer Motion 12.29 |
-| **Tools** | nanoid, lucide-react, date-fns |
+| Framework | Next.js 16, React 19 |
+| Language | TypeScript 5 |
+| State management | Zustand |
+| UI | Tailwind CSS 4, Radix UI |
+| Visual editing | React Flow / @xyflow/react |
+| Markdown pipeline | unified, remark, rehype, js-yaml |
+| Animation | Framer Motion |
 
-### Core Modules
+### Key modules
 
-#### 1. Markdown Parser (`lib/markdown-parser.ts`)
-
-Four-step parsing algorithm:
-
-1. **Extract Metadata (YAML Front Matter)** - Use regex `/^---\s*\n([\s\S]*?)\n---/` to match, use `js-yaml` to parse YAML metadata
-2. **Extract Heading Nodes** - Use regex `/^(#{1,6})\s+(.+)$/gm` to match all headings
-3. **Build Tree Structure** - Optimized algorithm:
-   - Determine maximum heading level, create virtual root node
-   - Handle orphan nodes (headings without parent nodes)
-   - Use stack structure, O(n) time complexity to build tree
-4. **Extract Content Blocks** - Extract own content for each node (excluding child node content)
-
-#### 2. Markdown Generator (`lib/markdown-generator.ts`)
-
-Depth-first traversal algorithm:
-
-1. **Generate Metadata (YAML Front Matter)** - Custom YAML serialization (handling multi-line values, special characters, etc.)
-2. **DFS Generate Content** - Recursively traverse tree structure:
-   - Skip detached nodes (`isDetached=true`)
-   - Render child nodes in `children` array order
-   - Generate headings and content blocks
-
-#### 3. Markdown Preview Rendering (`components/markdown-preview.tsx`)
-
-Use **Remark** ecosystem for professional Markdown rendering:
-
-- **unified** - Unified processor interface, coordinating the entire rendering process
-- **remark-parse** - Parse Markdown text into syntax tree
-- **remark-gfm** - Support GitHub Flavored Markdown (tables, strikethrough, task lists, etc.)
-- **remark-rehype** - Convert Markdown syntax tree to HTML syntax tree
-- **rehype-stringify** - Serialize HTML syntax tree to HTML string
-- **Theme Adaptation** - Dynamically generate CSS styles based on current theme
-
-#### 4. Layout Engine (`lib/layout-engine.ts`)
-
-Horizontal mind map layout algorithm:
-
-- **Root node on the left**, child nodes expand to the right
-- **Dynamic node position calculation** - Based on level depth and subtree height
-- **Parent node centered** - Located at the vertical center of all child nodes
-- **Detached node handling** - Preserve original position or place in independent area on the right
-- Time complexity: O(n)
+- `lib/markdown-parser.ts`
+  - Parses Markdown, heading hierarchy, and YAML metadata
+- `lib/markdown-generator.ts`
+  - Rebuilds Markdown from the internal document tree
+- `stores/documentStore.ts`
+  - Coordinates document tree state, selection, detached nodes, and history
+- `stores/gitStore.ts`
+  - Handles Git repositories, drafts, staging, and batch commits
+- `components/markdown-preview.tsx`
+  - Renders Markdown, handles read/edit switching, resolves Git images, and sanitizes preview HTML
 
 ---
 
-## Development Guide
+## Current Highlights
 
-### Development Environment Setup
+- **Think in trees instead of scrolling raw Markdown**
+- **Visual editing stays aligned with Markdown source**
+- **Markdown can directly drive interactive HTML prototypes**
+- **Git-backed document editing now has actual staging semantics**
+- **Image paste no longer bloats Markdown or pollutes remote history early**
+- **Preview now has a meaningful baseline XSS defense**
+
+---
+
+## Development Notes
+
+The project uses ESLint for code quality checks:
 
 ```bash
-# Install dependencies
-pnpm install
-
-# Start development server (with hot reload)
-pnpm dev
-```
-
-### Code Standards
-
-The project uses ESLint for code checking:
-
-```bash
-# Run code check
 pnpm lint
 ```
 
+For larger changes, it is recommended to verify at least:
+
+```bash
+pnpm lint
+node_modules/.bin/tsc -p tsconfig.json --noEmit
+```
+
 ---
 
-## Contributing Guide
+## Roadmap
 
-We welcome all forms of contribution!
+Still worth building next:
 
-### How to Contribute
+### Mid-term
 
-1. **Fork** this repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Create a **Pull Request**
+- A stronger source editor core (Monaco / CodeMirror)
+- More export formats (PDF / Word)
+- Richer Git interactions and diff visibility
 
-### Contribution Types
+### Long-term
 
-- 🐛 **Bug Fix** - Fix issues in the code
-- ✨ **New Feature** - Add new features or improvements
-- 📚 **Documentation** - Improve documentation or add examples
-- 🎨 **UI/UX** - Improve user interface and experience
-- ⚡ **Performance** - Optimize performance
+- VS Code extension
+- Mobile / tablet adaptation
+- Plugin system
+- Multiplayer collaboration
+- Obsidian plugin
+
+---
+
+## Contributing
+
+Issues and pull requests are welcome.
+
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Open a pull request
+
+Helpful contribution categories:
+
+- Bug fixes
+- New features
+- Documentation improvements
+- UI / UX refinements
+- Performance work
 
 ---
 
@@ -303,54 +307,15 @@ This project is open source under the [Apache-2.0 License](LICENSE.txt).
 
 ---
 
-## Roadmap
-
-Here are the planned features. Thanks for all the suggestions:
-
-### 🟢 Easy (Planned)
-
-| Feature | Description |
-|---------|-------------|
-| **Collapsible Layout** | Visual canvas can be collapsed for focused editing |
-| **Shortcut Optimization** | Add more keyboard shortcuts |
-| **Theme Tuning** | Optimize existing theme colors |
-
-### 🟡 Medium
-
-| Feature | Description |
-|---------|-------------|
-| **Editor Enhancement** | Replace textarea with Monaco/CodeMirror, support syntax highlighting and completion |
-| **GitHub Sync** | Pure frontend implementation, OAuth + GitHub API for document sync |
-| **Export Optimization** | Support more export formats (PDF, Word) |
-
-### 🟠 Hard
-
-| Feature | Description |
-|---------|-------------|
-| **VS Code Extension** | Integrate visual editing into VS Code |
-| **Mobile Adaptation** | Responsive layout, support tablet devices |
-| **Plugin System** | Support custom plugin extensions |
-
-### 🔴 Very Hard
-
-| Feature | Description |
-|---------|-------------|
-| **Multiplayer Collaboration** | Real-time collaborative editing based on Yjs |
-| **Obsidian Plugin** | As an Obsidian community plugin |
-
----
-
 ## Acknowledgments
 
-Thanks to the following open source projects:
-
-- [React Flow](https://reactflow.dev/) - Visual canvas engine
-- [shadcn/ui](https://ui.shadcn.com/) - UI component library
-- [Zustand](https://github.com/pmndrs/zustand) - State management
-- [Remark](https://github.com/remarkjs/remark) - Markdown processing
+- [React Flow](https://reactflow.dev/) - visual canvas foundation
+- [shadcn/ui](https://ui.shadcn.com/) - UI component system
+- [Zustand](https://github.com/pmndrs/zustand) - state management
+- [Remark](https://github.com/remarkjs/remark) - Markdown processing ecosystem
 
 ---
 
 <p align="center">
-  Built with ❤️ | Make Markdown editing more intuitive and efficient
+  Built with ❤️ · Make Markdown editing more visual, structured, and Git-friendly
 </p>
