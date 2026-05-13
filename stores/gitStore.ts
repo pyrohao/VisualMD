@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { devtools, persist } from 'zustand/middleware'
 import { getGitProviderClient } from '@/lib/git/providers'
 import type { GitBranchRef, GitDraftFile, GitProviderConfig, GitRepoRef, GitTreeItem, StagedGitChange } from '@/lib/git/types'
-import { buildGitDocumentId, getGitFileName, normalizeGitPath } from '@/lib/git/utils'
+import { arrayBufferToBase64, buildGitDocumentId, getGitFileName, joinGitPath, normalizeGitPath } from '@/lib/git/utils'
 import { decryptSecret, encryptSecret, normalizeEncryptedSecret } from '@/lib/secret-storage'
 import { useFileSystemStore } from './fileSystemStore'
 
@@ -35,16 +35,19 @@ interface GitStore {
   updateDraftContent: (documentId: string, content: string) => void
   stageGitDraft: (documentId: string) => void
   stageLocalFile: (fileId: string, repoPath: string) => void
+  stageDeletedGitFile: (path: string) => Promise<void>
+  stageDeletedGitFolder: (path: string) => Promise<void>
   unstageChange: (changeId: string) => void
+  uploadAsset: (documentId: string, file: File) => Promise<{ repoPath: string }>
   refreshCurrentFile: () => Promise<void>
   fetchRemoteFile: (documentId?: string) => Promise<GitDraftFile | null>
   syncRemoteStatus: () => Promise<void>
   commitCurrentFile: (message: string) => Promise<void>
   createFile: (path: string, content: string, message: string) => Promise<void>
   renameFile: (oldPath: string, newPath: string, message: string) => Promise<void>
-  deleteFile: (path: string, message: string) => Promise<void>
+  deleteFile: (path: string) => Promise<void>
   createFolder: (path: string, message: string) => Promise<void>
-  deleteFolder: (path: string, message: string) => Promise<void>
+  deleteFolder: (path: string) => Promise<void>
 }
 
 const DEFAULT_CONFIG: GitProviderConfig = {
@@ -322,10 +325,161 @@ export const useGitStore = create<GitStore>()(
           })
         },
 
-        unstageChange: (changeId) => {
+        stageDeletedGitFile: async (path) => {
+          const { drafts } = get()
+          const normalizedPath = normalizeGitPath(path)
+          const existingDraft =
+            Object.values(drafts).find((item) => item.path === normalizedPath) ||
+            await get().openFile(normalizedPath)
+
           set((state) => ({
-            stagedChanges: state.stagedChanges.filter((item) => item.id !== changeId),
+            drafts: {
+              ...state.drafts,
+              [existingDraft.documentId]: {
+                ...existingDraft,
+                isDirty: true,
+              },
+            },
+            stagedChanges: [
+              ...state.stagedChanges.filter((item) => !(
+                (item.kind === 'git-draft' && item.documentId === existingDraft.documentId) ||
+                (item.kind === 'git-delete-file' && item.repoPath === normalizedPath)
+              )),
+              {
+                id: `git-delete-file:${normalizedPath}`,
+                kind: 'git-delete-file',
+                label: existingDraft.name,
+                repoPath: normalizedPath,
+                documentId: existingDraft.documentId,
+                originalContent: existingDraft.originalContent,
+                originalSha: existingDraft.sha,
+                updatedAt: Date.now(),
+              },
+            ],
           }))
+
+          const parentPath = normalizedPath.split('/').slice(0, -1).join('/')
+          set((state) => ({
+            treeByPath: {
+              ...state.treeByPath,
+              [normalizeGitPath(parentPath)]: (state.treeByPath[normalizeGitPath(parentPath)] || [])
+                .filter((item) => normalizeGitPath(item.path) !== normalizedPath),
+            },
+            currentDocumentId: state.currentDocumentId === existingDraft.documentId ? null : state.currentDocumentId,
+          }))
+        },
+
+        stageDeletedGitFolder: async (path) => {
+          const normalizedPath = normalizeGitPath(path)
+          const existing = get().treeByPath[normalizedPath]
+          if (!existing) {
+            await get().loadTree(normalizedPath)
+          }
+
+          const folderItems = get().treeByPath[normalizedPath] || []
+          const nonPlaceholder = folderItems.filter((item) => item.name !== '.gitkeep')
+          if (nonPlaceholder.length > 0) {
+            throw new Error('Folder is not empty')
+          }
+
+          set((state) => {
+            const parentPath = normalizeGitPath(normalizedPath.split('/').slice(0, -1).join('/'))
+            const parentItems = state.treeByPath[parentPath] || []
+
+            return {
+              treeByPath: {
+                ...state.treeByPath,
+                [parentPath]: parentItems.filter((item) => normalizeGitPath(item.path) !== normalizedPath),
+              },
+              stagedChanges: [
+                ...state.stagedChanges.filter((item) => !(item.kind === 'git-delete-folder' && item.repoPath === normalizedPath)),
+                {
+                  id: `git-delete-folder:${normalizedPath}`,
+                  kind: 'git-delete-folder',
+                  label: getGitFileName(normalizedPath),
+                  repoPath: normalizedPath,
+                  updatedAt: Date.now(),
+                },
+              ],
+            }
+          })
+        },
+
+        unstageChange: (changeId) => {
+          const change = get().stagedChanges.find((item) => item.id === changeId)
+          if (!change) return
+
+          set((state) => {
+            const nextState: Partial<GitStore> & {
+              stagedChanges: StagedGitChange[]
+              drafts?: Record<string, GitDraftFile>
+              treeByPath?: Record<string, GitTreeItem[]>
+              currentDocumentId?: string | null
+            } = {
+              stagedChanges: state.stagedChanges.filter((item) => item.id !== changeId),
+            }
+
+            if (change.kind === 'git-delete-file' && change.documentId && change.originalContent !== undefined) {
+              const restoredDraft = state.drafts[change.documentId]
+              if (restoredDraft) {
+                nextState.drafts = {
+                  ...state.drafts,
+                  [change.documentId]: {
+                    ...restoredDraft,
+                    originalContent: change.originalContent,
+                    draftContent: change.originalContent,
+                    content: change.originalContent,
+                    sha: change.originalSha,
+                    isDirty: false,
+                  },
+                }
+              }
+            }
+
+            return nextState
+          })
+
+          if (change.kind === 'git-delete-file') {
+            void get().loadTree(change.repoPath.split('/').slice(0, -1).join('/'))
+          }
+
+          if (change.kind === 'git-delete-folder') {
+            void get().loadTree(change.repoPath.split('/').slice(0, -1).join('/'))
+          }
+        },
+
+        uploadAsset: async (documentId, file) => {
+          const { config, drafts } = get()
+          const draft = drafts[documentId]
+          if (!draft) throw new Error('Git draft not found')
+
+          const runtimeConfig = toRuntimeConfig(config)
+          const client = getGitProviderClient(runtimeConfig)
+          if (!client.createOrUpdateBinaryFile) {
+            throw new Error('Current Git provider does not support binary uploads')
+          }
+
+          const normalizedDraftPath = normalizeGitPath(draft.path)
+          const draftDir = normalizedDraftPath.includes('/')
+            ? normalizedDraftPath.split('/').slice(0, -1).join('/')
+            : ''
+          const baseName = getGitFileName(normalizedDraftPath).replace(/\.[^.]+$/, '') || 'document'
+          const extension = file.name.includes('.')
+            ? file.name.split('.').pop()?.toLowerCase() || 'png'
+            : file.type.split('/')[1]?.toLowerCase() || 'png'
+          const safeExtension = extension.replace(/[^a-z0-9]/g, '') || 'png'
+          const assetFileName = `${baseName}-${Date.now()}.${safeExtension}`
+          const repoPath = joinGitPath(draftDir, '.visualmd-assets', assetFileName)
+          const contentBase64 = arrayBufferToBase64(await file.arrayBuffer())
+
+          await client.createOrUpdateBinaryFile(
+            runtimeConfig,
+            repoPath,
+            contentBase64,
+            `Upload asset ${assetFileName}`
+          )
+
+          return { repoPath }
         },
 
         refreshCurrentFile: async () => {
@@ -454,6 +608,16 @@ export const useGitStore = create<GitStore>()(
                   message.trim()
                 )
               }
+
+              if (change.kind === 'git-delete-file') {
+                await client.deleteFile(runtimeConfig, change.repoPath, message.trim(), change.originalSha)
+                continue
+              }
+
+              if (change.kind === 'git-delete-folder') {
+                await client.deleteFolder(runtimeConfig, change.repoPath, message.trim())
+                continue
+              }
             }
 
             set((state) => ({
@@ -480,8 +644,13 @@ export const useGitStore = create<GitStore>()(
               lowerMessage.includes('last_commit_id')
 
             if (looksLikeConflict) {
+              if (!draft) {
+                set({ error: message })
+                throw error
+              }
+
               set((state) => {
-                const currentDraft = draft ? state.drafts[draft.documentId] : null
+                const currentDraft = state.drafts[draft.documentId]
                 if (!currentDraft) {
                   return { error: message }
                 }
@@ -562,23 +731,8 @@ export const useGitStore = create<GitStore>()(
           await get().loadTree('')
         },
 
-        deleteFile: async (path, message) => {
-          const { config, drafts, currentDocumentId } = get()
-          const runtimeConfig = toRuntimeConfig(config)
-          const client = getGitProviderClient(runtimeConfig)
-          const normalizedPath = normalizeGitPath(path)
-          const draft = Object.values(drafts).find((item) => item.path === normalizedPath) || null
-          await client.deleteFile(runtimeConfig, normalizedPath, message, draft?.sha)
-          set((state) => {
-            const nextDrafts = { ...state.drafts }
-            if (draft) delete nextDrafts[draft.documentId]
-            return {
-              drafts: nextDrafts,
-              stagedChanges: state.stagedChanges.filter((item) => !(item.kind === 'git-draft' && item.documentId === draft?.documentId)),
-              currentDocumentId: currentDocumentId === draft?.documentId ? null : currentDocumentId,
-            }
-          })
-          await get().loadTree('')
+        deleteFile: async (path) => {
+          await get().stageDeletedGitFile(path)
         },
 
         createFolder: async (path, message) => {
@@ -589,12 +743,8 @@ export const useGitStore = create<GitStore>()(
           await get().loadTree('')
         },
 
-        deleteFolder: async (path, message) => {
-          const { config } = get()
-          const runtimeConfig = toRuntimeConfig(config)
-          const client = getGitProviderClient(runtimeConfig)
-          await client.deleteFolder(runtimeConfig, normalizeGitPath(path), message)
-          await get().loadTree('')
+        deleteFolder: async (path) => {
+          await get().stageDeletedGitFolder(path)
         },
       }),
       {

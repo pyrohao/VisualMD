@@ -1,15 +1,5 @@
 'use client'
 
-/**
- * Markdown预览组件
- *
- * 右侧预览面板，支持预览/编辑模式切换
- * - 预览模式：使用 remark 渲染 Markdown
- * - 编辑模式：直接编辑原始 Markdown 源码
- *
- * 对应技术文档6.1节
- */
-
 import { useDocumentStore } from '@/stores/documentStore'
 import { useThemeStore, themeConfigs, type ThemeMode } from '@/stores/themeStore'
 import { useTranslation } from '@/stores/languageStore'
@@ -21,18 +11,24 @@ import remarkRehype from 'remark-rehype'
 import rehypeStringify from 'rehype-stringify'
 import { BookOpen, Pencil } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import {
+  getMarkdownImagePasteResult,
+  hasClipboardImage,
+} from '@/lib/clipboard-image'
+import { useTabsStore } from '@/stores/tabsStore'
+import { useGitStore } from '@/stores/gitStore'
+import { joinGitPath, normalizeGitPath } from '@/lib/git/utils'
+import { getGitProviderClient } from '@/lib/git/providers'
+import { decryptSecret } from '@/lib/secret-storage'
+import { getGitMarkdownImagePasteResult } from '@/lib/git-asset-paste'
+import type { GitDraftFile } from '@/lib/git/types'
+import type { Tab } from '@/stores/tabsStore'
 
-/**
- * 预览模式类型
- */
 type PreviewMode = 'preview' | 'edit'
 
-/**
- * 根据主题生成CSS变量样式
- */
 function getThemeStyles(theme: ThemeMode): string {
   const config = themeConfigs[theme]
-  
+
   return `
     .markdown-body {
       color: ${config.text};
@@ -183,21 +179,114 @@ function getThemeStyles(theme: ThemeMode): string {
   `
 }
 
-/**
- * 移除 Metadata (YAML Front Matter)
- */
-function removeMetadata(markdown: string): string {
+function removeMetadata(markdown: string) {
   return markdown.replace(/^---\n[\s\S]*?\n---\n?/, '')
+}
+
+function base64ToBlobUrl(contentBase64: string, mimeType: string) {
+  const binary = atob(contentBase64)
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+  const blob = new Blob([bytes], { type: mimeType })
+  return URL.createObjectURL(blob)
+}
+
+function guessMimeType(path: string) {
+  const extension = path.split('.').pop()?.toLowerCase()
+  switch (extension) {
+    case 'png':
+      return 'image/png'
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg'
+    case 'gif':
+      return 'image/gif'
+    case 'webp':
+      return 'image/webp'
+    case 'svg':
+      return 'image/svg+xml'
+    case 'bmp':
+      return 'image/bmp'
+    default:
+      return 'application/octet-stream'
+  }
+}
+
+async function resolveGitImageUrls(
+  html: string,
+  activeTab: Tab | null,
+  currentDraft: GitDraftFile | null
+) {
+  if (activeTab?.sourceType !== 'git' || !activeTab.fileId || !activeTab.gitMeta) {
+    return { content: html, blobUrls: [] as string[] }
+  }
+
+  const config = useGitStore.getState().config
+  const runtimeConfig = {
+    ...config,
+    token: decryptSecret(config.token),
+  }
+  const client = getGitProviderClient(runtimeConfig)
+  if (!client.getBinaryFile) {
+    return { content: html, blobUrls: [] as string[] }
+  }
+
+  const blobUrls: string[] = []
+  const cache = new Map<string, string>()
+  const draftPath = currentDraft?.path || activeTab.gitMeta.path
+  const draftDir = draftPath.includes('/')
+    ? draftPath.split('/').slice(0, -1).join('/')
+    : ''
+
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(html, 'text/html')
+  const images = Array.from(doc.querySelectorAll('img'))
+
+  for (const image of images) {
+    const src = image.getAttribute('src')?.trim() || ''
+
+    if (
+      !src ||
+      src.startsWith('http://') ||
+      src.startsWith('https://') ||
+      src.startsWith('data:') ||
+      src.startsWith('blob:')
+    ) {
+      continue
+    }
+
+    const repoPath = normalizeGitPath(joinGitPath(draftDir, src))
+    let blobUrl = cache.get(repoPath)
+
+    if (!blobUrl) {
+      try {
+        const binaryFile = await client.getBinaryFile(runtimeConfig, repoPath)
+        blobUrl = base64ToBlobUrl(binaryFile.contentBase64, binaryFile.mimeType || guessMimeType(repoPath))
+        cache.set(repoPath, blobUrl)
+        blobUrls.push(blobUrl)
+      } catch {
+        image.setAttribute('data-git-src', repoPath)
+        image.setAttribute('src', 'data:,')
+        continue
+      }
+    }
+
+    image.setAttribute('src', blobUrl)
+  }
+
+  return { content: doc.body.innerHTML, blobUrls }
 }
 
 export function MarkdownPreview() {
   const { document, updateFromMarkdown } = useDocumentStore()
   const { theme, getThemeConfig } = useThemeStore()
+  const { tabs, activeTabId } = useTabsStore()
+  const { drafts } = useGitStore()
   const [mounted, setMounted] = useState(false)
   const [mode, setMode] = useState<PreviewMode>('preview')
   const [html, setHtml] = useState('')
   const [editContent, setEditContent] = useState('')
   const [isTransitioning, setIsTransitioning] = useState(false)
+  const [previewNonce, setPreviewNonce] = useState(0)
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
   const { t } = useTranslation()
 
@@ -205,66 +294,140 @@ export function MarkdownPreview() {
     setMounted(true)
   }, [])
 
-  // 从Store获取当前Markdown
   const store = useDocumentStore.getState()
   const markdown = store.getCurrentMarkdown()
+  const activeTab = tabs.find((tab) => tab.id === activeTabId) || null
+  const currentDraft = activeTab?.sourceType === 'git' && activeTab.fileId
+    ? drafts[activeTab.fileId] || null
+    : null
 
-  // 当 markdown 变化时，更新编辑内容
   useEffect(() => {
     setEditContent(markdown)
   }, [markdown])
 
-  // 使用 remark 处理 markdown
   useEffect(() => {
+    let cancelled = false
+    let currentBlobUrls: string[] = []
+
     const processMarkdown = async () => {
-      const content = removeMetadata(markdown)
-      
-      const result = await unified()
+      const markdownResult = await unified()
         .use(remarkParse)
-        .use(remarkGfm) // 支持 GitHub Flavored Markdown
+        .use(remarkGfm)
         .use(remarkRehype, { allowDangerousHtml: true })
         .use(rehypeStringify, { allowDangerousHtml: true })
-        .process(content)
-      
-      setHtml(String(result))
-    }
-    
-    processMarkdown()
-  }, [markdown])
+        .process(removeMetadata(markdown))
 
-  // 处理模式切换
+      const { content, blobUrls } = await resolveGitImageUrls(
+        String(markdownResult),
+        activeTab,
+        currentDraft
+      )
+      currentBlobUrls = blobUrls
+
+      if (cancelled) {
+        blobUrls.forEach((url) => URL.revokeObjectURL(url))
+        return
+      }
+
+      setHtml(content)
+    }
+
+    void processMarkdown()
+
+    return () => {
+      cancelled = true
+      currentBlobUrls.forEach((url) => URL.revokeObjectURL(url))
+    }
+  }, [
+    markdown,
+    previewNonce,
+    activeTab?.id,
+    activeTab?.fileId,
+    activeTab?.sourceType,
+    activeTab?.gitMeta?.provider,
+    activeTab?.gitMeta?.ownerOrNamespace,
+    activeTab?.gitMeta?.repo,
+    activeTab?.gitMeta?.branch,
+    currentDraft?.path,
+    currentDraft?.sha,
+  ])
+
   const handleModeChange = useCallback((newMode: PreviewMode) => {
     if (newMode === mode) return
-    
+
     setIsTransitioning(true)
-    
-    // 如果从编辑模式切换到预览模式，先保存内容
+
     if (mode === 'edit' && newMode === 'preview') {
-      // 触发重新解析
       updateFromMarkdown(editContent)
+      setPreviewNonce((value) => value + 1)
     }
-    
-    // 延迟切换以显示过渡动画
+
     setTimeout(() => {
       setMode(newMode)
       setIsTransitioning(false)
     }, 150)
-  }, [mode, editContent, updateFromMarkdown])
+  }, [editContent, mode, updateFromMarkdown])
 
-  // 处理编辑内容变化
   const handleEditChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setEditContent(e.target.value)
   }, [])
 
-  // 如果没有文档，显示空状态
+  const handleEditPaste = useCallback(async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (!hasClipboardImage(e.clipboardData)) return
+
+    e.preventDefault()
+
+    const target = e.currentTarget
+    const activeTab = useTabsStore.getState().getActiveTab()
+    const isGitTab = activeTab?.sourceType === 'git' && !!activeTab.fileId
+
+    if (isGitTab && activeTab.fileId) {
+      const uploadResult = await getGitMarkdownImagePasteResult({
+        documentId: activeTab.fileId,
+        clipboardData: e.clipboardData,
+        value: editContent,
+        selectionStart: target.selectionStart ?? editContent.length,
+        selectionEnd: target.selectionEnd ?? editContent.length,
+      })
+      if (!uploadResult) return
+
+      setEditContent(uploadResult.nextValue)
+      updateFromMarkdown(uploadResult.nextValue)
+      useGitStore.getState().updateDraftContent(activeTab.fileId, uploadResult.nextValue)
+      useTabsStore.getState().updateTabContent(activeTab.id, uploadResult.nextValue)
+
+      window.requestAnimationFrame(() => {
+        target.focus()
+        target.setSelectionRange(uploadResult.selectionStart, uploadResult.selectionEnd)
+      })
+      return
+    }
+
+    const result = await getMarkdownImagePasteResult({
+      clipboardData: e.clipboardData,
+      value: editContent,
+      selectionStart: target.selectionStart ?? editContent.length,
+      selectionEnd: target.selectionEnd ?? editContent.length,
+    })
+
+    if (!result) return
+
+    setEditContent(result.nextValue)
+
+    window.requestAnimationFrame(() => {
+      target.focus()
+      target.setSelectionRange(result.selectionStart, result.selectionEnd)
+    })
+  }, [editContent, updateFromMarkdown])
+
   if (!document) {
     return (
       <div className="flex h-full flex-col" style={{ backgroundColor: themeConfig.background }}>
         <div className="flex h-14 items-center border-b px-5" style={{ backgroundColor: themeConfig.card, borderColor: themeConfig.border }}>
-          <h2 className="text-lg font-semibold" style={{ color: themeConfig.heading }}>{mounted ? t('preview.preview') : '文档预览'}</h2>
+          <h2 className="text-lg font-semibold" style={{ color: themeConfig.heading }}>{mounted ? t('preview.preview') : 'Document Preview'}</h2>
         </div>
         <div className="flex flex-1 items-center justify-center">
-          <p style={{ color: themeConfig.muted }}>{mounted ? t('preview.noContent') : '没有可预览的内容'}</p>
+          <p style={{ color: themeConfig.muted }}>{mounted ? t('preview.noContent') : 'No content to preview'}</p>
         </div>
       </div>
     )
@@ -272,101 +435,79 @@ export function MarkdownPreview() {
 
   return (
     <div className="flex h-full flex-col" style={{ backgroundColor: themeConfig.background }}>
-      {/* 头部 */}
       <div className="flex h-14 items-center justify-between border-b px-5" style={{ backgroundColor: themeConfig.card, borderColor: themeConfig.border }}>
         <div className="flex items-center">
           <h2 className="text-lg font-semibold" style={{ color: themeConfig.heading }}>
-            {mode === 'preview' ? (mounted ? t('preview.preview') : '文档预览') : (mounted ? t('preview.edit') : '编辑文档')}
+            {mode === 'preview' ? (mounted ? t('preview.preview') : 'Document Preview') : (mounted ? t('preview.edit') : 'Edit Document')}
           </h2>
           <span className="ml-3 text-sm" style={{ color: themeConfig.muted }}>
-            {document.fileName || (mounted ? t('file.untitled') : '未命名')}
+            {document.fileName || (mounted ? t('file.untitled') : 'Untitled')}
           </span>
         </div>
 
-        {/* 模式切换按钮 */}
-        <div
-          className="flex items-center rounded-lg p-1"
-          style={{ backgroundColor: themeConfig.background }}
-        >
+        <div className="flex items-center rounded-lg p-1" style={{ backgroundColor: themeConfig.background }}>
           <button
             onClick={() => handleModeChange('preview')}
             className={cn(
               'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-all duration-200',
-              mode === 'preview'
-                ? 'shadow-sm'
-                : 'hover:opacity-80'
+              mode === 'preview' ? 'shadow-sm' : 'hover:opacity-80'
             )}
             style={{
               backgroundColor: mode === 'preview' ? themeConfig.card : 'transparent',
               color: mode === 'preview' ? themeConfig.heading : themeConfig.muted,
             }}
-            title={mounted ? t('preview.previewMode') : '预览模式'}
+            title={mounted ? t('preview.previewMode') : 'Preview mode'}
           >
             <BookOpen className="h-4 w-4" />
-            <span>{mounted ? t('preview.read') : '阅读'}</span>
+            <span>{mounted ? t('preview.read') : 'Read'}</span>
           </button>
           <button
             onClick={() => handleModeChange('edit')}
             className={cn(
               'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-all duration-200',
-              mode === 'edit'
-                ? 'shadow-sm'
-                : 'hover:opacity-80'
+              mode === 'edit' ? 'shadow-sm' : 'hover:opacity-80'
             )}
             style={{
               backgroundColor: mode === 'edit' ? themeConfig.card : 'transparent',
               color: mode === 'edit' ? themeConfig.heading : themeConfig.muted,
             }}
-            title={mounted ? t('preview.editMode') : '编辑模式'}
+            title={mounted ? t('preview.editMode') : 'Edit mode'}
           >
             <Pencil className="h-4 w-4" />
-            <span>{mounted ? t('preview.edit') : '编辑'}</span>
+            <span>{mounted ? t('preview.edit') : 'Edit'}</span>
           </button>
         </div>
       </div>
 
-      {/* 内容区域 */}
       <div className="relative flex-1 overflow-hidden">
-        {/* 预览模式 */}
-        <div 
-          className={cn(
-            'absolute inset-0 overflow-y-auto overflow-x-hidden transition-all duration-200',
-            mode === 'preview' && !isTransitioning 
-              ? 'opacity-100 translate-x-0' 
-              : 'opacity-0 translate-x-4 pointer-events-none'
-          )}
-        >
-          <div className="p-8 max-w-none">
-            <style>{getThemeStyles(theme)}</style>
-            <article
-              className="markdown-body max-w-none"
-              dangerouslySetInnerHTML={{ __html: html }}
+        {mode === 'preview' && !isTransitioning ? (
+          <div className="absolute inset-0 overflow-y-auto overflow-x-hidden transition-all duration-200 opacity-100 translate-x-0">
+            <div className="max-w-none p-8">
+              <style>{getThemeStyles(theme)}</style>
+              <article className="markdown-body max-w-none" dangerouslySetInnerHTML={{ __html: html }} />
+            </div>
+          </div>
+        ) : null}
+
+        {mode === 'edit' && !isTransitioning ? (
+          <div className="absolute inset-0 transition-all duration-200 opacity-100 translate-x-0">
+            <textarea
+              value={editContent}
+              onChange={handleEditChange}
+              onPaste={(e) => {
+                void handleEditPaste(e)
+              }}
+              className="h-full w-full resize-none border-0 p-6 font-mono text-sm outline-none"
+              style={{
+                backgroundColor: themeConfig.background,
+                color: themeConfig.text,
+                lineHeight: 1.6,
+              }}
+              placeholder={mounted ? t('preview.editPlaceholder') : 'Edit Markdown here...'}
+              spellCheck={false}
             />
           </div>
-        </div>
-
-        {/* 编辑模式 */}
-        <div 
-          className={cn(
-            'absolute inset-0 transition-all duration-200',
-            mode === 'edit' && !isTransitioning 
-              ? 'opacity-100 translate-x-0' 
-              : 'opacity-0 -translate-x-4 pointer-events-none'
-          )}
-        >
-          <textarea
-            value={editContent}
-            onChange={handleEditChange}
-            className="h-full w-full resize-none border-0 p-6 font-mono text-sm outline-none"
-            style={{
-              backgroundColor: themeConfig.background,
-              color: themeConfig.text,
-              lineHeight: 1.6,
-            }}
-            placeholder={mounted ? t('preview.editPlaceholder') : '在此编辑 Markdown 文档...'}
-            spellCheck={false}
-          />
-        </div>
+        ) : null}
       </div>
     </div>
   )

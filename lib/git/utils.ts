@@ -27,6 +27,15 @@ export function encodeBase64(content: string) {
   return btoa(binary)
 }
 
+export function arrayBufferToBase64(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte)
+  })
+  return btoa(binary)
+}
+
 export function decodeBase64(content: string) {
   const binary = atob(content)
   const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))

@@ -1,35 +1,26 @@
 'use client'
 
-/**
- * Markdown文本编辑器组件
- * 
- * 右侧文本编辑区域，支持直接编辑Markdown源码
- * 与可视化编辑器双向同步
- * 
- * 对应技术文档6.1节
- */
-
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Textarea } from './ui/textarea'
 import { ScrollArea } from './ui/scroll-area'
 import { useDocumentStore } from '@/stores/documentStore'
+import { useTranslation } from '@/stores/languageStore'
 import { debounce } from '@/lib/utils'
+import { getMarkdownImagePasteResult, hasClipboardImage } from '@/lib/clipboard-image'
 
 export function MarkdownTextEditor() {
   const { document, updateFromMarkdown } = useDocumentStore()
+  const { t } = useTranslation()
   const [localValue, setLocalValue] = useState('')
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
 
-  // 当文档变化时更新本地值
   useEffect(() => {
-    if (document) {
-      // 从Store获取当前Markdown
-      const store = useDocumentStore.getState()
-      const markdown = store.getCurrentMarkdown()
-      setLocalValue(markdown)
-    }
+    if (!document) return
+
+    const store = useDocumentStore.getState()
+    setLocalValue(store.getCurrentMarkdown())
   }, [document?.root, document?.metadata])
 
-  // 防抖处理文本变化
   const debouncedUpdate = useCallback(
     debounce((value: string) => {
       updateFromMarkdown(value)
@@ -43,15 +34,40 @@ export function MarkdownTextEditor() {
     debouncedUpdate(newValue)
   }
 
-  // 如果没有文档，显示空状态
+  const handlePaste = useCallback(async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (!hasClipboardImage(e.clipboardData)) return
+
+    e.preventDefault()
+
+    const target = e.currentTarget
+    const result = await getMarkdownImagePasteResult({
+      clipboardData: e.clipboardData,
+      value: localValue,
+      selectionStart: target.selectionStart ?? localValue.length,
+      selectionEnd: target.selectionEnd ?? localValue.length,
+    })
+
+    if (!result) return
+
+    setLocalValue(result.nextValue)
+    debouncedUpdate(result.nextValue)
+
+    window.requestAnimationFrame(() => {
+      const textarea = textareaRef.current
+      if (!textarea) return
+      textarea.focus()
+      textarea.setSelectionRange(result.selectionStart, result.selectionEnd)
+    })
+  }, [debouncedUpdate, localValue])
+
   if (!document) {
     return (
       <div className="flex h-full flex-col border-r border-border bg-card">
         <div className="flex h-12 items-center justify-between border-b border-border px-4">
-          <h2 className="text-sm font-semibold text-foreground">Markdown编辑器</h2>
+          <h2 className="text-sm font-semibold text-foreground">{t('preview.markdownEditor')}</h2>
         </div>
         <div className="flex flex-1 items-center justify-center">
-          <p className="text-sm text-muted-foreground">没有打开的文档</p>
+          <p className="text-sm text-muted-foreground">{t('preview.noDocumentOpen')}</p>
         </div>
       </div>
     )
@@ -62,22 +78,24 @@ export function MarkdownTextEditor() {
 
   return (
     <div className="flex h-full flex-col border-r border-border bg-card">
-      {/* 头部 */}
       <div className="flex h-12 items-center justify-between border-b border-border px-4">
-        <h2 className="text-sm font-semibold text-foreground">Markdown编辑器</h2>
+        <h2 className="text-sm font-semibold text-foreground">{t('preview.markdownEditor')}</h2>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span>{charCount} 字符</span>
-          <span>{lineCount} 行</span>
+          <span>{charCount} {t('preview.characters')}</span>
+          <span>{lineCount} {t('preview.lines')}</span>
         </div>
       </div>
 
-      {/* 编辑器 */}
       <ScrollArea className="flex-1">
         <Textarea
+          ref={textareaRef}
           value={localValue}
           onChange={handleChange}
+          onPaste={(e) => {
+            void handlePaste(e)
+          }}
           className="min-h-full resize-none rounded-none border-0 bg-transparent p-4 font-mono text-sm leading-relaxed focus-visible:ring-0"
-          placeholder="在此输入Markdown内容..."
+          placeholder={t('preview.editPlaceholder')}
           spellCheck={false}
         />
       </ScrollArea>

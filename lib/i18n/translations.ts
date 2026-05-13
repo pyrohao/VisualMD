@@ -182,6 +182,10 @@ export interface Translations {
     previewMode: string
     editMode: string
     editPlaceholder: string
+    markdownEditor: string
+    noDocumentOpen: string
+    characters: string
+    lines: string
   }
   // 帮助
   help: {
@@ -268,6 +272,12 @@ export interface Translations {
     enterNewPath: string
     targetDirectory: string
     targetDirectoryRoot: string
+    stageChanges: string
+    noStagedChanges: string
+    stagedCount: string
+    unstage: string
+    stagedDeleteFile: string
+    stagedDeleteFolder: string
   }
   // Toast 消息
   toast: {
@@ -470,6 +480,10 @@ export const translations: Record<Language, Translations> = {
       previewMode: '预览模式',
       editMode: '编辑模式',
       editPlaceholder: '在此编辑 Markdown 文档...',
+      markdownEditor: 'Markdown 编辑器',
+      noDocumentOpen: '未打开文档',
+      characters: '字符',
+      lines: '行',
     },
     help: {
       contactAuthor: '联系作者',
@@ -554,6 +568,12 @@ export const translations: Record<Language, Translations> = {
       enterNewPath: 'Enter new path for',
       targetDirectory: 'Target directory',
       targetDirectoryRoot: 'Target directory: repository root',
+      stageChanges: '暂存变更',
+      noStagedChanges: '没有暂存变更',
+      stagedCount: '{count} 项已暂存',
+      unstage: '取消暂存',
+      stagedDeleteFile: '[删除] {name}',
+      stagedDeleteFolder: '[删除文件夹] {name}',
     },
     toast: {
       saved: '已保存',
@@ -752,6 +772,10 @@ export const translations: Record<Language, Translations> = {
       previewMode: 'Preview Mode',
       editMode: 'Edit Mode',
       editPlaceholder: 'Edit Markdown document here...',
+      markdownEditor: 'Markdown Editor',
+      noDocumentOpen: 'No document open',
+      characters: 'chars',
+      lines: 'lines',
     },
     help: {
       contactAuthor: 'Contact Author',
@@ -836,6 +860,12 @@ export const translations: Record<Language, Translations> = {
       enterNewPath: 'Enter new path for',
       targetDirectory: 'Target directory',
       targetDirectoryRoot: 'Target directory: repository root',
+      stageChanges: 'Stage Changes',
+      noStagedChanges: 'No staged changes',
+      stagedCount: '{count} staged',
+      unstage: 'Unstage',
+      stagedDeleteFile: '[Delete] {name}',
+      stagedDeleteFolder: '[Delete Folder] {name}',
     },
     toast: {
       saved: 'Saved',

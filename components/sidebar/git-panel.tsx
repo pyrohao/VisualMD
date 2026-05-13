@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
   ChevronDown,
@@ -14,6 +14,7 @@ import {
   Loader2,
   Pencil,
   RefreshCw,
+  RotateCcw,
   Save,
   Trash2,
 } from 'lucide-react'
@@ -28,13 +29,17 @@ import { buildGitDocumentId, getGitFileName, joinGitPath, normalizeGitPath } fro
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { PromptDialog } from '@/components/ui/prompt-dialog'
+import { ThemedDeleteDialog } from '@/components/ui/themed-delete-dialog'
 import { toast } from '@/hooks/use-toast'
-import type { GitTreeItem } from '@/lib/git/types'
+import type { GitTreeItem, StagedGitChange } from '@/lib/git/types'
 
 type DialogState =
   | { type: 'create-file'; path: string }
   | { type: 'create-folder'; path: string }
   | { type: 'rename'; path: string }
+  | null
+
+type DeleteDialogState =
   | { type: 'delete-file'; path: string }
   | { type: 'delete-folder'; path: string }
   | null
@@ -100,11 +105,7 @@ function GitTreeNode({
                 }}
               >
                 {isDir ? (
-                  isExpanded ? (
-                    <ChevronDown className="h-4 w-4 shrink-0" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4 shrink-0" />
-                  )
+                  isExpanded ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />
                 ) : (
                   <span className="w-4 shrink-0" />
                 )}
@@ -175,7 +176,7 @@ function GitTreeNode({
               </div>
             </div>
 
-            {isDir && isExpanded && (
+            {isDir && isExpanded ? (
               <GitTreeNode
                 path={normalizedPath}
                 depth={depth + 1}
@@ -191,7 +192,7 @@ function GitTreeNode({
                 onDeleteFolder={onDeleteFolder}
                 themeConfig={themeConfig}
               />
-            )}
+            ) : null}
           </div>
         )
       })}
@@ -199,13 +200,20 @@ function GitTreeNode({
   )
 }
 
+function getStagedChangeLabel(change: StagedGitChange, t: (key: string) => string) {
+  if (change.kind === 'git-delete-file') return t('git.stagedDeleteFile').replace('{name}', change.label)
+  if (change.kind === 'git-delete-folder') return t('git.stagedDeleteFolder').replace('{name}', change.label)
+  return change.label
+}
+
 export function GitPanel() {
   const { getThemeConfig } = useThemeStore()
   const { t } = useTranslation()
   const [mounted, setMounted] = useState(false)
-  const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
   const [dialogState, setDialogState] = useState<DialogState>(null)
+  const [deleteDialogState, setDeleteDialogState] = useState<DeleteDialogState>(null)
   const [commitMessage, setCommitMessage] = useState('')
+  const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
 
   const { setActivePanel } = useSidebarStore()
   const { loadDocument } = useDocumentStore()
@@ -243,6 +251,16 @@ export function GitPanel() {
 
   const currentDraft = currentDocumentId ? drafts[currentDocumentId] : null
   const currentPath = currentDraft?.path || null
+  const hasCommitCandidates = Boolean(currentDraft?.isDirty) || stagedChanges.length > 0
+  const pendingSummary = useMemo(() => {
+    if (currentDraft) {
+      return `${currentDraft.path}${currentDraft.isDirty ? ` · ${t('git.uncommitted')}` : ''}`
+    }
+    if (stagedChanges.length) {
+      return `${stagedChanges.length} staged`
+    }
+    return t('git.noGitFileOpen')
+  }, [currentDraft, stagedChanges.length, t])
 
   useEffect(() => {
     setMounted(true)
@@ -269,16 +287,17 @@ export function GitPanel() {
     clearError()
   }, [clearError, error, t])
 
-  const handleOpenFile = async (path: string) => {
-    const draft = await openFile(path)
-    const documentId = buildGitDocumentId(config, draft.path)
+  const openDraftInTab = (documentId: string, content?: string) => {
+    const draft = drafts[documentId]
+    if (!draft) return
 
+    const draftContent = content ?? draft.draftContent
     openGitFileInTab({
       fileName: draft.name,
-      content: draft.draftContent,
+      content: draftContent,
       isModified: draft.isDirty,
       isNew: false,
-      fileId: documentId,
+      fileId: draft.documentId,
       sourceType: 'git',
       gitMeta: {
         provider: draft.provider,
@@ -289,9 +308,13 @@ export function GitPanel() {
         sha: draft.sha,
       },
     })
+    setCurrentDocumentId(draft.documentId)
+    loadDocument(draftContent, draft.name, draft.documentId)
+  }
 
-    setCurrentDocumentId(documentId)
-    loadDocument(draft.draftContent, draft.name, documentId)
+  const handleOpenFile = async (path: string) => {
+    const draft = await openFile(path)
+    openDraftInTab(buildGitDocumentId(config, draft.path))
   }
 
   const handleConnect = async () => {
@@ -299,25 +322,25 @@ export function GitPanel() {
       await validateAndLoad()
       toast({ title: t('git.connected') })
     } catch {
-      // handled by store error state
+      // handled by store
     }
   }
 
   const handleCommit = async () => {
-    if (!currentDraft || !commitMessage.trim()) return
+    if (!commitMessage.trim() || !hasCommitCandidates) return
 
     try {
       await commitCurrentFile(commitMessage.trim())
 
-      const currentTab = getActiveTab()
-      if (currentTab?.fileId === currentDraft.documentId && activeTabId) {
+      const activeTab = getActiveTab()
+      if (currentDraft && activeTab?.fileId === currentDraft.documentId && activeTabId) {
         useTabsStore.getState().markTabAsSaved(activeTabId, currentDraft.name)
       }
 
       setCommitMessage('')
       toast({ title: t('git.commitSuccess') })
     } catch {
-      // handled by store error state
+      // handled by store
     }
   }
 
@@ -338,30 +361,14 @@ export function GitPanel() {
       }
 
       if (nextDraft.hasRemoteUpdates) {
-        openGitFileInTab({
-          fileName: nextDraft.name,
-          content: nextDraft.draftContent,
-          isModified: nextDraft.isDirty,
-          isNew: false,
-          fileId: nextDraft.documentId,
-          sourceType: 'git',
-          gitMeta: {
-            provider: nextDraft.provider,
-            ownerOrNamespace: nextDraft.ownerOrNamespace,
-            repo: nextDraft.repo,
-            branch: nextDraft.branch,
-            path: nextDraft.path,
-            sha: nextDraft.sha,
-          },
-        })
-        loadDocument(nextDraft.draftContent, nextDraft.name, nextDraft.documentId)
+        openDraftInTab(nextDraft.documentId, nextDraft.draftContent)
         toast({ title: t('git.remoteUpdated') })
         return
       }
 
       toast({ title: t('git.remoteUpToDate') })
     } catch {
-      // handled by store error state
+      // handled by store
     }
   }
 
@@ -370,27 +377,12 @@ export function GitPanel() {
     if (!change) return
 
     if (change.kind === 'git-draft' && change.documentId) {
-      const draft = drafts[change.documentId]
-      if (!draft) return
+      openDraftInTab(change.documentId)
+      return
+    }
 
-      openGitFileInTab({
-        fileName: draft.name,
-        content: draft.draftContent,
-        isModified: draft.isDirty,
-        isNew: false,
-        fileId: draft.documentId,
-        sourceType: 'git',
-        gitMeta: {
-          provider: draft.provider,
-          ownerOrNamespace: draft.ownerOrNamespace,
-          repo: draft.repo,
-          branch: draft.branch,
-          path: draft.path,
-          sha: draft.sha,
-        },
-      })
-      setCurrentDocumentId(draft.documentId)
-      loadDocument(draft.draftContent, draft.name, draft.documentId)
+    if (change.kind === 'git-delete-file' && change.documentId) {
+      openDraftInTab(change.documentId, change.originalContent)
       return
     }
 
@@ -401,6 +393,30 @@ export function GitPanel() {
       openFileInTab(file.name, file.content, change.localFileId)
       loadDocument(file.content, file.name, change.localFileId)
     }
+  }
+
+  const handleUnstageChange = (changeId: string) => {
+    const change = stagedChanges.find((item) => item.id === changeId)
+    if (!change) return
+
+    unstageChange(changeId)
+
+    if (change.kind !== 'git-delete-file' || !change.documentId) {
+      return
+    }
+
+    const activeTab = useTabsStore.getState().getActiveTab()
+    if (activeTab?.fileId !== change.documentId) {
+      return
+    }
+
+    const restoredDraft = useGitStore.getState().drafts[change.documentId]
+    if (!restoredDraft) {
+      return
+    }
+
+    openDraftInTab(change.documentId)
+    useTabsStore.getState().markTabAsSaved(useTabsStore.getState().activeTabId || activeTab.id, restoredDraft.name)
   }
 
   const handlePromptConfirm = async (value: string) => {
@@ -435,34 +451,27 @@ export function GitPanel() {
         if (activeTab?.fileId === previousDocumentId) {
           const renamedDraft = useGitStore.getState().drafts[nextDocumentId]
           if (renamedDraft) {
-            openGitFileInTab({
-              fileName: renamedDraft.name,
-              content: renamedDraft.draftContent,
-              isModified: renamedDraft.isDirty,
-              isNew: false,
-              fileId: nextDocumentId,
-              sourceType: 'git',
-              gitMeta: {
-                provider: renamedDraft.provider,
-                ownerOrNamespace: renamedDraft.ownerOrNamespace,
-                repo: renamedDraft.repo,
-                branch: renamedDraft.branch,
-                path: renamedDraft.path,
-                sha: renamedDraft.sha,
-              },
-            })
-            setCurrentDocumentId(nextDocumentId)
-            loadDocument(renamedDraft.draftContent, renamedDraft.name, nextDocumentId)
+            openDraftInTab(nextDocumentId)
           }
         }
       }
 
-      if (dialogState.type === 'delete-file') {
-        const targetPath = normalizeGitPath(dialogState.path)
+      setDialogState(null)
+    } catch {
+      // handled by store
+    }
+  }
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteDialogState) return
+
+    try {
+      if (deleteDialogState.type === 'delete-file') {
+        const targetPath = normalizeGitPath(deleteDialogState.path)
         const documentId = buildGitDocumentId(config, targetPath)
         const activeTab = getActiveTab()
 
-        await deleteFile(targetPath, `Delete ${targetPath}`)
+        await deleteFile(targetPath)
 
         if (activeTab?.fileId === documentId && activeTabId) {
           closeTab(activeTabId)
@@ -470,15 +479,14 @@ export function GitPanel() {
         }
       }
 
-      if (dialogState.type === 'delete-folder') {
-        const targetPath = normalizeGitPath(dialogState.path)
-        await deleteFolder(targetPath, `Delete folder ${targetPath}`)
-        await loadTree(targetPath.split('/').slice(0, -1).join('/'))
+      if (deleteDialogState.type === 'delete-folder') {
+        const targetPath = normalizeGitPath(deleteDialogState.path)
+        await deleteFolder(targetPath)
       }
-
-      setDialogState(null)
     } catch {
-      // handled by store error state
+      // handled by store
+    } finally {
+      setDeleteDialogState(null)
     }
   }
 
@@ -554,17 +562,7 @@ export function GitPanel() {
               <button
                 type="button"
                 className="flex h-8 w-8 items-center justify-center rounded-md border transition-colors"
-                style={{
-                  borderColor: themeConfig.border,
-                  color: themeConfig.text,
-                  backgroundColor: themeConfig.background,
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor = themeConfig.hover
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = themeConfig.background
-                }}
+                style={{ borderColor: themeConfig.border, color: themeConfig.text, backgroundColor: themeConfig.background }}
                 onClick={() => setDialogState({ type: 'create-file', path: '' })}
               >
                 <FilePlus2 className="h-4 w-4" />
@@ -573,17 +571,7 @@ export function GitPanel() {
               <button
                 type="button"
                 className="flex h-8 w-8 items-center justify-center rounded-md border transition-colors"
-                style={{
-                  borderColor: themeConfig.border,
-                  color: themeConfig.text,
-                  backgroundColor: themeConfig.background,
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor = themeConfig.hover
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = themeConfig.background
-                }}
+                style={{ borderColor: themeConfig.border, color: themeConfig.text, backgroundColor: themeConfig.background }}
                 onClick={() => setDialogState({ type: 'create-folder', path: '' })}
               >
                 <FolderPlus className="h-4 w-4" />
@@ -592,17 +580,7 @@ export function GitPanel() {
               <button
                 type="button"
                 className="flex h-8 w-8 items-center justify-center rounded-md border transition-colors"
-                style={{
-                  borderColor: themeConfig.border,
-                  color: themeConfig.text,
-                  backgroundColor: themeConfig.background,
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor = themeConfig.hover
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = themeConfig.background
-                }}
+                style={{ borderColor: themeConfig.border, color: themeConfig.text, backgroundColor: themeConfig.background }}
                 onClick={() => void loadTree('')}
               >
                 {isLoadingTree ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
@@ -611,17 +589,7 @@ export function GitPanel() {
               <button
                 type="button"
                 className="flex h-8 w-8 items-center justify-center rounded-md border transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                style={{
-                  borderColor: themeConfig.border,
-                  color: themeConfig.text,
-                  backgroundColor: themeConfig.background,
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor = themeConfig.hover
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = themeConfig.background
-                }}
+                style={{ borderColor: themeConfig.border, color: themeConfig.text, backgroundColor: themeConfig.background }}
                 onClick={() => void handleFetch()}
                 disabled={!currentDocumentId || isFetchingRemote}
                 title={t('git.fetchRemote')}
@@ -642,8 +610,8 @@ export function GitPanel() {
                 onCreateFile={(path) => setDialogState({ type: 'create-file', path })}
                 onCreateFolder={(path) => setDialogState({ type: 'create-folder', path })}
                 onRename={(path) => setDialogState({ type: 'rename', path })}
-                onDeleteFile={(path) => setDialogState({ type: 'delete-file', path })}
-                onDeleteFolder={(path) => setDialogState({ type: 'delete-folder', path })}
+                onDeleteFile={(path) => setDeleteDialogState({ type: 'delete-file', path })}
+                onDeleteFolder={(path) => setDeleteDialogState({ type: 'delete-folder', path })}
                 themeConfig={themeConfig}
               />
             ) : (
@@ -660,10 +628,12 @@ export function GitPanel() {
         >
           <div>
             <div className="text-sm font-medium" style={{ color: themeConfig.text }}>
-              Stage Changes
+              {t('git.stageChanges')}
             </div>
             <div className="text-xs" style={{ color: themeConfig.muted }}>
-              {stagedChanges.length ? `${stagedChanges.length} staged` : 'No staged changes'}
+              {stagedChanges.length
+                ? t('git.stagedCount').replace('{count}', String(stagedChanges.length))
+                : t('git.noStagedChanges')}
             </div>
           </div>
 
@@ -680,7 +650,7 @@ export function GitPanel() {
                   onClick={() => void handleOpenStagedChange(change.id)}
                 >
                   <div className="truncate text-sm" style={{ color: themeConfig.text }}>
-                    {change.label}
+                    {getStagedChangeLabel(change, t)}
                   </div>
                   <div className="truncate text-[11px]" style={{ color: themeConfig.muted }}>
                     {change.repoPath}
@@ -689,16 +659,16 @@ export function GitPanel() {
                 <button
                   type="button"
                   className="rounded p-1 transition-colors"
-                  style={{ color: themeConfig.danger }}
-                  onClick={() => unstageChange(change.id)}
-                  title="Unstage"
+                  style={{ color: themeConfig.primary }}
+                  onClick={() => handleUnstageChange(change.id)}
+                  title={t('git.unstage')}
                 >
-                  <Trash2 className="h-3.5 w-3.5" />
+                  <RotateCcw className="h-3.5 w-3.5" />
                 </button>
               </div>
             )) : (
               <div className="py-6 text-center text-sm" style={{ color: themeConfig.muted }}>
-                No staged changes
+                {t('git.noStagedChanges')}
               </div>
             )}
           </div>
@@ -708,9 +678,7 @@ export function GitPanel() {
               {t('git.pendingChanges')}
             </div>
             <div className="text-xs" style={{ color: themeConfig.muted }}>
-              {currentDraft
-                ? `${currentDraft.path}${currentDraft.isDirty ? ` · ${t('git.uncommitted')}` : ''}`
-                : t('git.noGitFileOpen')}
+              {pendingSummary}
             </div>
           </div>
 
@@ -759,15 +727,15 @@ export function GitPanel() {
 
           <Button
             onClick={handleCommit}
-            disabled={!currentDraft?.isDirty || !commitMessage.trim() || isCommitting}
+            disabled={!hasCommitCandidates || !commitMessage.trim() || isCommitting}
             className="w-full"
             style={{
               backgroundColor:
-                currentDraft?.isDirty && commitMessage.trim() && !isCommitting
+                hasCommitCandidates && commitMessage.trim() && !isCommitting
                   ? themeConfig.primary
                   : themeConfig.border,
               color:
-                currentDraft?.isDirty && commitMessage.trim() && !isCommitting
+                hasCommitCandidates && commitMessage.trim() && !isCommitting
                   ? themeConfig.buttonText || '#fff'
                   : themeConfig.muted,
             }}
@@ -789,29 +757,33 @@ export function GitPanel() {
               ? t('git.createFolder')
               : dialogState?.type === 'rename'
                 ? t('file.rename')
-                : dialogState?.type === 'delete-file'
-                  ? t('file.deleteFile')
-                  : t('file.deleteFolder')
+                : t('common.confirm')
         }
         description={
           dialogState?.type === 'rename'
             ? `${t('git.enterNewPath')} ${dialogState.path}`
-            : dialogState?.type?.startsWith('delete')
-              ? `${t('common.confirm')} ${dialogState.path}`
-              : dialogState?.path
-                ? `${t('git.targetDirectory')}: ${dialogState.path}`
-                : t('git.targetDirectoryRoot')
+            : dialogState?.path
+              ? `${t('git.targetDirectory')}: ${dialogState.path}`
+              : t('git.targetDirectoryRoot')
         }
         defaultValue={
           dialogState?.type === 'rename'
             ? getGitFileName(dialogState.path)
-            : dialogState?.type === 'delete-file' || dialogState?.type === 'delete-folder'
-              ? dialogState.path
-              : dialogState?.type === 'create-file'
-                ? 'new-file.md'
-                : 'new-folder'
+            : dialogState?.type === 'create-file'
+              ? 'new-file.md'
+              : 'new-folder'
         }
-        confirmText={dialogState?.type?.startsWith('delete') ? t('common.delete') : t('common.confirm')}
+        confirmText={t('common.confirm')}
+        cancelText={t('common.cancel')}
+      />
+
+      <ThemedDeleteDialog
+        isOpen={!!deleteDialogState}
+        onClose={() => setDeleteDialogState(null)}
+        onConfirm={() => void handleDeleteConfirm()}
+        title={deleteDialogState?.type === 'delete-file' ? t('file.deleteFile') : t('file.deleteFolder')}
+        description={deleteDialogState ? `${t('common.confirm')} ${deleteDialogState.path}` : ''}
+        confirmText={t('common.delete')}
         cancelText={t('common.cancel')}
       />
     </div>

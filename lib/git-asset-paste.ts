@@ -1,0 +1,36 @@
+import { getClipboardImageFilesWithAltText, insertMarkdownAtSelection, type MarkdownImagePasteResult } from '@/lib/clipboard-image'
+import { useGitStore } from '@/stores/gitStore'
+
+interface GitMarkdownImagePasteOptions {
+  documentId: string
+  clipboardData: DataTransfer | null
+  value: string
+  selectionStart: number
+  selectionEnd: number
+}
+
+export async function getGitMarkdownImagePasteResult({
+  documentId,
+  clipboardData,
+  value,
+  selectionStart,
+  selectionEnd,
+}: GitMarkdownImagePasteOptions): Promise<MarkdownImagePasteResult | null> {
+  const imageFiles = getClipboardImageFilesWithAltText(clipboardData)
+  if (!imageFiles.length) return null
+
+  const snippets = await Promise.all(imageFiles.map(async ({ file, altText }) => {
+    const { repoPath } = await useGitStore.getState().uploadAsset(documentId, file)
+    const currentDraft = useGitStore.getState().drafts[documentId]
+    const draftDir = currentDraft?.path.includes('/')
+      ? currentDraft.path.split('/').slice(0, -1).join('/')
+      : ''
+    const relativePath = draftDir && repoPath.startsWith(`${draftDir}/`)
+      ? repoPath.slice(draftDir.length + 1)
+      : repoPath
+
+    return `![${altText}](${relativePath})`
+  }))
+
+  return insertMarkdownAtSelection(value, selectionStart, selectionEnd, snippets)
+}

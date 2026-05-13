@@ -59,12 +59,14 @@ export interface GitDraftFile extends GitFileRef {
 
 export interface StagedGitChange {
   id: string
-  kind: 'git-draft' | 'local-file'
+  kind: 'git-draft' | 'local-file' | 'git-delete-file' | 'git-delete-folder'
   label: string
   repoPath: string
   documentId?: string
   localFileId?: string
   localFileName?: string
+  originalContent?: string
+  originalSha?: string
   updatedAt: number
 }
 
@@ -74,10 +76,18 @@ export interface GitProviderClient {
   getBranches(config: GitProviderConfig): Promise<GitBranchRef[]>
   listTree(config: GitProviderConfig, path?: string): Promise<GitTreeItem[]>
   getFile(config: GitProviderConfig, path: string): Promise<Pick<GitFileRef, 'path' | 'name' | 'sha' | 'content'>>
+  getBinaryFile?(config: GitProviderConfig, path: string): Promise<{ contentBase64: string; mimeType?: string }>
   createOrUpdateFile(
     config: GitProviderConfig,
     path: string,
     content: string,
+    message: string,
+    sha?: string
+  ): Promise<{ sha?: string }>
+  createOrUpdateBinaryFile?(
+    config: GitProviderConfig,
+    path: string,
+    contentBase64: string,
     message: string,
     sha?: string
   ): Promise<{ sha?: string }>

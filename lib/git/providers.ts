@@ -85,18 +85,33 @@ async function githubLikeGetFile(config: GitProviderConfig, baseUrl: string, pat
   }
 }
 
-async function githubLikePutFile(config: GitProviderConfig, baseUrl: string, path: string, content: string, message: string, sha?: string) {
+async function githubLikeGetBinaryFile(config: GitProviderConfig, baseUrl: string, path: string) {
+  const headers = getHeaders(config)
+  const normalizedPath = normalizeGitPath(path)
+  const url = `${baseUrl}/repos/${encodeURIComponent(config.ownerOrNamespace)}/${encodeURIComponent(config.repo)}/contents/${normalizedPath}?ref=${encodeURIComponent(config.branch)}`
+  const result = await safeJson<any>(await fetch(url, { headers }))
+  return {
+    contentBase64: String(result.content || '').replace(/\n/g, ''),
+    mimeType: result.type === 'file' ? undefined : undefined,
+  }
+}
+
+async function githubLikePutEncodedFile(config: GitProviderConfig, baseUrl: string, path: string, encodedContent: string, message: string, sha?: string) {
   const headers = getHeaders(config)
   const normalizedPath = normalizeGitPath(path)
   const url = `${baseUrl}/repos/${encodeURIComponent(config.ownerOrNamespace)}/${encodeURIComponent(config.repo)}/contents/${normalizedPath}`
   const payload: Record<string, unknown> = {
     message,
-    content: encodeBase64(content),
+    content: encodedContent,
     branch: config.branch,
   }
   if (sha) payload.sha = sha
   const response = await safeJson<any>(await fetch(url, { method: 'PUT', headers, body: JSON.stringify(payload) }))
   return { sha: response.content?.sha as string | undefined }
+}
+
+async function githubLikePutFile(config: GitProviderConfig, baseUrl: string, path: string, content: string, message: string, sha?: string) {
+  return githubLikePutEncodedFile(config, baseUrl, path, encodeBase64(content), message, sha)
 }
 
 async function githubLikeDeleteFile(config: GitProviderConfig, baseUrl: string, path: string, message: string, sha?: string) {
@@ -171,7 +186,26 @@ async function gitlabGetFile(config: GitProviderConfig, baseUrl: string, path: s
   }
 }
 
-async function gitlabCreateOrUpdate(config: GitProviderConfig, baseUrl: string, path: string, content: string, message: string, sha?: string) {
+async function gitlabGetBinaryFile(config: GitProviderConfig, baseUrl: string, path: string) {
+  const headers = getHeaders(config)
+  const normalizedPath = normalizeGitPath(path)
+  const url = `${baseUrl}/projects/${getEncodedProject(config)}/repository/files/${encodeURIComponent(normalizedPath)}?ref=${encodeURIComponent(config.branch)}`
+  const result = await safeJson<any>(await fetch(url, { headers }))
+  return {
+    contentBase64: String(result.content || ''),
+    mimeType: undefined,
+  }
+}
+
+async function gitlabCreateOrUpdateWithEncoding(
+  config: GitProviderConfig,
+  baseUrl: string,
+  path: string,
+  content: string,
+  message: string,
+  encoding: 'text' | 'base64',
+  sha?: string
+) {
   const headers = getHeaders(config)
   const normalizedPath = normalizeGitPath(path)
   const method = sha ? 'PUT' : 'POST'
@@ -183,10 +217,14 @@ async function gitlabCreateOrUpdate(config: GitProviderConfig, baseUrl: string, 
       branch: config.branch,
       content,
       commit_message: message,
-      encoding: 'text',
+      encoding,
     }),
   }))
   return { sha: response.branch || sha }
+}
+
+async function gitlabCreateOrUpdate(config: GitProviderConfig, baseUrl: string, path: string, content: string, message: string, sha?: string) {
+  return gitlabCreateOrUpdateWithEncoding(config, baseUrl, path, content, message, 'text', sha)
 }
 
 async function gitlabDelete(config: GitProviderConfig, baseUrl: string, path: string, message: string) {
@@ -234,8 +272,14 @@ function createGithubLikeClient(baseUrl: string): GitProviderClient {
     getFile(config, path) {
       return githubLikeGetFile(config, baseUrl, path)
     },
+    getBinaryFile(config, path) {
+      return githubLikeGetBinaryFile(config, baseUrl, path)
+    },
     createOrUpdateFile(config, path, content, message, sha) {
       return githubLikePutFile(config, baseUrl, path, content, message, sha)
+    },
+    createOrUpdateBinaryFile(config, path, contentBase64, message, sha) {
+      return githubLikePutEncodedFile(config, baseUrl, path, contentBase64, message, sha)
     },
     deleteFile(config, path, message, sha) {
       return githubLikeDeleteFile(config, baseUrl, path, message, sha)
@@ -278,8 +322,14 @@ function createGitlabClient(baseUrl: string): GitProviderClient {
     getFile(config, path) {
       return gitlabGetFile(config, baseUrl, path)
     },
+    getBinaryFile(config, path) {
+      return gitlabGetBinaryFile(config, baseUrl, path)
+    },
     createOrUpdateFile(config, path, content, message, sha) {
       return gitlabCreateOrUpdate(config, baseUrl, path, content, message, sha)
+    },
+    createOrUpdateBinaryFile(config, path, contentBase64, message, sha) {
+      return gitlabCreateOrUpdateWithEncoding(config, baseUrl, path, contentBase64, message, 'base64', sha)
     },
     deleteFile(config, path, message) {
       return gitlabDelete(config, baseUrl, path, message)
