@@ -35,6 +35,7 @@ export interface Translations {
     aiConfigInvalid: string
     configureApiFirst: string
     model: string
+    config: string
     // 错误提示
      detachedNodeNotFound: string
      levelMismatchConnect: string
@@ -76,6 +77,7 @@ export interface Translations {
     updatedOldToNew: string
     createdNewToOld: string
     createdOldToNew: string
+    unsavedChanges: string
   }
   // 节点编辑
   node: {
@@ -236,6 +238,7 @@ export interface Translations {
   git: {
     provider: string
     token: string
+    tokenPlaceholder: string
     namespace: string
     repository: string
     branch: string
@@ -272,12 +275,17 @@ export interface Translations {
     enterNewPath: string
     targetDirectory: string
     targetDirectoryRoot: string
+    refreshTree: string
     stageChanges: string
     noStagedChanges: string
     stagedCount: string
     unstage: string
     stagedDeleteFile: string
     stagedDeleteFolder: string
+    stageToGit: string
+    stageToGitDescription: string
+    stageConfirm: string
+    stagedToGit: string
   }
   // Toast 消息
   toast: {
@@ -338,6 +346,7 @@ export const translations: Record<Language, Translations> = {
       aiConfigInvalid: 'AI配置无效',
       configureApiFirst: '请先在设置中配置并测试API',
       model: '模型',
+      config: '配置',
       // 错误提示
       detachedNodeNotFound: '目标节点必须大于当前节点',
       levelMismatchConnect: '目标节点必须大于当前节点',
@@ -378,6 +387,7 @@ export const translations: Record<Language, Translations> = {
       updatedOldToNew: '编辑时间 (从旧到新)',
       createdNewToOld: '创建时间 (从新到旧)',
       createdOldToNew: '创建时间 (从旧到新)',
+      unsavedChanges: '有未保存的修改',
     },
     node: {
       editNode: '编辑节点',
@@ -527,53 +537,59 @@ export const translations: Record<Language, Translations> = {
       openGitPanel: '打开 Git 面板',
       openGitSettings: '前往 Git 设置',
       gitConfigured: 'Git 配置已填写，可在这里直接连接仓库',
-      gitNotConfigured: '请先填写 Git Provider、Token 和仓库信息',
+      gitNotConfigured: '请先填写 Git 平台、访问令牌和仓库信息',
     },
     git: {
-      provider: 'Provider',
-      token: 'Access Token',
-      namespace: 'Owner / Namespace',
-      repository: 'Repository',
-      branch: 'Branch',
-      baseUrl: 'API Base URL',
-      customFlavor: 'Custom API',
-      connect: 'Connect',
-      reconnect: 'Reconnect',
-      connected: 'Connected',
-      loadRepos: 'Load Repos',
-      reposLoaded: 'Repositories loaded',
-      availableBranches: 'Branches',
-      repositoryTree: 'Repository Tree',
-      notConnected: 'Not connected',
-      connectFirst: 'Connect a repository first',
-      emptyRepoTree: 'No files loaded',
-      pendingChanges: 'Pending Changes',
-      noGitFileOpen: 'No Git file open',
-      uncommitted: 'Uncommitted',
-      commitToRepo: 'Commit To Repository',
-      commitMessagePlaceholder: 'Commit message',
-      commitSuccess: 'Commit successful',
-      commitFailed: 'Commit failed',
-      draftSaved: 'Draft saved locally',
-      fetchRemote: 'Fetch Remote',
-      remoteUpdated: 'Remote file updated',
-      remoteUpToDate: 'Remote file is up to date',
-      conflictDetected: 'Conflict detected',
-      localChangesPreserved: 'Local draft preserved',
-      lastFetched: 'Last fetched',
-      createFile: 'Create Git File',
-      createFolder: 'Create Git Folder',
-      fileCreated: 'Git file created',
-      folderCreated: 'Git folder created',
-      enterNewPath: 'Enter new path for',
-      targetDirectory: 'Target directory',
-      targetDirectoryRoot: 'Target directory: repository root',
+      provider: '平台',
+      token: '访问令牌',
+      tokenPlaceholder: 'PAT / 访问令牌',
+      namespace: '所有者 / 命名空间',
+      repository: '仓库',
+      branch: '分支',
+      baseUrl: 'API 基础地址',
+      customFlavor: '自定义 API',
+      connect: '连接',
+      reconnect: '重新连接',
+      connected: '已连接',
+      loadRepos: '加载仓库',
+      reposLoaded: '仓库列表已加载',
+      availableBranches: '分支',
+      repositoryTree: '仓库文件',
+      notConnected: '未连接',
+      connectFirst: '请先连接仓库',
+      emptyRepoTree: '未加载文件',
+      pendingChanges: '待提交变更',
+      noGitFileOpen: '未打开 Git 文件',
+      uncommitted: '未提交',
+      commitToRepo: '提交到仓库',
+      commitMessagePlaceholder: '提交信息',
+      commitSuccess: '提交成功',
+      commitFailed: '提交失败',
+      draftSaved: '草稿已保存到本地',
+      fetchRemote: '获取远程文件',
+      remoteUpdated: '远程文件已更新',
+      remoteUpToDate: '远程文件已是最新',
+      conflictDetected: '检测到冲突',
+      localChangesPreserved: '已保留本地草稿',
+      lastFetched: '上次获取',
+      createFile: '创建 Git 文件',
+      createFolder: '创建 Git 文件夹',
+      fileCreated: 'Git 文件已创建',
+      folderCreated: 'Git 文件夹已创建',
+      enterNewPath: '输入新路径',
+      targetDirectory: '目标目录',
+      targetDirectoryRoot: '目标目录：仓库根目录',
+      refreshTree: '刷新仓库文件',
       stageChanges: '暂存变更',
       noStagedChanges: '没有暂存变更',
       stagedCount: '{count} 项已暂存',
       unstage: '取消暂存',
       stagedDeleteFile: '[删除] {name}',
       stagedDeleteFolder: '[删除文件夹] {name}',
+      stageToGit: '暂存到 Git',
+      stageToGitDescription: '输入此文件在仓库中的目标路径',
+      stageConfirm: '暂存',
+      stagedToGit: '已暂存到 Git',
     },
     toast: {
       saved: '已保存',
@@ -630,6 +646,7 @@ export const translations: Record<Language, Translations> = {
       aiConfigInvalid: 'AI configuration invalid',
       configureApiFirst: 'Please configure and test API in settings first',
       model: 'Model',
+      config: 'Config',
       // Error messages
       detachedNodeNotFound: 'Target node level must be greater than current node',
       levelMismatchConnect: 'Target node level must be greater than current node',
@@ -670,6 +687,7 @@ export const translations: Record<Language, Translations> = {
       updatedOldToNew: 'Updated (Old to New)',
       createdNewToOld: 'Created (New to Old)',
       createdOldToNew: 'Created (Old to New)',
+      unsavedChanges: 'Unsaved changes',
     },
     node: {
       editNode: 'Edit Node',
@@ -824,6 +842,7 @@ export const translations: Record<Language, Translations> = {
     git: {
       provider: 'Provider',
       token: 'Access Token',
+      tokenPlaceholder: 'PAT / Access Token',
       namespace: 'Owner / Namespace',
       repository: 'Repository',
       branch: 'Branch',
@@ -860,12 +879,17 @@ export const translations: Record<Language, Translations> = {
       enterNewPath: 'Enter new path for',
       targetDirectory: 'Target directory',
       targetDirectoryRoot: 'Target directory: repository root',
+      refreshTree: 'Refresh repository tree',
       stageChanges: 'Stage Changes',
       noStagedChanges: 'No staged changes',
       stagedCount: '{count} staged',
       unstage: 'Unstage',
       stagedDeleteFile: '[Delete] {name}',
       stagedDeleteFolder: '[Delete Folder] {name}',
+      stageToGit: 'Stage to Git',
+      stageToGitDescription: 'Enter repository path for this file',
+      stageConfirm: 'Stage',
+      stagedToGit: 'Staged to Git',
     },
     toast: {
       saved: 'Saved',

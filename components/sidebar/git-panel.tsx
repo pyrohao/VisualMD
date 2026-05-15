@@ -58,6 +58,7 @@ function GitTreeNode({
   onDeleteFile,
   onDeleteFolder,
   themeConfig,
+  t,
 }: {
   path?: string
   depth?: number
@@ -72,6 +73,7 @@ function GitTreeNode({
   onDeleteFile: (path: string) => void
   onDeleteFolder: (path: string) => void
   themeConfig: typeof themeConfigs.light
+  t: (key: string) => string
 }) {
   const items = treeByPath[path] || []
 
@@ -125,6 +127,7 @@ function GitTreeNode({
                       className="rounded p-1 transition-colors"
                       style={{ color: themeConfig.text }}
                       onClick={() => onCreateFile(normalizedPath)}
+                      title={t('git.createFile')}
                     >
                       <FilePlus2 className="h-3.5 w-3.5" />
                     </button>
@@ -133,6 +136,7 @@ function GitTreeNode({
                       className="rounded p-1 transition-colors"
                       style={{ color: themeConfig.text }}
                       onClick={() => onCreateFolder(normalizedPath)}
+                      title={t('git.createFolder')}
                     >
                       <FolderPlus className="h-3.5 w-3.5" />
                     </button>
@@ -141,6 +145,7 @@ function GitTreeNode({
                       className="rounded p-1 transition-colors"
                       style={{ color: themeConfig.text }}
                       onClick={() => onRename(normalizedPath)}
+                      title={t('file.rename')}
                     >
                       <Pencil className="h-3.5 w-3.5" />
                     </button>
@@ -149,6 +154,7 @@ function GitTreeNode({
                       className="rounded p-1 transition-colors"
                       style={{ color: themeConfig.danger }}
                       onClick={() => onDeleteFolder(normalizedPath)}
+                      title={t('file.deleteFolder')}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
@@ -160,6 +166,7 @@ function GitTreeNode({
                       className="rounded p-1 transition-colors"
                       style={{ color: themeConfig.text }}
                       onClick={() => onRename(normalizedPath)}
+                      title={t('file.rename')}
                     >
                       <Pencil className="h-3.5 w-3.5" />
                     </button>
@@ -168,6 +175,7 @@ function GitTreeNode({
                       className="rounded p-1 transition-colors"
                       style={{ color: themeConfig.danger }}
                       onClick={() => onDeleteFile(normalizedPath)}
+                      title={t('file.deleteFile')}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
@@ -191,6 +199,7 @@ function GitTreeNode({
                 onDeleteFile={onDeleteFile}
                 onDeleteFolder={onDeleteFolder}
                 themeConfig={themeConfig}
+                t={t}
               />
             ) : null}
           </div>
@@ -254,10 +263,10 @@ export function GitPanel() {
   const hasCommitCandidates = Boolean(currentDraft?.isDirty) || stagedChanges.length > 0
   const pendingSummary = useMemo(() => {
     if (currentDraft) {
-      return `${currentDraft.path}${currentDraft.isDirty ? ` · ${t('git.uncommitted')}` : ''}`
+      return `${currentDraft.path}${currentDraft.isDirty ? ` - ${t('git.uncommitted')}` : ''}`
     }
     if (stagedChanges.length) {
-      return `${stagedChanges.length} staged`
+      return t('git.stagedCount').replace('{count}', String(stagedChanges.length))
     }
     return t('git.noGitFileOpen')
   }, [currentDraft, stagedChanges.length, t])
@@ -511,7 +520,7 @@ export function GitPanel() {
               </div>
               <div className="text-xs" style={{ color: themeConfig.muted }}>
                 {config.provider.toUpperCase()}
-                {config.branch ? ` · ${config.branch}` : ''}
+                {config.branch ? ` - ${config.branch}` : ''}
               </div>
             </div>
 
@@ -564,6 +573,7 @@ export function GitPanel() {
                 className="flex h-8 w-8 items-center justify-center rounded-md border transition-colors"
                 style={{ borderColor: themeConfig.border, color: themeConfig.text, backgroundColor: themeConfig.background }}
                 onClick={() => setDialogState({ type: 'create-file', path: '' })}
+                title={t('git.createFile')}
               >
                 <FilePlus2 className="h-4 w-4" />
               </button>
@@ -573,6 +583,7 @@ export function GitPanel() {
                 className="flex h-8 w-8 items-center justify-center rounded-md border transition-colors"
                 style={{ borderColor: themeConfig.border, color: themeConfig.text, backgroundColor: themeConfig.background }}
                 onClick={() => setDialogState({ type: 'create-folder', path: '' })}
+                title={t('git.createFolder')}
               >
                 <FolderPlus className="h-4 w-4" />
               </button>
@@ -582,6 +593,7 @@ export function GitPanel() {
                 className="flex h-8 w-8 items-center justify-center rounded-md border transition-colors"
                 style={{ borderColor: themeConfig.border, color: themeConfig.text, backgroundColor: themeConfig.background }}
                 onClick={() => void loadTree('')}
+                title={t('git.refreshTree')}
               >
                 {isLoadingTree ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
               </button>
@@ -613,6 +625,7 @@ export function GitPanel() {
                 onDeleteFile={(path) => setDeleteDialogState({ type: 'delete-file', path })}
                 onDeleteFolder={(path) => setDeleteDialogState({ type: 'delete-folder', path })}
                 themeConfig={themeConfig}
+                t={t}
               />
             ) : (
               <div className="py-8 text-center text-sm" style={{ color: themeConfig.muted }}>
@@ -692,7 +705,7 @@ export function GitPanel() {
               }}
             >
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              <span>{t('git.conflictDetected')} · {t('git.localChangesPreserved')}</span>
+              <span>{t('git.conflictDetected')} - {t('git.localChangesPreserved')}</span>
             </div>
           ) : currentDraft?.hasRemoteUpdates ? (
             <div

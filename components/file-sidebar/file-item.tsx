@@ -70,7 +70,7 @@ export function FileItem({ file, isActive, isModified, onClick }: FileItemProps)
   const handleConfirmDelete = () => {
     deleteFile(file.id)
     toast({
-      title: '文件已删除',
+      title: t('toast.fileDeleted'),
     })
   }
 
@@ -83,7 +83,7 @@ export function FileItem({ file, isActive, isModified, onClick }: FileItemProps)
     const nextPath = repoPath.trim() || file.name
     stageLocalFile(file.id, nextPath)
     toast({
-      title: 'Staged to Git',
+      title: t('git.stagedToGit'),
       description: nextPath,
     })
   }
@@ -163,7 +163,7 @@ export function FileItem({ file, isActive, isModified, onClick }: FileItemProps)
           <span 
             className="w-1.5 h-1.5 rounded-full shrink-0"
             style={{ backgroundColor: themeConfig.accent }}
-            title="有未保存的修改"
+            title={t('file.unsavedChanges')}
           />
         )}
       </div>
@@ -202,7 +202,7 @@ export function FileItem({ file, isActive, isModified, onClick }: FileItemProps)
             }}
             className="w-full px-4 py-1.5 text-left text-sm hover:bg-white/10 transition-colors"
           >
-            Stage to Git
+            {t('git.stageToGit')}
           </button>
           <div className="my-1 border-t" style={{ borderColor: themeConfig.border }} />
           <button
@@ -232,10 +232,10 @@ export function FileItem({ file, isActive, isModified, onClick }: FileItemProps)
         isOpen={showStagePrompt}
         onClose={() => setShowStagePrompt(false)}
         onConfirm={handleStageToGit}
-        title="Stage to Git"
-        description="Enter repository path for this file"
+        title={t('git.stageToGit')}
+        description={t('git.stageToGitDescription')}
         defaultValue={file.name}
-        confirmText="Stage"
+        confirmText={t('git.stageConfirm')}
         cancelText={t('common.cancel')}
         placeholder="docs/example.md"
       />

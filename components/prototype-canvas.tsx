@@ -93,7 +93,14 @@ function collectDefaults(
 
 function renderInlineSegments(segments: PrototypeInlineSegment[]) {
   return segments.map((segment, index) => {
-    const content = segment.code ? (
+    const content = segment.imageSrc ? (
+      <img
+        key={index}
+        src={segment.imageSrc}
+        alt={segment.text}
+        className="my-3 max-h-80 max-w-full rounded-xl border object-contain"
+      />
+    ) : segment.code ? (
       <code
         className="rounded-md border px-1.5 py-0.5 text-[0.9em]"
         key={index}

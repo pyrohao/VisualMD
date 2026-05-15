@@ -429,7 +429,7 @@ export function SettingsPanel() {
                     <option value="github">GitHub</option>
                     <option value="gitlab">GitLab</option>
                     <option value="gitee">Gitee</option>
-                    <option value="custom">Custom</option>
+                    <option value="custom">{t('settings.custom')}</option>
                   </select>
                 </div>
                 <div className="space-y-1.5">
@@ -489,7 +489,7 @@ export function SettingsPanel() {
                     type={showGitToken ? 'text' : 'password'}
                     value={getDecryptedToken()}
                     onChange={(e) => setGitConfig({ token: e.target.value })}
-                    placeholder="PAT / Access Token"
+                    placeholder={t('git.tokenPlaceholder')}
                     className="h-9 pr-10 text-xs"
                     style={{ backgroundColor: themeConfig.input, borderColor: themeConfig.border, color: themeConfig.text }}
                   />
