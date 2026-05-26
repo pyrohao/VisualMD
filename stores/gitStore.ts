@@ -9,6 +9,7 @@ import { useTabsStore } from './tabsStore'
 
 interface GitStore {
   config: GitProviderConfig
+  lastConnectedConfigSignature: string | null
   repos: GitRepoRef[]
   branches: GitBranchRef[]
   treeByPath: Record<string, GitTreeItem[]>
@@ -76,6 +77,18 @@ function toRuntimeConfig(config: GitProviderConfig): GitProviderConfig {
   }
 }
 
+function buildConfigSignature(config: GitProviderConfig) {
+  return JSON.stringify({
+    provider: config.provider,
+    token: normalizeEncryptedSecret(config.token || ''),
+    ownerOrNamespace: config.ownerOrNamespace.trim(),
+    repo: config.repo.trim(),
+    branch: config.branch.trim(),
+    baseUrl: config.baseUrl?.trim() || '',
+    customFlavor: config.customFlavor || 'gitlab',
+  })
+}
+
 function draftReferencesRepoPath(draftPath: string, content: string, repoPath: string) {
   const normalizedDraftPath = normalizeGitPath(draftPath)
   const draftDir = normalizedDraftPath.includes('/')
@@ -104,6 +117,7 @@ export const useGitStore = create<GitStore>()(
     persist(
       (set, get) => ({
         config: DEFAULT_CONFIG,
+        lastConnectedConfigSignature: null,
         repos: [],
         branches: [],
         treeByPath: {},
@@ -120,13 +134,24 @@ export const useGitStore = create<GitStore>()(
         lastFetchedAt: null,
 
         setConfig: (updates) => {
-          set((state) => ({
-            config: {
+          set((state) => {
+            const nextConfig = {
               ...state.config,
               ...updates,
               token: updates.token !== undefined ? encryptSecret(updates.token) : state.config.token,
-            },
-          }))
+            }
+            const nextSignature = buildConfigSignature(nextConfig)
+            const configChanged = nextSignature !== state.lastConnectedConfigSignature
+
+            return {
+              config: nextConfig,
+              connected: configChanged ? false : state.connected,
+              repos: configChanged ? [] : state.repos,
+              branches: configChanged ? [] : state.branches,
+              treeByPath: configChanged ? {} : state.treeByPath,
+              expandedPaths: configChanged ? [] : state.expandedPaths,
+            }
+          })
         },
 
         getDecryptedToken: () => decryptSecret(get().config.token),
@@ -148,10 +173,12 @@ export const useGitStore = create<GitStore>()(
             await client.validateConnection(runtimeConfig)
             const branches = await client.getBranches(runtimeConfig)
             const nextBranch = config.branch || branches[0]?.name || 'main'
+            const nextConfig = { ...config, branch: nextBranch }
             set((state) => ({
               branches,
-              config: { ...state.config, branch: nextBranch },
+              config: nextConfig,
               connected: true,
+              lastConnectedConfigSignature: buildConfigSignature(nextConfig),
             }))
             await get().loadTree('')
           } catch (error) {
@@ -889,17 +916,41 @@ export const useGitStore = create<GitStore>()(
         name: 'git-store-v1',
         partialize: (state) => ({
           config: state.config,
+          lastConnectedConfigSignature: state.lastConnectedConfigSignature,
+          connected: state.connected,
         }),
         onRehydrateStorage: () => (state) => {
           if (!state) return
-          const token = state.config?.token || ''
-          if (!token) return
+
+          const normalizedConfig: GitProviderConfig = {
+            ...DEFAULT_CONFIG,
+            ...state.config,
+            token: normalizeEncryptedSecret(state.config?.token || ''),
+          }
+          const lastConnectedConfigSignature = state.lastConnectedConfigSignature || null
+          const hasValidConfig = !getConfigError(normalizedConfig)
+          const configSignatureMatchesLastConnection =
+            !!lastConnectedConfigSignature &&
+            buildConfigSignature(normalizedConfig) === lastConnectedConfigSignature
+          const wasPreviouslyConnected = state.connected === true
+          const shouldRestoreConnection = hasValidConfig && (wasPreviouslyConnected || configSignatureMatchesLastConnection)
+
           useGitStore.setState((currentState) => ({
             config: {
               ...currentState.config,
-              token: normalizeEncryptedSecret(token),
+              ...normalizedConfig,
             },
+            lastConnectedConfigSignature,
+            connected: shouldRestoreConnection,
           }))
+
+          if (!shouldRestoreConnection) return
+
+          queueMicrotask(() => {
+            void useGitStore.getState().validateAndLoad().catch(() => {
+              // Keep startup silent here; store state is updated by validateAndLoad.
+            })
+          })
         },
       }
     ),

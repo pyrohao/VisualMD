@@ -286,6 +286,15 @@ export function GitPanel() {
   }, [connected, currentDocumentId, syncRemoteStatus])
 
   useEffect(() => {
+    if (!connected || isConnecting || isLoadingTree) return
+    if (Object.prototype.hasOwnProperty.call(treeByPath, '')) return
+
+    void loadTree('').catch(() => {
+      // handled by store
+    })
+  }, [connected, isConnecting, isLoadingTree, loadTree, treeByPath])
+
+  useEffect(() => {
     if (!error) return
 
     toast({
