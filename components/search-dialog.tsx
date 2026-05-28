@@ -20,6 +20,7 @@ import { useSidebarStore } from '@/stores/sidebarStore'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { useTabsStore } from '@/stores/tabsStore'
+import { requestNavigationWithUnsavedGuard } from '@/stores/unsavedChangesStore'
 import { cn } from '@/lib/utils'
 
 interface SearchDialogProps {
@@ -102,13 +103,19 @@ export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
       const file = files.find((f) => f.id === result.id)
       if (file) {
         const activeTab = getActiveTab()
-        // 如果当前是空白标签页，在当前标签打开；否则创建新标签
-        if (activeTab?.isNew && !activeTab?.content?.trim()) {
-          openFileInCurrentTab(activeTabId!, file.name, file.content, file.id)
-        } else {
-          openFileInTab(file.name, file.content, file.id)
+        if (activeTab?.fileId === file.id) {
+          onOpenChange(false)
+          return
         }
-        openFile(result.id)
+        // 如果当前是空白标签页，在当前标签打开；否则创建新标签
+        void requestNavigationWithUnsavedGuard(() => {
+          if (activeTab?.isNew && !activeTab?.content?.trim()) {
+            openFileInCurrentTab(activeTabId!, file.name, file.content, file.id)
+          } else {
+            openFileInTab(file.name, file.content, file.id)
+          }
+          openFile(result.id)
+        }, file.name)
       }
       onOpenChange(false)
     }

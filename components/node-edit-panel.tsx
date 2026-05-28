@@ -15,12 +15,27 @@ import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useSidebarStore } from '@/stores/sidebarStore'
 import { useTabsStore } from '@/stores/tabsStore'
 import { useGitStore } from '@/stores/gitStore'
+import { useUnsavedChangesStore } from '@/stores/unsavedChangesStore'
 import { useTranslation } from '@/stores/languageStore'
 import { findNodeInTreeOrDetached } from '@/lib/flow-helpers'
+import { persistActiveTabSave } from '@/lib/editor-persistence'
 import { toast } from '@/hooks/use-toast'
+import type { TreeNode } from '@/types/tree'
 import { DeleteNodeDialog, type DeleteMode } from './delete-node-dialog'
 import { VirtualRootEditor, type VirtualRootEditorRef, type MetadataEntry } from './virtual-root-editor'
 import { NodeContentEditor } from './node-content-editor'
+
+function getNodeDraftSignature(node: TreeNode | null | undefined) {
+  if (!node || node.isVirtual || node.level === 0) {
+    return null
+  }
+
+  return `${node.id}\u0000${node.title}\u0000${node.content || ''}`
+}
+
+function normalizeNodeContent(content: string) {
+  return content || undefined
+}
 
 export function NodeEditPanel() {
   // ========== Store 访问 ==========
@@ -38,9 +53,10 @@ export function NodeEditPanel() {
 
   const { getThemeConfig } = useThemeStore()
   const themeConfig = getThemeConfig()
-  const { currentFileId, saveFileContent, renameFile, files } = useFileSystemStore()
+  const { currentFileId, saveFileContent, renameFile, files, markFileAsModified } = useFileSystemStore()
   const { currentDocumentId: currentGitDocumentId } = useGitStore()
   const { editingTemplateId } = useSidebarStore()
+  const activeTabId = useTabsStore((state) => state.activeTabId)
   const { t } = useTranslation()
 
   // ========== 派生状态 ==========
@@ -53,6 +69,7 @@ export function NodeEditPanel() {
   // ========== 本地编辑状态（仅用于非虚拟节点）==========
   const [title, setTitle] = useState('')
   const [content, setContent] = useState('')
+  const [draftSourceSignature, setDraftSourceSignature] = useState<string | null>(null)
 
   // ========== Refs ==========
   const virtualRootEditorRef = useRef<VirtualRootEditorRef>(null)
@@ -83,35 +100,100 @@ export function NodeEditPanel() {
   }, [document, currentFileId, files, editingTemplateId, isVirtualRoot, selectedNodeId, title, content])
 
   // ========== 初始化数据 ==========
+  const selectedNodeDraftSignature = useMemo(
+    () => getNodeDraftSignature(selectedNode),
+    [selectedNodeId, selectedNode?.content, selectedNode?.isVirtual, selectedNode?.level, selectedNode?.title]
+  )
+
   useEffect(() => {
     if (selectedNode) {
       setTitle(selectedNode.title)
       setContent(selectedNode.content || '')
+      setDraftSourceSignature(selectedNodeDraftSignature)
+      return
     }
-  }, [selectedNodeId, selectedNode?.title, selectedNode?.content])
 
-  // ========== 自动保存逻辑（仅保存，不重新解析）==========
-  const doAutoSave = useCallback(() => {
+    setTitle('')
+    setContent('')
+    setDraftSourceSignature(null)
+  }, [selectedNodeDraftSignature, selectedNodeId, selectedNode?.content, selectedNode?.title])
+
+  const hasPendingNodeChanges = Boolean(
+    selectedNode &&
+      !isVirtualRoot &&
+      selectedNodeDraftSignature === draftSourceSignature &&
+      (title !== selectedNode.title || content !== (selectedNode.content || ''))
+  )
+
+  const getPendingNodePersistState = useCallback(() => {
     const doc = documentRef.current
     const selNodeId = selectedNodeIdRef.current
     const isVirtRoot = isVirtualRootRef.current
     const currTitle = titleRef.current
     const currContent = contentRef.current
+
+    if (!doc || !selNodeId || isVirtRoot) {
+      return null
+    }
+
+    const liveNode = findNodeInTreeOrDetached(doc.root, doc.detachedNodes || [], selNodeId)
+    if (!liveNode || liveNode.isVirtual || liveNode.level === 0) {
+      return null
+    }
+
+    const trimmedTitle = currTitle.trim()
+    const nextTitle = trimmedTitle || liveNode.title
+    const nextContent = normalizeNodeContent(currContent)
+    const currentContent = normalizeNodeContent(liveNode.content || '')
+    const hasSavableChanges = nextTitle !== liveNode.title || nextContent !== currentContent
+
+    if (!hasSavableChanges) {
+      return null
+    }
+
+    return {
+      selNodeId,
+      nextTitle,
+      nextContent,
+    }
+  }, [])
+
+  useEffect(() => {
+    useUnsavedChangesStore.getState().setEditorDirty('node-edit-panel', hasPendingNodeChanges)
+
+    if (!hasPendingNodeChanges || !activeTabId) {
+      return
+    }
+
+    useTabsStore.getState().markTabAsModified(activeTabId, true)
+
+    if (currentFileId && !currentGitDocumentId) {
+      markFileAsModified(currentFileId)
+    }
+  }, [activeTabId, currentFileId, currentGitDocumentId, hasPendingNodeChanges, markFileAsModified])
+
+  // ========== 自动保存逻辑（仅保存，不重新解析）==========
+  const doAutoSave = useCallback(() => {
+    const doc = documentRef.current
     const currFileId = currentFileIdRef.current
     const currFiles = filesRef.current
     const editTemplateId = editingTemplateIdRef.current
 
-    if (!selNodeId || !doc) {
+    if (!doc) {
+      return
+    }
+
+    const pendingNodeState = getPendingNodePersistState()
+    if (!pendingNodeState) {
+      useUnsavedChangesStore.getState().setEditorDirty('node-edit-panel', false)
       return
     }
 
     // 1. 更新数据到 documentStore（仅更新当前节点，不重新解析）
-    if (!isVirtRoot) {
-      const trimmedTitle = currTitle.trim()
-      if (trimmedTitle) {
-        useDocumentStore.getState().updateNode(selNodeId, { title: trimmedTitle, content: currContent || undefined })
-      }
-    }
+    useDocumentStore.getState().updateNode(pendingNodeState.selNodeId, {
+      title: pendingNodeState.nextTitle,
+      content: pendingNodeState.nextContent,
+    })
 
     // 2. 获取最新 Markdown 内容
     const latestContent = useDocumentStore.getState().getCurrentMarkdown()
@@ -136,6 +218,11 @@ export function NodeEditPanel() {
 
     if (currFileId && !activeGitDocumentId) {
       useFileSystemStore.getState().saveFileContent(currFileId, latestContent)
+      const currentTabId = useTabsStore.getState().activeTabId
+      if (currentTabId) {
+        useTabsStore.getState().updateTabContent(currentTabId, latestContent)
+        useTabsStore.getState().markTabAsSaved(currentTabId, doc.fileName)
+      }
     } else if (activeGitDocumentId) {
       const gitDocumentId = activeGitDocumentId
       if (gitDocumentId) {
@@ -170,16 +257,15 @@ export function NodeEditPanel() {
         }))
       }
     }
+    useUnsavedChangesStore.getState().setEditorDirty('node-edit-panel', false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [getPendingNodePersistState])
 
   // ========== 手动保存并重新解析（用于关闭面板时）==========
   const doSaveAndReparse = useCallback(() => {
     const doc = documentRef.current
     const selNodeId = selectedNodeIdRef.current
     const isVirtRoot = isVirtualRootRef.current
-    const currTitle = titleRef.current
-    const currContent = contentRef.current
     const currFileId = currentFileIdRef.current
     const currFiles = filesRef.current
     const editTemplateId = editingTemplateIdRef.current
@@ -188,17 +274,25 @@ export function NodeEditPanel() {
       return
     }
 
-    // 1. 更新数据到 documentStore
-    if (!isVirtRoot) {
-      const trimmedTitle = currTitle.trim()
-      if (trimmedTitle) {
-        useDocumentStore.getState().updateNode(selNodeId, { title: trimmedTitle, content: currContent || undefined })
-      }
+    const pendingNodeState = getPendingNodePersistState()
+    if (!isVirtRoot && !pendingNodeState) {
+      useUnsavedChangesStore.getState().setEditorDirty('node-edit-panel', false)
+      return
     }
 
-    // 2. 获取最新 Markdown 内容并重新解析（这会处理内容中的新标题）
+    // 1. 更新数据到 documentStore
+    if (pendingNodeState) {
+      useDocumentStore.getState().updateNode(pendingNodeState.selNodeId, {
+        title: pendingNodeState.nextTitle,
+        content: pendingNodeState.nextContent,
+      })
+    }
+
+    // 2. Refresh the smallest possible scope, then read the normalized markdown.
+    if (!isVirtRoot) {
+      useDocumentStore.getState().refreshNodeStructure(selNodeId)
+    }
     const latestContent = useDocumentStore.getState().getCurrentMarkdown()
-    useDocumentStore.getState().updateFromMarkdown(latestContent)
 
     // 3. 避免重复保存
     if (latestContent === lastSavedContentRef.current) {
@@ -220,6 +314,11 @@ export function NodeEditPanel() {
 
     if (currFileId && !activeGitDocumentId) {
       useFileSystemStore.getState().saveFileContent(currFileId, latestContent)
+      const currentTabId = useTabsStore.getState().activeTabId
+      if (currentTabId) {
+        useTabsStore.getState().updateTabContent(currentTabId, latestContent)
+        useTabsStore.getState().markTabAsSaved(currentTabId, doc.fileName)
+      }
     } else if (activeGitDocumentId) {
       const gitDocumentId = activeGitDocumentId
       if (gitDocumentId) {
@@ -240,8 +339,48 @@ export function NodeEditPanel() {
         isTemplateModified: false,
       }))
     }
+    useUnsavedChangesStore.getState().setEditorDirty('node-edit-panel', false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [getPendingNodePersistState])
+
+  useEffect(() => {
+    useUnsavedChangesStore.getState().registerEditor('node-edit-panel', {
+      save: () => {
+        if (autoSaveTimeoutRef.current) {
+          clearTimeout(autoSaveTimeoutRef.current)
+          autoSaveTimeoutRef.current = null
+        }
+        doSaveAndReparse()
+      },
+      discard: () => {
+        if (autoSaveTimeoutRef.current) {
+          clearTimeout(autoSaveTimeoutRef.current)
+          autoSaveTimeoutRef.current = null
+        }
+
+        const doc = documentRef.current
+        const selNodeId = selectedNodeIdRef.current
+
+        if (!doc || !selNodeId) {
+          useUnsavedChangesStore.getState().setEditorDirty('node-edit-panel', false)
+          return
+        }
+
+        const liveNode = findNodeInTreeOrDetached(doc.root, doc.detachedNodes || [], selNodeId)
+        if (liveNode && !liveNode.isVirtual && liveNode.level !== 0) {
+          setTitle(liveNode.title)
+          setContent(liveNode.content || '')
+          setDraftSourceSignature(getNodeDraftSignature(liveNode))
+        }
+
+        useUnsavedChangesStore.getState().setEditorDirty('node-edit-panel', false)
+      },
+    })
+
+    return () => {
+      useUnsavedChangesStore.getState().unregisterEditor('node-edit-panel')
+    }
+  }, [doSaveAndReparse])
 
   // ========== 自动保存 ==========
   useEffect(() => {
@@ -249,7 +388,7 @@ export function NodeEditPanel() {
       isFirstRender.current = false
       return
     }
-    if (!selectedNodeId) return
+    if (!selectedNodeId || !hasPendingNodeChanges) return
 
     // 清除之前的定时器
     if (autoSaveTimeoutRef.current) {
@@ -266,7 +405,7 @@ export function NodeEditPanel() {
         clearTimeout(autoSaveTimeoutRef.current)
       }
     }
-  }, [title, content, selectedNodeId, doAutoSave])
+  }, [title, content, selectedNodeId, hasPendingNodeChanges, doAutoSave])
 
   // ========== 组件卸载时保存 ==========
   useEffect(() => {
@@ -274,26 +413,17 @@ export function NodeEditPanel() {
       if (autoSaveTimeoutRef.current) {
         clearTimeout(autoSaveTimeoutRef.current)
       }
-      // 使用 ref 获取最新的值，避免依赖数组问题
-      const selNodeId = selectedNodeIdRef.current
-      const isVirtRoot = isVirtualRootRef.current
-      const currTitle = titleRef.current
-      const currContent = contentRef.current
-
-      // 只有在有选中节点且不是虚拟根节点时才保存
-      if (selNodeId && !isVirtRoot) {
-        const trimmedTitle = currTitle.trim()
-        if (trimmedTitle) {
-          useDocumentStore.getState().updateNode(selNodeId, { title: trimmedTitle, content: currContent || undefined })
-          
-          // 重新解析 Markdown 以处理内容中的新标题
-          const latestContent = useDocumentStore.getState().getCurrentMarkdown()
-          useDocumentStore.getState().updateFromMarkdown(latestContent)
-        }
+      const pendingNodeState = getPendingNodePersistState()
+      if (pendingNodeState) {
+        useDocumentStore.getState().updateNode(pendingNodeState.selNodeId, {
+          title: pendingNodeState.nextTitle,
+          content: pendingNodeState.nextContent,
+        })
+        useDocumentStore.getState().refreshNodeStructure(pendingNodeState.selNodeId)
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [getPendingNodePersistState])
 
   // ========== 事件处理 ==========
   const handleSave = useCallback(() => {
@@ -303,6 +433,7 @@ export function NodeEditPanel() {
     }
     // 保存并重新解析（处理内容中的新标题）
     doSaveAndReparse()
+    persistActiveTabSave()
     selectNode(null)
     toast({ title: t('toast.saved'), description: t('toast.saved') })
   }, [doSaveAndReparse, selectNode, t])
@@ -325,7 +456,15 @@ export function NodeEditPanel() {
       if (key.trim()) metadata[key.trim()] = value
     })
     updateMetadata(metadata)
-  }, [updateMetadata])
+
+    if (activeTabId) {
+      useTabsStore.getState().markTabAsModified(activeTabId, true)
+    }
+
+    if (currentFileId && !currentGitDocumentId) {
+      markFileAsModified(currentFileId)
+    }
+  }, [activeTabId, currentFileId, currentGitDocumentId, markFileAsModified, updateMetadata])
 
   // ========== 虚拟节点：文件名变化处理 ==========
   const handleFileNameChange = useCallback((newFileName: string) => {
@@ -339,7 +478,15 @@ export function NodeEditPanel() {
         renameFile(currentFileId, newFileName)
       }
     }
-  }, [updateFileName, currentFileId, files, renameFile])
+
+    if (activeTabId) {
+      useTabsStore.getState().markTabAsModified(activeTabId, true)
+    }
+
+    if (currentFileId && !currentGitDocumentId) {
+      markFileAsModified(currentFileId)
+    }
+  }, [activeTabId, currentFileId, currentGitDocumentId, files, markFileAsModified, renameFile, updateFileName])
 
   // ========== 删除节点 ==========
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)

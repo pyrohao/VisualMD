@@ -14,12 +14,14 @@ import { PanelContainer } from './sidebar/panel-container'
 import { MarkdownPreview } from './markdown-preview'
 import { NodeEditPanel } from './node-edit-panel'
 import { SearchDialog } from './search-dialog'
+import { UnsavedChangesDialog } from './unsaved-changes-dialog'
 import { Button } from './ui/button'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { toast } from '@/hooks/use-toast'
 import { useDocumentStore } from '@/stores/documentStore'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useGitStore } from '@/stores/gitStore'
+import { hasUnsavedChanges, saveDirtyEditors } from '@/stores/unsavedChangesStore'
 import { useTranslation } from '@/stores/languageStore'
 import { SIDEBAR_PANEL_MIN_WIDTH, useSidebarStore } from '@/stores/sidebarStore'
 import { useTabsStore } from '@/stores/tabsStore'
@@ -27,6 +29,7 @@ import { initTheme, useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { useSidebarStore as useTemplateStore } from '@/stores/sidebarStore'
 import { EmptyTabView } from './empty-tab-view'
 import { EditorCanvasShell } from './editor-canvas-shell'
+import { persistActiveTabSave } from '@/lib/editor-persistence'
 
 /**
  * 默认示例Markdown内容（英文版）
@@ -290,8 +293,8 @@ description: 简要描述
 `
 
 const LEFT_ICON_BAR_WIDTH = 48
-const RIGHT_PANEL_MIN_WIDTH = 480
-const CENTER_PANEL_MIN_WIDTH = 360
+const RIGHT_PANEL_MIN_WIDTH = 780
+const CENTER_PANEL_MIN_WIDTH = 120
 const RESIZE_HANDLE_HIT_AREA = 14
 
 export function MarkdownEditor() {
@@ -325,7 +328,7 @@ export function MarkdownEditor() {
   // 获取Store
   const { loadDocument, document, selectedNodeId, getCurrentMarkdown, getIsModified, updateNode } = useDocumentStore()
   const { currentFileId, files, saveFile, markFileAsSaved, openFile, createFile } = useFileSystemStore()
-  const { setCurrentDocumentId, updateDraftContent } = useGitStore()
+  const { setCurrentDocumentId } = useGitStore()
   const { isPanelExpanded, panelWidth, setPanelWidth } = useSidebarStore()
   const { activeTabId, getActiveTab, tabs } = useTabsStore()
   const currentMarkdown = getCurrentMarkdown()
@@ -492,7 +495,9 @@ export function MarkdownEditor() {
 
 
   // 处理保存
-  const handleSave = useCallback(() => {
+  const handleSave = useCallback(async () => {
+    await saveDirtyEditors()
+
     // 获取最新的 markdown 内容（从 store 实时获取，避免闭包问题）
     const { getCurrentMarkdown: getLatestMarkdown, markAsSaved } = useDocumentStore.getState()
     const latestMarkdown = getLatestMarkdown()
@@ -500,7 +505,7 @@ export function MarkdownEditor() {
     // 从 ref 获取最新的 templateEditMode（避免闭包问题）
     const currentTemplateEditMode = templateEditModeRef.current
     const currentFileId = currentFileIdRef.current
-    const { activeTabId, tabs, updateTabContent, markTabAsSaved } = useTabsStore.getState()
+    const { activeTabId, tabs } = useTabsStore.getState()
     const currentTab = tabs.find(t => t.id === activeTabId)
 
     if (currentTemplateEditMode.isActive && currentTemplateEditMode.templateId) {
@@ -539,10 +544,7 @@ export function MarkdownEditor() {
     }
 
     if (currentTab?.sourceType === 'git' && currentTab.fileId) {
-      updateDraftContent(currentTab.fileId, latestMarkdown)
-      updateTabContent(currentTab.id, latestMarkdown)
-      markTabAsSaved(currentTab.id)
-      markAsSaved()
+      persistActiveTabSave()
       toast({
         title: t('git.draftSaved'),
       })
@@ -550,19 +552,10 @@ export function MarkdownEditor() {
     }
 
     if (currentFileId) {
-      // 先保存文件内容到 store
-      useFileSystemStore.setState((state) => ({
-        files: state.files.map(f =>
-          f.id === currentFileId
-            ? { ...f, content: latestMarkdown, isModified: false, updatedAt: Date.now() }
-            : f
-        ),
-      }))
-
-      // 再保存编辑器状态（断开节点等）
+      persistActiveTabSave()
       markAsSaved()
     }
-  }, [t, updateDraftContent]) // 空依赖数组，使用 ref 获取最新状态
+  }, [t]) // 空依赖数组，使用 ref 获取最新状态
 
   // 监听 Ctrl+S 保存
   useEffect(() => {
@@ -744,6 +737,20 @@ export function MarkdownEditor() {
     }
   }, [clearResizeState, setPanelWidth])
 
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!hasUnsavedChanges()) {
+        return
+      }
+
+      event.preventDefault()
+      event.returnValue = ''
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [])
+
   const startResize = useCallback((side: 'left' | 'right', event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault()
     event.stopPropagation()
@@ -780,6 +787,7 @@ export function MarkdownEditor() {
         open={searchDialogOpen}
         onOpenChange={setSearchDialogOpen}
       />
+      <UnsavedChangesDialog />
 
       {/* 主内容区 */}
       <div ref={containerRef} className="relative flex flex-1 overflow-hidden">

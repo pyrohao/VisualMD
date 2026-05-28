@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { useTabsStore } from '@/stores/tabsStore'
+import { requestNavigationWithUnsavedGuard } from '@/stores/unsavedChangesStore'
 import { useTranslation } from '@/stores/languageStore'
 import { FolderItem } from '../file-sidebar/folder-item'
 import { FileItem } from '../file-sidebar/file-item'
@@ -135,7 +136,13 @@ export function FilePanel() {
     const existingTab = findTabByFileId(fileId)
     if (existingTab) {
       // 切换到已存在的标签页
-      openFileInTab(file.name, file.content, fileId)
+      if (existingTab.id === activeTabId) {
+        return
+      }
+
+      void requestNavigationWithUnsavedGuard(() => {
+        openFileInTab(file.name, file.content, fileId)
+      }, file.name)
       return
     }
 
@@ -143,10 +150,14 @@ export function FilePanel() {
     const activeTab = getActiveTab()
     if (activeTab?.isNew && !activeTab?.content?.trim()) {
       // 在当前空白标签页打开
-      openFileInCurrentTab(activeTabId!, file.name, file.content, fileId)
+      void requestNavigationWithUnsavedGuard(() => {
+        openFileInCurrentTab(activeTabId!, file.name, file.content, fileId)
+      }, file.name)
     } else {
       // 在新标签页打开
-      openFileInTab(file.name, file.content, fileId)
+      void requestNavigationWithUnsavedGuard(() => {
+        openFileInTab(file.name, file.content, fileId)
+      }, file.name)
     }
   }
 

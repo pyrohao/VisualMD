@@ -28,6 +28,7 @@ import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useDocumentStore } from '@/stores/documentStore'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { useTranslation } from '@/stores/languageStore'
+import { requestNavigationWithUnsavedGuard } from '@/stores/unsavedChangesStore'
 import { openFile, exportAsMarkdown } from '@/lib/file-system'
 import { ThemeToggle } from './theme-toggle'
 import { LanguageToggle } from './language-switcher'
@@ -177,8 +178,36 @@ export function EditorToolbar({
 
   // 处理新建标签 - 创建空白标签页
   const handleNewTab = () => {
-    createTab(undefined, undefined, true)
+    void requestNavigationWithUnsavedGuard(
+      () => {
+        createTab(undefined, undefined, true)
+      },
+      mounted ? t('node.newDocument') : 'New document'
+    )
   }
+
+  const handleTabActivate = useCallback((tabId: string, fileName: string) => {
+    if (tabId === activeTabId) return
+    void requestNavigationWithUnsavedGuard(() => activateTab(tabId), fileName)
+  }, [activateTab, activeTabId])
+
+  const handleTabClose = useCallback((tabId: string) => {
+    if (tabId !== activeTabId) {
+      closeTab(tabId)
+      return
+    }
+
+    void requestNavigationWithUnsavedGuard(() => closeTab(tabId), getActiveTab()?.fileName || null)
+  }, [activeTabId, closeTab, getActiveTab])
+
+  const handleCloseAllTabs = useCallback(() => {
+    void requestNavigationWithUnsavedGuard(() => {
+      closeAllTabs()
+      toast({
+        title: mounted ? t('file.closeAllTabs') : 'All tabs closed',
+      })
+    }, mounted ? t('common.closeAll') : 'Close all')
+  }, [closeAllTabs, mounted, t])
 
   // 处理标签拖拽开始
   const handleDragStart = useCallback((e: React.DragEvent, tabId: string) => {
@@ -287,7 +316,12 @@ export function EditorToolbar({
         <Button
           variant="ghost"
           size="icon"
-          onClick={handleOpen}
+          onClick={() => {
+            void requestNavigationWithUnsavedGuard(
+              handleOpen,
+              mounted ? t('sidebar.openFile') : 'Open file'
+            )
+          }}
           disabled={isLoading}
           className="h-8 w-8 transition-colors"
           style={{ color: themeConfig.muted }}
@@ -379,7 +413,7 @@ export function EditorToolbar({
                 <div
                   key={tab.id}
                   draggable
-                  onClick={() => activateTab(tab.id)}
+                  onClick={() => handleTabActivate(tab.id, tab.fileName)}
                   onMouseEnter={() => setHoveredTabId(tab.id)}
                   onMouseLeave={() => setHoveredTabId(null)}
                   onDragStart={(e) => handleDragStart(e, tab.id)}
@@ -469,7 +503,7 @@ export function EditorToolbar({
                   <button
                     onClick={(e) => {
                       e.stopPropagation()
-                      closeTab(tab.id)
+                      handleTabClose(tab.id)
                     }}
                     className={cn(
                       'p-0.5 rounded mr-1 flex-shrink-0 transition-all duration-150',
@@ -546,7 +580,8 @@ export function EditorToolbar({
             {/* 全部关闭 */}
             <DropdownMenuItem
               onClick={() => {
-                closeAllTabs()
+                handleCloseAllTabs()
+                return
                 toast({
                   title: mounted ? t('file.closeAllTabs') : '已关闭所有标签页',
                 })
@@ -580,7 +615,7 @@ export function EditorToolbar({
               tabs.map((tab) => (
                 <DropdownMenuItem
                   key={tab.id}
-                  onClick={() => activateTab(tab.id)}
+                  onClick={() => handleTabActivate(tab.id, tab.fileName)}
                   className="cursor-pointer"
                   style={{
                     color: tab.id === activeTabId ? themeConfig.primary : themeConfig.text,

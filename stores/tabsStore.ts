@@ -1,5 +1,5 @@
 /**
- * 多标签页状态管理 - Zustand Store
+ * Multi-tab state store powered by Zustand.
  */
 
 import { create } from 'zustand'
@@ -11,6 +11,7 @@ export interface Tab {
   id: string
   fileName: string
   content: string
+  savedContent?: string
   isModified: boolean
   isNew?: boolean
   fileId?: string | null
@@ -43,6 +44,7 @@ interface TabsStore {
   updateTabContent: (tabId: string, content: string) => void
   markTabAsModified: (tabId: string, isModified: boolean) => void
   markTabAsSaved: (tabId: string, fileName?: string) => void
+  discardTabChanges: (tabId: string) => void
   getActiveTab: () => Tab | null
   getTabContent: (tabId: string) => string | null
   openFileInCurrentTab: (tabId: string, fileName: string, content: string, fileId?: string) => void
@@ -53,12 +55,17 @@ function generateUniqueFileName(existingTabs: Tab[]): string {
   let index = 1
   let fileName = `未命名${index}.md`
 
-  while (existingTabs.some((t) => t.fileName === fileName)) {
-    index++
+  while (existingTabs.some((tab) => tab.fileName === fileName)) {
+    index += 1
     fileName = `未命名${index}.md`
   }
 
   return fileName
+}
+
+function getInitialContent(content?: string, isBlank?: boolean) {
+  if (isBlank) return ''
+  return content || '# 新文档\n\n开始编辑...'
 }
 
 export const useTabsStore = create<TabsStore>()(
@@ -70,10 +77,12 @@ export const useTabsStore = create<TabsStore>()(
 
         createTab: (fileName?: string, content?: string, isBlank?: boolean) => {
           const { tabs } = get()
+          const initialContent = getInitialContent(content, isBlank)
           const newTab: Tab = {
             id: nanoid(),
             fileName: fileName || generateUniqueFileName(tabs),
-            content: isBlank ? '' : content || '# 新文档\n\n开始编辑...',
+            content: initialContent,
+            savedContent: initialContent,
             isModified: false,
             isNew: !fileName || isBlank,
             sourceType: 'local',
@@ -91,19 +100,29 @@ export const useTabsStore = create<TabsStore>()(
           const { tabs } = get()
 
           if (fileId) {
-            const existingTabById = tabs.find((t) => t.fileId === fileId)
+            const existingTabById = tabs.find((tab) => tab.fileId === fileId)
             if (existingTabById) {
               set({ activeTabId: existingTabById.id })
               return existingTabById.id
             }
           }
 
-          const existingTab = tabs.find((t) => t.fileName === fileName && !t.fileId)
+          const existingTab = tabs.find((tab) => tab.fileName === fileName && !tab.fileId)
           if (existingTab) {
             if (fileId) {
               set({
-                tabs: tabs.map((t) =>
-                  t.id === existingTab.id ? { ...t, fileId, sourceType: 'local', gitMeta: null } : t
+                tabs: tabs.map((tab) =>
+                  tab.id === existingTab.id
+                    ? {
+                        ...tab,
+                        fileId,
+                        sourceType: 'local',
+                        gitMeta: null,
+                        fileName,
+                        content,
+                        savedContent: tab.savedContent ?? content,
+                      }
+                    : tab
                 ),
                 activeTabId: existingTab.id,
               })
@@ -117,6 +136,7 @@ export const useTabsStore = create<TabsStore>()(
             id: nanoid(),
             fileName,
             content,
+            savedContent: content,
             isModified: false,
             isNew: false,
             fileId: fileId || null,
@@ -145,6 +165,7 @@ export const useTabsStore = create<TabsStore>()(
                       ...tab,
                       sourceType: 'git',
                       isModified: tab.isModified ?? item.isModified,
+                      savedContent: tab.savedContent ?? item.savedContent ?? tab.content,
                     }
                   : item
               ),
@@ -156,6 +177,7 @@ export const useTabsStore = create<TabsStore>()(
           const newTab: Tab = {
             ...tab,
             id: nanoid(),
+            savedContent: tab.savedContent ?? tab.content,
             sourceType: 'git',
           }
 
@@ -169,24 +191,24 @@ export const useTabsStore = create<TabsStore>()(
 
         findTabByFileId: (fileId: string) => {
           const { tabs } = get()
-          return tabs.find((t) => t.fileId === fileId) || null
+          return tabs.find((tab) => tab.fileId === fileId) || null
         },
 
         updateTabFileId: (tabId: string, fileId: string) => {
           const { tabs } = get()
           set({
-            tabs: tabs.map((t) =>
-              t.id === tabId ? { ...t, fileId } : t
+            tabs: tabs.map((tab) =>
+              tab.id === tabId ? { ...tab, fileId } : tab
             ),
           })
         },
 
         closeTab: (tabId: string) => {
           const { tabs, activeTabId } = get()
-          const tabIndex = tabs.findIndex((t) => t.id === tabId)
+          const tabIndex = tabs.findIndex((tab) => tab.id === tabId)
           if (tabIndex === -1) return
 
-          const newTabs = tabs.filter((t) => t.id !== tabId)
+          const newTabs = tabs.filter((tab) => tab.id !== tabId)
           let newActiveTabId = activeTabId
 
           if (activeTabId === tabId) {
@@ -213,7 +235,7 @@ export const useTabsStore = create<TabsStore>()(
 
         activateTab: (tabId: string) => {
           const { tabs } = get()
-          if (tabs.some((t) => t.id === tabId)) {
+          if (tabs.some((tab) => tab.id === tabId)) {
             set({ activeTabId: tabId })
           }
         },
@@ -222,7 +244,7 @@ export const useTabsStore = create<TabsStore>()(
           const { tabs, activeTabId } = get()
           if (tabs.length <= 1 || !activeTabId) return
 
-          const currentIndex = tabs.findIndex((t) => t.id === activeTabId)
+          const currentIndex = tabs.findIndex((tab) => tab.id === activeTabId)
           const nextIndex = (currentIndex + 1) % tabs.length
           set({ activeTabId: tabs[nextIndex].id })
         },
@@ -231,7 +253,7 @@ export const useTabsStore = create<TabsStore>()(
           const { tabs, activeTabId } = get()
           if (tabs.length <= 1 || !activeTabId) return
 
-          const currentIndex = tabs.findIndex((t) => t.id === activeTabId)
+          const currentIndex = tabs.findIndex((tab) => tab.id === activeTabId)
           const prevIndex = (currentIndex - 1 + tabs.length) % tabs.length
           set({ activeTabId: tabs[prevIndex].id })
         },
@@ -239,8 +261,8 @@ export const useTabsStore = create<TabsStore>()(
         updateTabContent: (tabId: string, content: string) => {
           const { tabs } = get()
           set({
-            tabs: tabs.map((t) =>
-              t.id === tabId ? { ...t, content, isModified: true } : t
+            tabs: tabs.map((tab) =>
+              tab.id === tabId ? { ...tab, content, isModified: true } : tab
             ),
           })
         },
@@ -248,8 +270,8 @@ export const useTabsStore = create<TabsStore>()(
         markTabAsModified: (tabId: string, isModified: boolean) => {
           const { tabs } = get()
           set({
-            tabs: tabs.map((t) =>
-              t.id === tabId ? { ...t, isModified } : t
+            tabs: tabs.map((tab) =>
+              tab.id === tabId ? { ...tab, isModified } : tab
             ),
           })
         },
@@ -257,32 +279,63 @@ export const useTabsStore = create<TabsStore>()(
         markTabAsSaved: (tabId: string, fileName?: string) => {
           const { tabs } = get()
           set({
-            tabs: tabs.map((t) =>
-              t.id === tabId
-                ? { ...t, isModified: false, isNew: false, fileName: fileName || t.fileName }
-                : t
+            tabs: tabs.map((tab) =>
+              tab.id === tabId
+                ? {
+                    ...tab,
+                    isModified: false,
+                    isNew: false,
+                    fileName: fileName || tab.fileName,
+                    savedContent: tab.content,
+                  }
+                : tab
+            ),
+          })
+        },
+
+        discardTabChanges: (tabId: string) => {
+          const { tabs } = get()
+          set({
+            tabs: tabs.map((tab) =>
+              tab.id === tabId
+                ? {
+                    ...tab,
+                    content: tab.savedContent ?? tab.content,
+                    isModified: false,
+                  }
+                : tab
             ),
           })
         },
 
         getActiveTab: () => {
           const { tabs, activeTabId } = get()
-          return tabs.find((t) => t.id === activeTabId) || null
+          return tabs.find((tab) => tab.id === activeTabId) || null
         },
 
         getTabContent: (tabId: string) => {
           const { tabs } = get()
-          const tab = tabs.find((t) => t.id === tabId)
+          const tab = tabs.find((item) => item.id === tabId)
           return tab?.content || null
         },
 
         openFileInCurrentTab: (tabId: string, fileName: string, content: string, fileId?: string) => {
           const { tabs } = get()
           set({
-            tabs: tabs.map((t) =>
-              t.id === tabId
-                ? { ...t, fileName, content, isModified: false, isNew: false, fileId: fileId || null, sourceType: 'local', gitMeta: null }
-                : t
+            tabs: tabs.map((tab) =>
+              tab.id === tabId
+                ? {
+                    ...tab,
+                    fileName,
+                    content,
+                    savedContent: content,
+                    isModified: false,
+                    isNew: false,
+                    fileId: fileId || null,
+                    sourceType: 'local',
+                    gitMeta: null,
+                  }
+                : tab
             ),
           })
         },

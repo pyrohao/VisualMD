@@ -156,6 +156,12 @@ interface DocumentStore {
    * @param markdown Markdown文本
    */
   updateFromMarkdown: (markdown: string) => void
+
+  /**
+   * Refresh structure near a node after node-panel edits.
+   * Falls back from node -> parent -> full document rebuild.
+   */
+  refreshNodeStructure: (nodeId: string) => 'node' | 'parent' | 'document' | 'skipped'
   
   /**
    * 设置错误信息
@@ -506,6 +512,159 @@ function cloneTreeNode(node: TreeNode): TreeNode {
     ...node,
     children: node.children.map(child => cloneTreeNode(child)),
   }
+}
+
+type StructuralRefreshScope = 'node' | 'parent' | 'document' | 'skipped'
+
+function extractHeadingLevels(content?: string): number[] {
+  if (!content) {
+    return []
+  }
+
+  const headingRegex = /^(#{1,6})\s+(.+)$/gm
+  const levels: number[] = []
+  let match: RegExpExecArray | null
+
+  while ((match = headingRegex.exec(content)) !== null) {
+    levels.push(match[1].length)
+  }
+
+  return levels
+}
+
+function findMatchingNodeIndex(
+  parsedNode: TreeNode,
+  existingNodes: TreeNode[],
+  usedIndices: Set<number>,
+  preferredStart: number
+): number {
+  const matchesNode = (candidate: TreeNode) =>
+    candidate.title === parsedNode.title && candidate.level === parsedNode.level
+
+  for (let index = preferredStart; index < existingNodes.length; index += 1) {
+    if (!usedIndices.has(index) && matchesNode(existingNodes[index])) {
+      return index
+    }
+  }
+
+  for (let index = 0; index < preferredStart; index += 1) {
+    if (!usedIndices.has(index) && matchesNode(existingNodes[index])) {
+      return index
+    }
+  }
+
+  return -1
+}
+
+function mergeParsedNode(
+  parsedNode: TreeNode,
+  existingNode: TreeNode | null,
+  parentId: string | null
+): TreeNode {
+  const nextId = existingNode?.id ?? parsedNode.id
+
+  return {
+    ...parsedNode,
+    id: nextId,
+    parentId,
+    isVirtual: existingNode?.isVirtual ?? parsedNode.isVirtual,
+    isCollapsed: existingNode?.isCollapsed ?? parsedNode.isCollapsed ?? false,
+    isDetached: existingNode?.isDetached ?? parsedNode.isDetached,
+    detachedFrom: existingNode?.detachedFrom ?? parsedNode.detachedFrom,
+    position: existingNode?.position ?? parsedNode.position,
+    documentOrder: existingNode?.documentOrder ?? parsedNode.documentOrder,
+    children: mergeParsedChildren(parsedNode.children, existingNode?.children ?? [], nextId),
+  }
+}
+
+function mergeParsedChildren(
+  parsedChildren: TreeNode[],
+  existingChildren: TreeNode[],
+  parentId: string | null
+): TreeNode[] {
+  const usedIndices = new Set<number>()
+
+  return parsedChildren.map((parsedChild, index) => {
+    const matchIndex = findMatchingNodeIndex(parsedChild, existingChildren, usedIndices, index)
+    const existingChild = matchIndex === -1 ? null : existingChildren[matchIndex]
+
+    if (matchIndex !== -1) {
+      usedIndices.add(matchIndex)
+    }
+
+    return mergeParsedNode(parsedChild, existingChild, parentId)
+  })
+}
+
+function replaceNodeWithNodes(
+  root: TreeNode,
+  targetNodeId: string,
+  replacements: TreeNode[]
+): TreeNode {
+  const replaceChildren = (children: TreeNode[]): { children: TreeNode[]; replaced: boolean } => {
+    let replaced = false
+    const nextChildren: TreeNode[] = []
+
+    for (const child of children) {
+      if (child.id === targetNodeId) {
+        nextChildren.push(...replacements)
+        replaced = true
+        continue
+      }
+
+      const nested = replaceChildren(child.children)
+      if (nested.replaced) {
+        nextChildren.push({
+          ...child,
+          children: nested.children,
+        })
+        replaced = true
+      } else {
+        nextChildren.push(child)
+      }
+    }
+
+    return { children: nextChildren, replaced }
+  }
+
+  const result = replaceChildren(root.children)
+
+  if (!result.replaced) {
+    return root
+  }
+
+  return {
+    ...root,
+    children: result.children,
+  }
+}
+
+function reparseNodeSubtree(node: TreeNode): TreeNode | null {
+  const reparsedDocument = parseMarkdown(generateMarkdown(node))
+  if (reparsedDocument.root.children.length !== 1) {
+    return null
+  }
+
+  const reparsedNode = reparsedDocument.root.children[0]
+  if (reparsedNode.level !== node.level) {
+    return null
+  }
+
+  return mergeParsedNode(reparsedNode, node, node.parentId)
+}
+
+function reparseParentSubtree(parentNode: TreeNode): TreeNode[] | null {
+  const reparsedDocument = parseMarkdown(generateMarkdown(parentNode))
+
+  if (parentNode.isVirtual || parentNode.level === 0) {
+    return mergeParsedChildren(reparsedDocument.root.children, parentNode.children, parentNode.id)
+  }
+
+  if (reparsedDocument.root.children.length === 0) {
+    return null
+  }
+
+  return mergeParsedChildren(reparsedDocument.root.children, [parentNode], parentNode.parentId)
 }
 
 /**
@@ -1318,6 +1477,67 @@ export const useDocumentStore = create<DocumentStore>()(
               error: error instanceof Error ? error.message : 'Failed to parse markdown' 
             })
           }
+        },
+
+        refreshNodeStructure: (nodeId: string): StructuralRefreshScope => {
+          const { document } = get()
+          if (!document) {
+            return 'skipped'
+          }
+
+          const node = findNodeInTree(document.root, nodeId)
+          if (!node || node.isVirtual || node.level === 0 || node.isDetached) {
+            return 'skipped'
+          }
+
+          const headingLevels = extractHeadingLevels(node.content)
+          if (headingLevels.length === 0) {
+            return 'node'
+          }
+
+          const minHeadingLevel = Math.min(...headingLevels)
+
+          if (minHeadingLevel > node.level) {
+            const refreshedNode = reparseNodeSubtree(node)
+            if (refreshedNode) {
+              const newRoot = replaceNodeWithNodes(document.root, nodeId, [refreshedNode])
+              set({
+                document: {
+                  ...document,
+                  root: newRoot,
+                  isModified: true,
+                },
+                error: null,
+              })
+              return 'node'
+            }
+          }
+
+          const parentNode = node.parentId ? findNodeInTree(document.root, node.parentId) : null
+          if (parentNode && minHeadingLevel >= parentNode.level) {
+            const refreshedParentNodes = reparseParentSubtree(parentNode)
+            if (refreshedParentNodes) {
+              const newRoot = parentNode.id === document.root.id
+                ? {
+                    ...document.root,
+                    children: refreshedParentNodes,
+                  }
+                : replaceNodeWithNodes(document.root, parentNode.id, refreshedParentNodes)
+
+              set({
+                document: {
+                  ...document,
+                  root: newRoot,
+                  isModified: true,
+                },
+                error: null,
+              })
+              return 'parent'
+            }
+          }
+
+          get().updateFromMarkdown(generateFromState(document))
+          return 'document'
         },
 
         setError: (error: string | null) => {

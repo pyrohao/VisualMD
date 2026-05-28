@@ -52,6 +52,16 @@ interface GitStore {
   deleteFolder: (path: string) => Promise<void>
 }
 
+type GitStorePersistedState = {
+  config: GitProviderConfig
+  lastConnectedConfigSignature: string | null
+  connected: boolean
+  drafts: Record<string, GitDraftFile>
+  stagedChanges: StagedGitChange[]
+  currentDocumentId: string | null
+  expandedPaths: string[]
+}
+
 const DEFAULT_CONFIG: GitProviderConfig = {
   provider: 'github',
   token: '',
@@ -110,6 +120,61 @@ function draftReferencesRepoPath(draftPath: string, content: string, repoPath: s
 
 function getFolderPlaceholderPath(path: string) {
   return joinGitPath(normalizeGitPath(path), '.gitkeep')
+}
+
+function sanitizePersistedDrafts(input: unknown): Record<string, GitDraftFile> {
+  if (!input || typeof input !== 'object') return {}
+  return input as Record<string, GitDraftFile>
+}
+
+function sanitizePersistedStagedChanges(input: unknown): StagedGitChange[] {
+  if (!Array.isArray(input)) return []
+  return input as StagedGitChange[]
+}
+
+function sanitizePersistedExpandedPaths(input: unknown): string[] {
+  if (!Array.isArray(input)) return []
+  return input.filter((item): item is string => typeof item === 'string')
+}
+
+export function migrateGitStorePersistedState(
+  persistedState: unknown,
+  fromVersion: number
+): Partial<GitStorePersistedState> {
+  if (!persistedState || typeof persistedState !== 'object') {
+    return {}
+  }
+
+  const state = persistedState as Partial<GitStorePersistedState>
+  const normalizedConfig: GitProviderConfig = {
+    ...DEFAULT_CONFIG,
+    ...(state.config || {}),
+    token: normalizeEncryptedSecret(state.config?.token || ''),
+  }
+
+  // v1 only persisted connection config. v2 extends this with local git workspace state.
+  if (fromVersion < 2) {
+    return {
+      config: normalizedConfig,
+      lastConnectedConfigSignature: state.lastConnectedConfigSignature || null,
+      connected: state.connected === true,
+      drafts: sanitizePersistedDrafts(state.drafts),
+      stagedChanges: sanitizePersistedStagedChanges(state.stagedChanges),
+      currentDocumentId: typeof state.currentDocumentId === 'string' ? state.currentDocumentId : null,
+      expandedPaths: sanitizePersistedExpandedPaths(state.expandedPaths),
+    }
+  }
+
+  return {
+    ...state,
+    config: normalizedConfig,
+    lastConnectedConfigSignature: state.lastConnectedConfigSignature || null,
+    connected: state.connected === true,
+    drafts: sanitizePersistedDrafts(state.drafts),
+    stagedChanges: sanitizePersistedStagedChanges(state.stagedChanges),
+    currentDocumentId: typeof state.currentDocumentId === 'string' ? state.currentDocumentId : null,
+    expandedPaths: sanitizePersistedExpandedPaths(state.expandedPaths),
+  }
 }
 
 export const useGitStore = create<GitStore>()(
@@ -914,26 +979,38 @@ export const useGitStore = create<GitStore>()(
       }),
       {
         name: 'git-store-v1',
+        version: 2,
+        migrate: (persistedState, version) => migrateGitStorePersistedState(persistedState, version),
         partialize: (state) => ({
           config: state.config,
           lastConnectedConfigSignature: state.lastConnectedConfigSignature,
           connected: state.connected,
+          drafts: state.drafts,
+          stagedChanges: state.stagedChanges,
+          currentDocumentId: state.currentDocumentId,
+          expandedPaths: state.expandedPaths,
         }),
         onRehydrateStorage: () => (state) => {
           if (!state) return
 
+          const migratedState = migrateGitStorePersistedState(state, 2)
           const normalizedConfig: GitProviderConfig = {
             ...DEFAULT_CONFIG,
-            ...state.config,
-            token: normalizeEncryptedSecret(state.config?.token || ''),
+            ...(migratedState.config || {}),
+            token: normalizeEncryptedSecret(migratedState.config?.token || ''),
           }
           const lastConnectedConfigSignature = state.lastConnectedConfigSignature || null
           const hasValidConfig = !getConfigError(normalizedConfig)
           const configSignatureMatchesLastConnection =
             !!lastConnectedConfigSignature &&
             buildConfigSignature(normalizedConfig) === lastConnectedConfigSignature
-          const wasPreviouslyConnected = state.connected === true
+          const wasPreviouslyConnected = migratedState.connected === true
           const shouldRestoreConnection = hasValidConfig && (wasPreviouslyConnected || configSignatureMatchesLastConnection)
+          const restoredDrafts = sanitizePersistedDrafts(migratedState.drafts)
+          const restoredCurrentDocumentId =
+            migratedState.currentDocumentId && restoredDrafts[migratedState.currentDocumentId]
+              ? migratedState.currentDocumentId
+              : null
 
           useGitStore.setState((currentState) => ({
             config: {
@@ -942,6 +1019,10 @@ export const useGitStore = create<GitStore>()(
             },
             lastConnectedConfigSignature,
             connected: shouldRestoreConnection,
+            drafts: restoredDrafts,
+            stagedChanges: sanitizePersistedStagedChanges(migratedState.stagedChanges),
+            currentDocumentId: restoredCurrentDocumentId,
+            expandedPaths: sanitizePersistedExpandedPaths(migratedState.expandedPaths),
           }))
 
           if (!shouldRestoreConnection) return
@@ -950,6 +1031,13 @@ export const useGitStore = create<GitStore>()(
             void useGitStore.getState().validateAndLoad().catch(() => {
               // Keep startup silent here; store state is updated by validateAndLoad.
             })
+
+            const { currentDocumentId } = useGitStore.getState()
+            if (currentDocumentId) {
+              void useGitStore.getState().fetchRemoteFile(currentDocumentId).catch(() => {
+                // Keep startup silent here; local draft remains authoritative until user refreshes manually.
+              })
+            }
           })
         },
       }

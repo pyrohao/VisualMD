@@ -1,9 +1,11 @@
 'use client'
 
 import { useDocumentStore } from '@/stores/documentStore'
+import { useFileSystemStore } from '@/stores/fileSystemStore'
+import { useUnsavedChangesStore } from '@/stores/unsavedChangesStore'
 import { useThemeStore, themeConfigs, type ThemeMode } from '@/stores/themeStore'
 import { useTranslation } from '@/stores/languageStore'
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
 import remarkGfm from 'remark-gfm'
@@ -22,6 +24,7 @@ import { joinGitPath, normalizeGitPath } from '@/lib/git/utils'
 import { getGitProviderClient } from '@/lib/git/providers'
 import { decryptSecret } from '@/lib/secret-storage'
 import { getGitMarkdownImagePasteResult } from '@/lib/git-asset-paste'
+import { persistActiveTabSave } from '@/lib/editor-persistence'
 import type { GitDraftFile, StagedGitChange } from '@/lib/git/types'
 import type { Tab } from '@/stores/tabsStore'
 
@@ -321,6 +324,7 @@ export function MarkdownPreview() {
   const [editContent, setEditContent] = useState('')
   const [isTransitioning, setIsTransitioning] = useState(false)
   const [previewNonce, setPreviewNonce] = useState(0)
+  const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
   const { t } = useTranslation()
 
@@ -344,6 +348,98 @@ export function MarkdownPreview() {
   useEffect(() => {
     setEditContent(markdown)
   }, [markdown])
+
+  const isEditDirty = mode === 'edit' && editContent !== markdown
+
+  const flushEditBuffer = useCallback((persistLocalSave: boolean) => {
+    if (editContent === markdown) return
+
+    updateFromMarkdown(editContent)
+    setPreviewNonce((value) => value + 1)
+
+    if (!activeTabId) return
+
+    useTabsStore.getState().updateTabContent(activeTabId, editContent)
+
+    if (activeTab?.sourceType === 'git') {
+      useTabsStore.getState().markTabAsModified(activeTabId, true)
+      useUnsavedChangesStore.getState().setEditorDirty('markdown-preview', false)
+      return
+    }
+
+    if (persistLocalSave) {
+      persistActiveTabSave()
+      useUnsavedChangesStore.getState().setEditorDirty('markdown-preview', false)
+    }
+  }, [activeTab?.sourceType, activeTabId, editContent, markdown, updateFromMarkdown])
+
+  useEffect(() => {
+    useUnsavedChangesStore.getState().registerEditor('markdown-preview', {
+      save: () => {
+        if (autoSaveTimeoutRef.current) {
+          clearTimeout(autoSaveTimeoutRef.current)
+          autoSaveTimeoutRef.current = null
+        }
+        flushEditBuffer(false)
+      },
+      discard: () => {
+        if (autoSaveTimeoutRef.current) {
+          clearTimeout(autoSaveTimeoutRef.current)
+          autoSaveTimeoutRef.current = null
+        }
+        setEditContent(markdown)
+        useUnsavedChangesStore.getState().setEditorDirty('markdown-preview', false)
+      },
+    })
+
+    return () => {
+      if (autoSaveTimeoutRef.current) {
+        clearTimeout(autoSaveTimeoutRef.current)
+        autoSaveTimeoutRef.current = null
+      }
+      useUnsavedChangesStore.getState().unregisterEditor('markdown-preview')
+    }
+  }, [flushEditBuffer, markdown])
+
+  useEffect(() => {
+    useUnsavedChangesStore.getState().setEditorDirty('markdown-preview', isEditDirty)
+
+    if (!isEditDirty || !activeTabId) {
+      return
+    }
+
+    useTabsStore.getState().markTabAsModified(activeTabId, true)
+
+    if (activeTab?.sourceType !== 'git') {
+      const { currentFileId, markFileAsModified } = useFileSystemStore.getState()
+      if (currentFileId) {
+        markFileAsModified(currentFileId)
+      }
+    }
+  }, [activeTab?.sourceType, activeTabId, isEditDirty])
+
+  useEffect(() => {
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current)
+      autoSaveTimeoutRef.current = null
+    }
+
+    if (!isEditDirty || mode !== 'edit' || activeTab?.sourceType === 'git') {
+      return
+    }
+
+    autoSaveTimeoutRef.current = setTimeout(() => {
+      flushEditBuffer(true)
+      autoSaveTimeoutRef.current = null
+    }, 1000)
+
+    return () => {
+      if (autoSaveTimeoutRef.current) {
+        clearTimeout(autoSaveTimeoutRef.current)
+        autoSaveTimeoutRef.current = null
+      }
+    }
+  }, [activeTab?.sourceType, flushEditBuffer, isEditDirty, mode])
 
   useEffect(() => {
     let cancelled = false
@@ -401,15 +497,14 @@ export function MarkdownPreview() {
     setIsTransitioning(true)
 
     if (mode === 'edit' && newMode === 'preview') {
-      updateFromMarkdown(editContent)
-      setPreviewNonce((value) => value + 1)
+      flushEditBuffer(activeTab?.sourceType !== 'git')
     }
 
     setTimeout(() => {
       setMode(newMode)
       setIsTransitioning(false)
     }, 150)
-  }, [editContent, mode, updateFromMarkdown])
+  }, [activeTab?.sourceType, flushEditBuffer, mode])
 
   const handleEditChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setEditContent(e.target.value)
@@ -478,17 +573,21 @@ export function MarkdownPreview() {
 
   return (
     <div className="flex h-full flex-col" style={{ backgroundColor: themeConfig.background }}>
-      <div className="flex h-14 items-center justify-between border-b px-5" style={{ backgroundColor: themeConfig.card, borderColor: themeConfig.border }}>
-        <div className="flex items-center">
-          <h2 className="text-lg font-semibold" style={{ color: themeConfig.heading }}>
+      <div className="flex h-14 items-center justify-between gap-4 border-b px-5" style={{ backgroundColor: themeConfig.card, borderColor: themeConfig.border }}>
+        <div className="flex min-w-0 flex-1 items-center">
+          <h2 className="flex-shrink-0 whitespace-nowrap text-lg font-semibold" style={{ color: themeConfig.heading }}>
             {mode === 'preview' ? (mounted ? t('preview.preview') : 'Document Preview') : (mounted ? t('preview.edit') : 'Edit Document')}
           </h2>
-          <span className="ml-3 text-sm" style={{ color: themeConfig.muted }}>
+          <span
+            className="ml-3 block min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-sm"
+            style={{ color: themeConfig.muted }}
+            title={document.fileName || undefined}
+          >
             {document.fileName || (mounted ? t('file.untitled') : 'Untitled')}
           </span>
         </div>
 
-        <div className="flex items-center rounded-lg p-1" style={{ backgroundColor: themeConfig.background }}>
+        <div className="flex flex-shrink-0 items-center rounded-lg p-1" style={{ backgroundColor: themeConfig.background }}>
           <button
             onClick={() => handleModeChange('preview')}
             className={cn(

@@ -44,8 +44,10 @@ import { useThemeStore } from '@/stores/themeStore'
 import { useTranslation } from '@/stores/languageStore'
 import { useGitStore } from '@/stores/gitStore'
 import { useTabsStore } from '@/stores/tabsStore'
+import { saveDirtyEditors } from '@/stores/unsavedChangesStore'
 import { toast } from '@/hooks/use-toast'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
+import { persistActiveTabSave } from '@/lib/editor-persistence'
 
 // 注册自定义节点类型
 const nodeTypes: NodeTypes = {
@@ -69,7 +71,6 @@ export function FlowCanvas() {
     connectNode,
     error,
     clearError,
-    markAsSaved,
   } = useDocumentStore()
 
   const { getThemeConfig } = useThemeStore()
@@ -82,21 +83,13 @@ export function FlowCanvas() {
     enableUndoRedo: true,
     enableSave: true,
     onSave: () => {
-      const activeTab = useTabsStore.getState().getActiveTab()
-      if (activeTab?.sourceType === 'git' && activeTab.fileId) {
-        const latestMarkdown = useDocumentStore.getState().getCurrentMarkdown()
-        useGitStore.getState().updateDraftContent(activeTab.fileId, latestMarkdown)
-        useTabsStore.getState().updateTabContent(activeTab.id, latestMarkdown)
-        markAsSaved()
-        toast({
-          title: t('git.draftSaved'),
-        })
-        return
-      }
+      void saveDirtyEditors().then(() => {
+        const activeTab = useTabsStore.getState().getActiveTab()
+        persistActiveTabSave()
 
-      markAsSaved()
-      toast({
-        title: t('toast.saved'),
+        toast({
+          title: activeTab?.sourceType === 'git' ? t('git.draftSaved') : t('toast.saved'),
+        })
       })
     },
   })

@@ -23,6 +23,7 @@ import { useTranslation } from '@/stores/languageStore'
 import { useGitStore } from '@/stores/gitStore'
 import { useSidebarStore } from '@/stores/sidebarStore'
 import { useTabsStore } from '@/stores/tabsStore'
+import { requestNavigationWithUnsavedGuard } from '@/stores/unsavedChangesStore'
 import { useDocumentStore } from '@/stores/documentStore'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { buildGitDocumentId, getGitFileName, joinGitPath, normalizeGitPath } from '@/lib/git/utils'
@@ -313,7 +314,8 @@ export function GitPanel() {
     openGitFileInTab({
       fileName: draft.name,
       content: draftContent,
-      isModified: draft.isDirty,
+      savedContent: draftContent,
+      isModified: false,
       isNew: false,
       fileId: draft.documentId,
       sourceType: 'git',
@@ -331,8 +333,10 @@ export function GitPanel() {
   }
 
   const handleOpenFile = async (path: string) => {
-    const draft = await openFile(path)
-    openDraftInTab(buildGitDocumentId(config, draft.path))
+    await requestNavigationWithUnsavedGuard(async () => {
+      const draft = await openFile(path)
+      openDraftInTab(buildGitDocumentId(config, draft.path))
+    }, getGitFileName(path))
   }
 
   const handleConnect = async () => {
@@ -395,21 +399,27 @@ export function GitPanel() {
     if (!change) return
 
     if (change.kind === 'git-draft' && change.documentId) {
-      openDraftInTab(change.documentId)
+      await requestNavigationWithUnsavedGuard(() => {
+        openDraftInTab(change.documentId!)
+      }, change.label)
       return
     }
 
     if (change.kind === 'git-delete-file' && change.documentId) {
-      openDraftInTab(change.documentId, change.originalContent)
+      await requestNavigationWithUnsavedGuard(() => {
+        openDraftInTab(change.documentId!, change.originalContent)
+      }, change.label)
       return
     }
 
     if (change.kind === 'local-file' && change.localFileId) {
       const file = useFileSystemStore.getState().files.find((item) => item.id === change.localFileId)
       if (!file) return
-      useFileSystemStore.getState().openFile(change.localFileId)
-      openFileInTab(file.name, file.content, change.localFileId)
-      loadDocument(file.content, file.name, change.localFileId)
+      await requestNavigationWithUnsavedGuard(() => {
+        useFileSystemStore.getState().openFile(change.localFileId!)
+        openFileInTab(file.name, file.content, change.localFileId)
+        loadDocument(file.content, file.name, change.localFileId)
+      }, file.name)
     }
   }
 
