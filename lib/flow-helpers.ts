@@ -2,14 +2,17 @@ import type { Edge, Node } from '@xyflow/react'
 import type { TreeNode } from '@/types/tree'
 import {
   calculateTreeLayoutResult,
+  type TreeLayoutMode,
   type BranchDirection,
 } from './layout-engine'
 
 export const FLOW_HANDLE_IDS = {
   sourceLeft: 'source-left',
   sourceRight: 'source-right',
+  sourceBottom: 'source-bottom',
   targetLeft: 'target-left',
   targetRight: 'target-right',
+  targetTop: 'target-top',
 } as const
 
 export interface FlowNodeData extends Record<string, unknown> {
@@ -17,6 +20,7 @@ export interface FlowNodeData extends Record<string, unknown> {
   level: number
   isCollapsed: boolean
   hasChildren: boolean
+  layoutMode: TreeLayoutMode
   content?: string
   childrenCount: number
   isDetached?: boolean
@@ -45,23 +49,31 @@ export function getHandlesForDirection(direction: BranchDirection): {
     }
   }
 
+  if (direction === 'down') {
+    return {
+      sourceHandle: FLOW_HANDLE_IDS.sourceBottom,
+      targetHandle: FLOW_HANDLE_IDS.targetTop,
+    }
+  }
+
   return {
     sourceHandle: FLOW_HANDLE_IDS.sourceRight,
     targetHandle: FLOW_HANDLE_IDS.targetLeft,
   }
 }
 
-function getVisibleTreeLayout(root: TreeNode, detachedNodes: TreeNode[]) {
+function getVisibleTreeLayout(root: TreeNode, detachedNodes: TreeNode[], layoutMode: TreeLayoutMode) {
   if (shouldHideVirtualRoot(root)) {
-    return calculateTreeLayoutResult(root.children[0], detachedNodes)
+    return calculateTreeLayoutResult(root.children[0], detachedNodes, undefined, layoutMode)
   }
 
-  return calculateTreeLayoutResult(root, detachedNodes)
+  return calculateTreeLayoutResult(root, detachedNodes, undefined, layoutMode)
 }
 
 function createNodeData(
   node: TreeNode,
   direction: BranchDirection,
+  layoutMode: TreeLayoutMode,
   orderIndex?: number,
   siblingsCount?: number
 ): FlowNodeData {
@@ -70,6 +82,7 @@ function createNodeData(
     level: node.level,
     isCollapsed: node.isCollapsed || false,
     hasChildren: node.children.length > 0,
+    layoutMode,
     content: node.content,
     childrenCount: node.children.length,
     isDetached: node.isDetached || false,
@@ -82,14 +95,15 @@ function createNodeData(
 
 export function treeToNodesAndEdges(
   tree: TreeNode,
-  detachedNodes: TreeNode[] = []
+  detachedNodes: TreeNode[] = [],
+  layoutMode: TreeLayoutMode = 'balanced'
 ): {
   nodes: Node<FlowNodeData>[]
   edges: Edge[]
 } {
   const nodes: Node<FlowNodeData>[] = []
   const edges: Edge[] = []
-  const { positions, directions } = getVisibleTreeLayout(tree, detachedNodes)
+  const { positions, directions } = getVisibleTreeLayout(tree, detachedNodes, layoutMode)
   const hideVirtualRoot = shouldHideVirtualRoot(tree)
 
   function pushEdge(parentId: string, child: TreeNode, fallbackDirection: BranchDirection) {
@@ -137,7 +151,7 @@ export function treeToNodesAndEdges(
       id: node.id,
       type: 'headingNode',
       position,
-      data: createNodeData(node, branchDirection, orderIndex, siblingsCount),
+      data: createNodeData(node, branchDirection, layoutMode, orderIndex, siblingsCount),
     })
 
     if (parentId && !node.isDetached) {
@@ -163,6 +177,7 @@ export function treeToNodesAndEdges(
       data: createNodeData(
         { ...detachedNode, isDetached: true },
         branchDirection,
+        layoutMode,
         index + 1,
         detachedNodes.length
       ),
@@ -185,7 +200,7 @@ export function treeToNodesAndEdges(
           id: child.id,
           type: 'headingNode',
           position: childPosition,
-          data: createNodeData({ ...child, isDetached: true }, childDirection),
+          data: createNodeData({ ...child, isDetached: true }, childDirection, layoutMode),
         })
 
         pushEdge(parentId, { ...child, isDetached: true }, childDirection)
@@ -319,14 +334,13 @@ export function moveNodeInTree(
   if (!nodeToMove) {
     return tree
   }
-  const movedNode = nodeToMove
 
   const treeWithoutNode = deleteNodeFromTree(tree, nodeId)
 
   function addNodeToParent(node: TreeNode): TreeNode {
     if (node.id === newParentId) {
       const newChildren = [...node.children]
-      newChildren.splice(index, 0, movedNode)
+      newChildren.splice(index, 0, nodeToMove)
       return { ...node, children: newChildren }
     }
 

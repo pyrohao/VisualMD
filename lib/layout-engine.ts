@@ -1,15 +1,17 @@
 /**
  * 树形布局算法
  *
- * 提供脑图式布局计算：
- * 1. 根节点居中
- * 2. 一级分支左右平铺
- * 3. 同侧子树沿分支方向继续展开
+ * 提供多种布局计算：
+ * 1. 左右平衡（默认）
+ * 2. 全左布局
+ * 3. 全右布局
+ * 4. 向下布局（组织架构图）
  */
 
 import type { TreeNode, Position } from '@/types/tree'
 
-export type BranchDirection = 'left' | 'right' | 'center'
+export type BranchDirection = 'left' | 'right' | 'center' | 'down'
+export type TreeLayoutMode = 'balanced' | 'left' | 'right' | 'down'
 
 /**
  * 布局配置参数
@@ -33,7 +35,7 @@ export interface LayoutResult {
 }
 
 /**
- * 默认布局配置 - 脑图风格
+ * 默认布局配置
  */
 export const DEFAULT_LAYOUT_CONFIG: LayoutConfig = {
   levelWidth: 240,
@@ -92,18 +94,23 @@ function inferDirectionFromX(
   return fallback
 }
 
-/**
- * 计算脑图布局及分支方向
- */
-export function calculateTreeLayoutResult(
+function calculateHorizontalTreeLayoutResult(
   root: TreeNode,
-  detachedNodes: TreeNode[] = [],
-  config: LayoutConfig = DEFAULT_LAYOUT_CONFIG
+  detachedNodes: TreeNode[],
+  config: LayoutConfig,
+  rootMode: 'balanced' | 'left' | 'right'
 ): LayoutResult {
   const positions = new Map<string, Position>()
   const directions = new Map<string, BranchDirection>()
 
-  const { leftChildren, rightChildren } = splitRootChildren(root.children)
+  const rootChildrenSplit =
+    rootMode === 'left'
+      ? { leftChildren: root.children, rightChildren: [] as TreeNode[] }
+      : rootMode === 'right'
+        ? { leftChildren: [] as TreeNode[], rightChildren: root.children }
+        : splitRootChildren(root.children)
+
+  const { leftChildren, rightChildren } = rootChildrenSplit
   const maxLeftDepth = Math.max(0, ...leftChildren.map(calculateBranchDepth))
   const centerX = config.startX + maxLeftDepth * config.levelWidth
 
@@ -111,7 +118,7 @@ export function calculateTreeLayoutResult(
     node: TreeNode,
     depth: number,
     startY: number,
-    direction: Exclude<BranchDirection, 'center'>
+    direction: Exclude<BranchDirection, 'center' | 'down'>
   ): number => {
     directions.set(node.id, direction)
 
@@ -143,7 +150,7 @@ export function calculateTreeLayoutResult(
 
   const layoutGroup = (
     nodes: TreeNode[],
-    direction: Exclude<BranchDirection, 'center'>,
+    direction: Exclude<BranchDirection, 'center' | 'down'>,
     startY: number
   ): number => {
     let currentY = startY
@@ -227,7 +234,7 @@ export function calculateTreeLayoutResult(
     depth: number,
     startY: number,
     startX: number,
-    direction: Exclude<BranchDirection, 'center'>
+    direction: Exclude<BranchDirection, 'center' | 'down'>
   ): number => {
     const x =
       direction === 'left'
@@ -284,15 +291,59 @@ export function calculateTreeLayoutResult(
   return { positions, directions }
 }
 
+function rotateToDownLayout(base: LayoutResult, rootId: string): LayoutResult {
+  const positions = new Map<string, Position>()
+  const directions = new Map<string, BranchDirection>()
+
+  const rootPosition = base.positions.get(rootId) ?? { x: 0, y: 0 }
+
+  for (const [nodeId, position] of base.positions.entries()) {
+    positions.set(nodeId, {
+      x: rootPosition.x + (position.y - rootPosition.y),
+      y: rootPosition.y + (position.x - rootPosition.x),
+    })
+
+    directions.set(nodeId, nodeId === rootId ? 'center' : 'down')
+  }
+
+  return { positions, directions }
+}
+
+/**
+ * 计算树布局及分支方向
+ */
+export function calculateTreeLayoutResult(
+  root: TreeNode,
+  detachedNodes: TreeNode[] = [],
+  config: LayoutConfig = DEFAULT_LAYOUT_CONFIG,
+  mode: TreeLayoutMode = 'balanced'
+): LayoutResult {
+  if (mode === 'down') {
+    const rightLayout = calculateHorizontalTreeLayoutResult(root, detachedNodes, config, 'right')
+    return rotateToDownLayout(rightLayout, root.id)
+  }
+
+  if (mode === 'left') {
+    return calculateHorizontalTreeLayoutResult(root, detachedNodes, config, 'left')
+  }
+
+  if (mode === 'right') {
+    return calculateHorizontalTreeLayoutResult(root, detachedNodes, config, 'right')
+  }
+
+  return calculateHorizontalTreeLayoutResult(root, detachedNodes, config, 'balanced')
+}
+
 /**
  * 兼容旧调用：只返回位置映射
  */
 export function calculateTreeLayout(
   root: TreeNode,
   detachedNodes: TreeNode[] = [],
-  config: LayoutConfig = DEFAULT_LAYOUT_CONFIG
+  config: LayoutConfig = DEFAULT_LAYOUT_CONFIG,
+  mode: TreeLayoutMode = 'balanced'
 ): Map<string, Position> {
-  return calculateTreeLayoutResult(root, detachedNodes, config).positions
+  return calculateTreeLayoutResult(root, detachedNodes, config, mode).positions
 }
 
 /**

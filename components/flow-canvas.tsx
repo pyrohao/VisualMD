@@ -27,7 +27,7 @@ import {
   Panel,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { FileJson, LayoutGrid, Trash2 } from 'lucide-react'
+import { FileJson, Trash2 } from 'lucide-react'
 import { Button } from './ui/button'
 import { MarkdownNode } from './markdown-node'
 import { CreateNodesDialog } from './create-nodes-dialog'
@@ -39,15 +39,12 @@ import {
   type FlowNodeData,
 } from '@/lib/flow-helpers'
 import { useDocumentStore } from '@/stores/documentStore'
+import { useCanvasLayoutStore } from '@/stores/canvasLayoutStore'
 import type { TreeNode } from '@/types/tree'
 import { useThemeStore } from '@/stores/themeStore'
 import { useTranslation } from '@/stores/languageStore'
-import { useGitStore } from '@/stores/gitStore'
-import { useTabsStore } from '@/stores/tabsStore'
-import { saveDirtyEditors } from '@/stores/unsavedChangesStore'
 import { toast } from '@/hooks/use-toast'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
-import { persistActiveTabSave } from '@/lib/editor-persistence'
 
 // 注册自定义节点类型
 const nodeTypes: NodeTypes = {
@@ -57,6 +54,7 @@ const nodeTypes: NodeTypes = {
 const CREATE_CHILD_HANDLE_IDS = new Set<string>([
   FLOW_HANDLE_IDS.sourceLeft,
   FLOW_HANDLE_IDS.sourceRight,
+  FLOW_HANDLE_IDS.sourceBottom,
 ])
 
 export function FlowCanvas() {
@@ -71,11 +69,13 @@ export function FlowCanvas() {
     connectNode,
     error,
     clearError,
+    markAsSaved,
   } = useDocumentStore()
 
   const { getThemeConfig } = useThemeStore()
   const themeConfig = getThemeConfig()
   const { t } = useTranslation()
+  const { mode: layoutMode } = useCanvasLayoutStore()
   const hideVirtualRoot = document ? shouldHideVirtualRoot(document.root) : false
 
   // 启用键盘快捷键
@@ -83,13 +83,9 @@ export function FlowCanvas() {
     enableUndoRedo: true,
     enableSave: true,
     onSave: () => {
-      void saveDirtyEditors().then(() => {
-        const activeTab = useTabsStore.getState().getActiveTab()
-        persistActiveTabSave()
-
-        toast({
-          title: activeTab?.sourceType === 'git' ? t('git.draftSaved') : t('toast.saved'),
-        })
+      markAsSaved()
+      toast({
+        title: t('toast.saved'),
       })
     },
   })
@@ -101,8 +97,8 @@ export function FlowCanvas() {
       return { nodes: [], edges: [] }
     }
     const detachedNodes = (document as any).detachedNodes || []
-    return treeToNodesAndEdges(document.root, detachedNodes)
-  }, [document?.root, (document as any)?.detachedNodes])
+    return treeToNodesAndEdges(document.root, detachedNodes, layoutMode)
+  }, [document?.root, (document as any)?.detachedNodes, layoutMode])
 
   // React Flow??
 
@@ -140,7 +136,11 @@ export function FlowCanvas() {
     if (!document) return
 
     const detachedNodes = (document as any).detachedNodes || []
-    const { nodes: newNodes, edges: newEdges } = treeToNodesAndEdges(document.root, detachedNodes)
+    const { nodes: newNodes, edges: newEdges } = treeToNodesAndEdges(
+      document.root,
+      detachedNodes,
+      layoutMode
+    )
 
     // 添加回调函数到节点数据
 
@@ -180,7 +180,7 @@ export function FlowCanvas() {
     setNodes(nodesWithCallbacks as Node<FlowNodeData>[])
     setEdges(edgesWithStyle)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [document])
+  }, [document, layoutMode])
 
   // 当选中的边变化时，更新已有边的样式
   useEffect(() => {
@@ -722,32 +722,12 @@ export function FlowCanvas() {
     setSelectedEdgeId(null)
   }, [selectNode])
 
-  // 一键整理布局
-
-  const handleLayout = useCallback(() => {
-    const latestDocument = useDocumentStore.getState().document
-    if (!latestDocument) return
-
-    // 重新计算布局（包含断开的节点）
-
-    const detachedNodes = (latestDocument as any).detachedNodes || []
-    const { nodes: layoutNodes } = treeToNodesAndEdges(latestDocument.root, detachedNodes)
-    const positions = new Map(layoutNodes.map((node) => [node.id, node.position]))
-
-    // 更新节点位置
-    setNodes((nds) =>
-      nds.map((node) => ({
-        ...node,
-        position: positions.get(node.id) || node.position,
-      }))
-    )
-
-    // 适应视图
-    setTimeout(() => {
-      fitView({ padding: 0.2, duration: 800 })
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fitView({ padding: 0.2, duration: 600 })
     }, 100)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    return () => clearTimeout(timer)
+  }, [fitView, layoutMode])
 
   // 监听错误并自动清除
   useEffect(() => {
@@ -842,50 +822,37 @@ export function FlowCanvas() {
           showInteractive={false}
         />
 
-        {/* 一键整理布局按钮 */}
-        <Panel
-          position="top-right"
-          className="z-20"
-          style={{
-            top: 16,
-            right: 16,
-            margin: 0,
-            zIndex: 20,
-          }}
-        >
-          <div className="flex gap-2">
-            {hideVirtualRoot && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => selectNode('root')}
-                className="gap-2 shadow-md hover:shadow-lg transition-shadow"
-                style={{
-                  backgroundColor: themeConfig.card,
-                  borderColor: themeConfig.border,
-                  color: themeConfig.text,
-                }}
-              >
-                <FileJson className="h-4 w-4" />
-                {t('node.metadata')}
-              </Button>
-            )}
+        {/* 元数据按钮 */}
+        {hideVirtualRoot && (
+          <Panel
+            position="top-right"
+            className="z-20"
+            style={{
+              top: 16,
+              right: 16,
+              margin: 0,
+              zIndex: 20,
+            }}
+          >
             <Button
               variant="outline"
               size="sm"
-              onClick={handleLayout}
-              className="gap-2 shadow-md hover:shadow-lg transition-shadow"
+              onClick={() => selectNode('root')}
+              className="h-9 gap-2 transition-shadow hover:shadow-lg hover:[background-color:var(--button-hover-bg)]"
               style={{
-                backgroundColor: themeConfig.card,
+                '--button-hover-bg': themeConfig.hover,
+                backgroundColor: `${themeConfig.card}e8`,
                 borderColor: themeConfig.border,
                 color: themeConfig.text,
-              }}
+                boxShadow: `0 8px 20px ${themeConfig.border}55`,
+                backdropFilter: 'blur(8px)',
+              } as React.CSSProperties}
             >
-              <LayoutGrid className="h-4 w-4" />
-              {t('canvas.layout')}
+              <FileJson className="h-4 w-4" />
+              {t('node.metadata')}
             </Button>
-          </div>
-        </Panel>
+          </Panel>
+        )}
 
         {/* 小地图 */}
         <MiniMap

@@ -30,6 +30,7 @@ function MarkdownNodeComponent({ id, data, selected }: MarkdownNodeProps) {
   const {
     label,
     level,
+    layoutMode = 'balanced',
     onSelect,
     isDetached,
     isVirtual,
@@ -110,17 +111,22 @@ function MarkdownNodeComponent({ id, data, selected }: MarkdownNodeProps) {
         : ['#eff6ff', '#eff6ff', '#ecfdf5', '#fffbeb', '#f5f3ff', '#fff7ed', '#f9fafb'][level] ||
           '#eff6ff'
 
-  const leftAccentWidth = branchDirection === 'left' ? '2px' : '5px'
-  const rightAccentWidth = branchDirection === 'left' ? '5px' : '2px'
+  const isLeftBranch = branchDirection === 'left'
+  const isRightBranch = branchDirection === 'right'
+  const isCenterBranch = branchDirection === 'center'
+  const isDownLayout = layoutMode === 'down'
+  const showVerticalHandles = isDownLayout
+  const showLeftSourceHandle =
+    !isDownLayout &&
+    (isLeftBranch || (isCenterBranch && (layoutMode === 'balanced' || layoutMode === 'left')))
+  const showRightSourceHandle =
+    !isDownLayout &&
+    (isRightBranch || (isCenterBranch && (layoutMode === 'balanced' || layoutMode === 'right')))
+  const showLeftTargetHandle = !isDownLayout && isRightBranch
+  const showRightTargetHandle = !isDownLayout && isLeftBranch
+  const leftAccentWidth = isDownLayout ? '3px' : isLeftBranch ? '2px' : '5px'
+  const rightAccentWidth = isDownLayout ? '3px' : isLeftBranch ? '5px' : '2px'
   const handleStyle = { backgroundColor: borderColor }
-  const visibleHandleTop = '50%'
-  const hiddenHandleStyle = {
-    opacity: 0,
-    width: 16,
-    height: 16,
-    border: 'none',
-    backgroundColor: 'transparent',
-  }
 
   return (
     <div
@@ -136,34 +142,60 @@ function MarkdownNodeComponent({ id, data, selected }: MarkdownNodeProps) {
       }}
       onClick={handleClick}
     >
-      <Handle
-        type="target"
-        position={Position.Left}
-        id={FLOW_HANDLE_IDS.targetLeft}
-        className="!border-0"
-        style={{ ...hiddenHandleStyle, top: visibleHandleTop }}
-      />
-      <Handle
-        type="source"
-        position={Position.Left}
-        id={FLOW_HANDLE_IDS.sourceLeft}
-        className="!h-3 !w-3 !border-2 !border-white"
-        style={{ ...handleStyle, top: visibleHandleTop }}
-      />
-      <Handle
-        type="target"
-        position={Position.Right}
-        id={FLOW_HANDLE_IDS.targetRight}
-        className="!border-0"
-        style={{ ...hiddenHandleStyle, top: visibleHandleTop }}
-      />
-      <Handle
-        type="source"
-        position={Position.Right}
-        id={FLOW_HANDLE_IDS.sourceRight}
-        className="!h-3 !w-3 !border-2 !border-white"
-        style={{ ...handleStyle, top: visibleHandleTop }}
-      />
+      {showLeftTargetHandle && (
+        <Handle
+          type="target"
+          position={Position.Left}
+          id={FLOW_HANDLE_IDS.targetLeft}
+          className="!h-3 !w-3 !border-2 !border-white"
+          style={{ ...handleStyle, top: '50%' }}
+        />
+      )}
+      {showVerticalHandles && (
+        <Handle
+          type="target"
+          position={Position.Top}
+          id={FLOW_HANDLE_IDS.targetTop}
+          className="!h-3 !w-3 !border-2 !border-white"
+          style={handleStyle}
+        />
+      )}
+      {showLeftSourceHandle && (
+        <Handle
+          type="source"
+          position={Position.Left}
+          id={FLOW_HANDLE_IDS.sourceLeft}
+          className="!h-3 !w-3 !border-2 !border-white"
+          style={{ ...handleStyle, top: '50%' }}
+        />
+      )}
+      {showRightTargetHandle && (
+        <Handle
+          type="target"
+          position={Position.Right}
+          id={FLOW_HANDLE_IDS.targetRight}
+          className="!h-3 !w-3 !border-2 !border-white"
+          style={{ ...handleStyle, top: '50%' }}
+        />
+      )}
+      {showRightSourceHandle && (
+        <Handle
+          type="source"
+          position={Position.Right}
+          id={FLOW_HANDLE_IDS.sourceRight}
+          className="!h-3 !w-3 !border-2 !border-white"
+          style={{ ...handleStyle, top: '50%' }}
+        />
+      )}
+      {showVerticalHandles && (
+        <Handle
+          type="source"
+          position={Position.Bottom}
+          id={FLOW_HANDLE_IDS.sourceBottom}
+          className="!h-3 !w-3 !border-2 !border-white"
+          style={handleStyle}
+        />
+      )}
 
       <div className="px-3 py-2.5">
         <div className="flex items-center gap-2">

@@ -1,8 +1,7 @@
 'use client'
 
-import type { ComponentType } from 'react'
 import { useEffect, useState, type CSSProperties } from 'react'
-import { Check, ChevronDown, LayoutTemplate, PanelsTopLeft, SplitSquareHorizontal } from 'lucide-react'
+import { Check, ChevronDown, LayoutGrid } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -10,21 +9,17 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { themeConfigs, useThemeStore } from '@/stores/themeStore'
-import { useCanvasViewStore, type CanvasViewMode } from '@/stores/canvasViewStore'
+import { useCanvasLayoutStore, type CanvasLayoutMode } from '@/stores/canvasLayoutStore'
 import { useTranslation } from '@/stores/languageStore'
+import { themeConfigs, useThemeStore } from '@/stores/themeStore'
 
-const MODE_ICONS: Record<CanvasViewMode, ComponentType<{ className?: string }>> = {
-  flow: PanelsTopLeft,
-  prototype: LayoutTemplate,
-  split: SplitSquareHorizontal,
-}
+const LAYOUT_MODE_OPTIONS: CanvasLayoutMode[] = ['balanced', 'left', 'right', 'down']
 
-export function CanvasViewSwitcher() {
+export function CanvasLayoutSwitcher() {
   const [mounted, setMounted] = useState(false)
   const { getThemeConfig } = useThemeStore()
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
-  const { mode, setMode } = useCanvasViewStore()
+  const { mode, setMode } = useCanvasLayoutStore()
   const { currentLanguage } = useTranslation()
 
   useEffect(() => {
@@ -34,17 +29,25 @@ export function CanvasViewSwitcher() {
   const labels =
     currentLanguage === 'zh'
       ? {
-          flow: '脑图',
-          prototype: '原型',
-          split: '分栏',
+          balanced: '左右布局',
+          left: '左侧布局',
+          right: '右侧布局',
+          down: '向下布局',
         }
       : {
-          flow: 'Map',
-          prototype: 'Prototype',
-          split: 'Split',
+          balanced: 'Balanced',
+          left: 'Left',
+          right: 'Right',
+          down: 'Down',
         }
 
-  const ActiveIcon = MODE_ICONS[mode]
+  const menuSurfaceStyle: CSSProperties = {
+    backgroundColor: `${themeConfig.card}f2`,
+    borderColor: themeConfig.border,
+    color: themeConfig.text,
+    boxShadow: `0 14px 36px ${themeConfig.border}66`,
+    backdropFilter: 'blur(10px)',
+  }
   const hintText =
     currentLanguage === 'zh'
       ? {
@@ -55,13 +58,6 @@ export function CanvasViewSwitcher() {
           current: 'Current',
           switchTo: 'Switch to',
         }
-  const menuSurfaceStyle: CSSProperties = {
-    backgroundColor: `${themeConfig.card}f2`,
-    borderColor: themeConfig.border,
-    color: themeConfig.text,
-    boxShadow: `0 14px 36px ${themeConfig.border}66`,
-    backdropFilter: 'blur(10px)',
-  }
 
   return (
     <DropdownMenu>
@@ -80,7 +76,7 @@ export function CanvasViewSwitcher() {
             backdropFilter: 'blur(8px)',
           } as CSSProperties}
         >
-          <ActiveIcon className="h-4 w-4" />
+          <LayoutGrid className="h-4 w-4" />
           <span>{labels[mode]}</span>
           <ChevronDown className="h-4 w-4" />
         </Button>
@@ -93,10 +89,8 @@ export function CanvasViewSwitcher() {
         className="min-w-[10rem]"
         style={menuSurfaceStyle}
       >
-        {(['flow', 'prototype', 'split'] as CanvasViewMode[]).map((value) => {
-          const Icon = MODE_ICONS[value]
-          const selected = mode === value
-
+        {LAYOUT_MODE_OPTIONS.map((value) => {
+          const selected = value === mode
           return (
             <DropdownMenuItem
               key={value}
@@ -114,7 +108,6 @@ export function CanvasViewSwitcher() {
                 color: selected ? themeConfig.heading : themeConfig.text,
               } as CSSProperties}
             >
-              <Icon className="h-4 w-4" />
               <span className="flex-1">{labels[value]}</span>
               {selected && <Check className="h-4 w-4" />}
             </DropdownMenuItem>
@@ -125,4 +118,4 @@ export function CanvasViewSwitcher() {
   )
 }
 
-export default CanvasViewSwitcher
+export default CanvasLayoutSwitcher

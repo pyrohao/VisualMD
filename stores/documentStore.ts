@@ -1461,6 +1461,11 @@ export const useDocumentStore = create<DocumentStore>()(
         updateFromMarkdown: (markdown: string) => {
           const { document } = get()
           if (!document) return
+
+          const currentMarkdown = get().getCurrentMarkdown()
+          if (markdown === currentMarkdown && !document.isModified) {
+            return
+          }
           
           try {
             const newDocument = parseMarkdown(markdown, document.fileName)

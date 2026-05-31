@@ -1,8 +1,17 @@
 'use client'
 
+/**
+ * Markdown预览组件
+ *
+ * 右侧预览面板，支持预览/编辑模式切换
+ * - 预览模式：使用 remark 渲染 Markdown
+ * - 编辑模式：直接编辑原始 Markdown 源码
+ *
+ * 对应技术文档6.1节
+ */
+
 import { useDocumentStore } from '@/stores/documentStore'
-import { useFileSystemStore } from '@/stores/fileSystemStore'
-import { useUnsavedChangesStore } from '@/stores/unsavedChangesStore'
+import { useTabsStore } from '@/stores/tabsStore'
 import { useThemeStore, themeConfigs, type ThemeMode } from '@/stores/themeStore'
 import { useTranslation } from '@/stores/languageStore'
 import { useEffect, useState, useCallback, useRef } from 'react'
@@ -10,38 +19,21 @@ import { unified } from 'unified'
 import remarkParse from 'remark-parse'
 import remarkGfm from 'remark-gfm'
 import remarkRehype from 'remark-rehype'
-import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import rehypeStringify from 'rehype-stringify'
-import { BookOpen, Pencil } from 'lucide-react'
+import { BookOpen, Pencil, SplitSquareHorizontal } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import {
-  getMarkdownImagePasteResult,
-  hasClipboardImage,
-} from '@/lib/clipboard-image'
-import { useTabsStore } from '@/stores/tabsStore'
-import { useGitStore } from '@/stores/gitStore'
-import { joinGitPath, normalizeGitPath } from '@/lib/git/utils'
-import { getGitProviderClient } from '@/lib/git/providers'
-import { decryptSecret } from '@/lib/secret-storage'
-import { getGitMarkdownImagePasteResult } from '@/lib/git-asset-paste'
-import { persistActiveTabSave } from '@/lib/editor-persistence'
-import type { GitDraftFile, StagedGitChange } from '@/lib/git/types'
-import type { Tab } from '@/stores/tabsStore'
 
-type PreviewMode = 'preview' | 'edit'
+/**
+ * 预览模式类型
+ */
+type PreviewMode = 'preview' | 'edit' | 'live'
 
-const previewSanitizeSchema = {
-  ...defaultSchema,
-  protocols: {
-    ...defaultSchema.protocols,
-    href: ['http', 'https', 'mailto'],
-    src: ['http', 'https', 'data'],
-  },
-}
-
+/**
+ * 根据主题生成CSS变量样式
+ */
 function getThemeStyles(theme: ThemeMode): string {
   const config = themeConfigs[theme]
-
+  
   return `
     .markdown-body {
       color: ${config.text};
@@ -192,380 +184,185 @@ function getThemeStyles(theme: ThemeMode): string {
   `
 }
 
-function removeMetadata(markdown: string) {
+/**
+ * 移除 Metadata (YAML Front Matter)
+ */
+function removeMetadata(markdown: string): string {
   return markdown.replace(/^---\n[\s\S]*?\n---\n?/, '')
-}
-
-function base64ToBlobUrl(contentBase64: string, mimeType: string) {
-  const binary = atob(contentBase64)
-  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
-  const blob = new Blob([bytes], { type: mimeType })
-  return URL.createObjectURL(blob)
-}
-
-function guessMimeType(path: string) {
-  const extension = path.split('.').pop()?.toLowerCase()
-  switch (extension) {
-    case 'png':
-      return 'image/png'
-    case 'jpg':
-    case 'jpeg':
-      return 'image/jpeg'
-    case 'gif':
-      return 'image/gif'
-    case 'webp':
-      return 'image/webp'
-    case 'svg':
-      return 'image/svg+xml'
-    case 'bmp':
-      return 'image/bmp'
-    default:
-      return 'application/octet-stream'
-  }
-}
-
-async function resolveGitImageUrls(
-  html: string,
-  activeTab: Tab | null,
-  currentDraft: GitDraftFile | null,
-  stagedChanges: StagedGitChange[]
-) {
-  if (activeTab?.sourceType !== 'git' || !activeTab.fileId || !activeTab.gitMeta) {
-    return { content: html, blobUrls: [] as string[] }
-  }
-
-  const config = useGitStore.getState().config
-  const runtimeConfig = {
-    ...config,
-    token: decryptSecret(config.token),
-  }
-  const client = getGitProviderClient(runtimeConfig)
-
-  const blobUrls: string[] = []
-  const cache = new Map<string, string>()
-  const stagedAssets = new Map(
-    stagedChanges
-      .filter((item) => item.kind === 'git-asset' && item.documentId === activeTab.fileId)
-      .map((item) => [item.repoPath, item] as const)
-  )
-  const draftPath = currentDraft?.path || activeTab.gitMeta.path
-  const draftDir = draftPath.includes('/')
-    ? draftPath.split('/').slice(0, -1).join('/')
-    : ''
-
-  const parser = new DOMParser()
-  const doc = parser.parseFromString(html, 'text/html')
-  const images = Array.from(doc.querySelectorAll('img'))
-
-  for (const image of images) {
-    const src = image.getAttribute('src')?.trim() || ''
-
-    if (
-      !src ||
-      src.startsWith('http://') ||
-      src.startsWith('https://') ||
-      src.startsWith('data:') ||
-      src.startsWith('blob:')
-    ) {
-      continue
-    }
-
-    let decodedSrc = src
-    try {
-      decodedSrc = decodeURI(src)
-    } catch {
-      decodedSrc = src
-    }
-
-    const repoPath = normalizeGitPath(joinGitPath(draftDir, decodedSrc))
-    let blobUrl = cache.get(repoPath)
-
-    if (!blobUrl) {
-      const stagedAsset = stagedAssets.get(repoPath)
-
-      if (stagedAsset?.contentBase64) {
-        blobUrl = base64ToBlobUrl(stagedAsset.contentBase64, stagedAsset.mimeType || guessMimeType(repoPath))
-        cache.set(repoPath, blobUrl)
-        blobUrls.push(blobUrl)
-      } else {
-        if (!client.getBinaryFile) {
-          image.setAttribute('data-git-src', repoPath)
-          image.setAttribute('src', 'data:,')
-          continue
-        }
-
-        try {
-          const binaryFile = await client.getBinaryFile(runtimeConfig, repoPath)
-          blobUrl = base64ToBlobUrl(binaryFile.contentBase64, binaryFile.mimeType || guessMimeType(repoPath))
-          cache.set(repoPath, blobUrl)
-          blobUrls.push(blobUrl)
-        } catch {
-          image.setAttribute('data-git-src', repoPath)
-          image.setAttribute('src', 'data:,')
-          continue
-        }
-      }
-    }
-
-    image.setAttribute('src', blobUrl)
-  }
-
-  return { content: doc.body.innerHTML, blobUrls }
 }
 
 export function MarkdownPreview() {
   const { document, updateFromMarkdown } = useDocumentStore()
+  const activeTabId = useTabsStore((state) => state.activeTabId)
   const { theme, getThemeConfig } = useThemeStore()
-  const { tabs, activeTabId } = useTabsStore()
-  const { drafts, stagedChanges } = useGitStore()
   const [mounted, setMounted] = useState(false)
   const [mode, setMode] = useState<PreviewMode>('preview')
   const [html, setHtml] = useState('')
   const [editContent, setEditContent] = useState('')
-  const [isTransitioning, setIsTransitioning] = useState(false)
-  const [previewNonce, setPreviewNonce] = useState(0)
-  const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const liveEditorRef = useRef<HTMLTextAreaElement | null>(null)
+  const livePreviewRef = useRef<HTMLDivElement | null>(null)
+  const isSyncingLiveScrollRef = useRef(false)
+  const previousDocumentKeyRef = useRef<string>('')
+  const skipLiveSyncRef = useRef(false)
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
-  const { t } = useTranslation()
+  const { t, currentLanguage } = useTranslation()
 
   useEffect(() => {
     setMounted(true)
   }, [])
 
-  const store = useDocumentStore.getState()
-  const markdown = store.getCurrentMarkdown()
-  const activeTab = tabs.find((tab) => tab.id === activeTabId) || null
-  const currentDraft = activeTab?.sourceType === 'git' && activeTab.fileId
-    ? drafts[activeTab.fileId] || null
-    : null
-  const stagedAssetVersion = activeTab?.fileId
-    ? stagedChanges
-      .filter((item) => item.kind === 'git-asset' && item.documentId === activeTab.fileId)
-      .map((item) => `${item.id}:${item.updatedAt}`)
-      .join('|')
-    : ''
+  // 从Store获取当前Markdown
+  const markdown = useDocumentStore.getState().getCurrentMarkdown()
+  const isEditingMode = mode === 'edit' || mode === 'live'
+  const renderMarkdown = mode === 'live' ? editContent : markdown
+  const documentKey = `${activeTabId || ''}\u0000${document?.fileId || ''}\u0000${document?.fileName || ''}`
+
+  // 当 markdown 变化时，更新编辑内容
+  useEffect(() => {
+    if (!isEditingMode) {
+      setEditContent(markdown)
+    }
+  }, [isEditingMode, markdown])
 
   useEffect(() => {
+    if (documentKey === previousDocumentKeyRef.current) {
+      return
+    }
+
+    previousDocumentKeyRef.current = documentKey
+    skipLiveSyncRef.current = true
     setEditContent(markdown)
-  }, [markdown])
+  }, [documentKey, markdown])
 
-  const isEditDirty = mode === 'edit' && editContent !== markdown
-
-  const flushEditBuffer = useCallback((persistLocalSave: boolean) => {
-    if (editContent === markdown) return
-
-    updateFromMarkdown(editContent)
-    setPreviewNonce((value) => value + 1)
-
-    if (!activeTabId) return
-
-    useTabsStore.getState().updateTabContent(activeTabId, editContent)
-
-    if (activeTab?.sourceType === 'git') {
-      useTabsStore.getState().markTabAsModified(activeTabId, true)
-      useUnsavedChangesStore.getState().setEditorDirty('markdown-preview', false)
-      return
-    }
-
-    if (persistLocalSave) {
-      persistActiveTabSave()
-      useUnsavedChangesStore.getState().setEditorDirty('markdown-preview', false)
-    }
-  }, [activeTab?.sourceType, activeTabId, editContent, markdown, updateFromMarkdown])
-
-  useEffect(() => {
-    useUnsavedChangesStore.getState().registerEditor('markdown-preview', {
-      save: () => {
-        if (autoSaveTimeoutRef.current) {
-          clearTimeout(autoSaveTimeoutRef.current)
-          autoSaveTimeoutRef.current = null
-        }
-        flushEditBuffer(false)
-      },
-      discard: () => {
-        if (autoSaveTimeoutRef.current) {
-          clearTimeout(autoSaveTimeoutRef.current)
-          autoSaveTimeoutRef.current = null
-        }
-        setEditContent(markdown)
-        useUnsavedChangesStore.getState().setEditorDirty('markdown-preview', false)
-      },
-    })
-
-    return () => {
-      if (autoSaveTimeoutRef.current) {
-        clearTimeout(autoSaveTimeoutRef.current)
-        autoSaveTimeoutRef.current = null
-      }
-      useUnsavedChangesStore.getState().unregisterEditor('markdown-preview')
-    }
-  }, [flushEditBuffer, markdown])
-
-  useEffect(() => {
-    useUnsavedChangesStore.getState().setEditorDirty('markdown-preview', isEditDirty)
-
-    if (!isEditDirty || !activeTabId) {
-      return
-    }
-
-    useTabsStore.getState().markTabAsModified(activeTabId, true)
-
-    if (activeTab?.sourceType !== 'git') {
-      const { currentFileId, markFileAsModified } = useFileSystemStore.getState()
-      if (currentFileId) {
-        markFileAsModified(currentFileId)
-      }
-    }
-  }, [activeTab?.sourceType, activeTabId, isEditDirty])
-
-  useEffect(() => {
-    if (autoSaveTimeoutRef.current) {
-      clearTimeout(autoSaveTimeoutRef.current)
-      autoSaveTimeoutRef.current = null
-    }
-
-    if (!isEditDirty || mode !== 'edit' || activeTab?.sourceType === 'git') {
-      return
-    }
-
-    autoSaveTimeoutRef.current = setTimeout(() => {
-      flushEditBuffer(true)
-      autoSaveTimeoutRef.current = null
-    }, 1000)
-
-    return () => {
-      if (autoSaveTimeoutRef.current) {
-        clearTimeout(autoSaveTimeoutRef.current)
-        autoSaveTimeoutRef.current = null
-      }
-    }
-  }, [activeTab?.sourceType, flushEditBuffer, isEditDirty, mode])
-
+  // 使用 remark 处理 markdown
   useEffect(() => {
     let cancelled = false
-    let currentBlobUrls: string[] = []
 
     const processMarkdown = async () => {
-      const markdownResult = await unified()
+      const content = removeMetadata(renderMarkdown)
+      
+      const result = await unified()
         .use(remarkParse)
-        .use(remarkGfm)
-        .use(remarkRehype)
-        .use(rehypeSanitize, previewSanitizeSchema)
-        .use(rehypeStringify)
-        .process(removeMetadata(markdown))
-
-      const { content, blobUrls } = await resolveGitImageUrls(
-        String(markdownResult),
-        activeTab,
-        currentDraft,
-        stagedChanges
-      )
-      currentBlobUrls = blobUrls
-
-      if (cancelled) {
-        blobUrls.forEach((url) => URL.revokeObjectURL(url))
-        return
+        .use(remarkGfm) // 支持 GitHub Flavored Markdown
+        .use(remarkRehype, { allowDangerousHtml: true })
+        .use(rehypeStringify, { allowDangerousHtml: true })
+        .process(content)
+      
+      if (!cancelled) {
+        setHtml(String(result))
       }
-
-      setHtml(content)
     }
-
-    void processMarkdown()
+    
+    processMarkdown()
 
     return () => {
       cancelled = true
-      currentBlobUrls.forEach((url) => URL.revokeObjectURL(url))
     }
-  }, [
-    markdown,
-    previewNonce,
-    activeTab?.id,
-    activeTab?.fileId,
-    activeTab?.sourceType,
-    activeTab?.gitMeta?.provider,
-    activeTab?.gitMeta?.ownerOrNamespace,
-    activeTab?.gitMeta?.repo,
-    activeTab?.gitMeta?.branch,
-    currentDraft?.path,
-    currentDraft?.sha,
-    stagedAssetVersion,
-  ])
+  }, [renderMarkdown])
 
+  // 处理模式切换
   const handleModeChange = useCallback((newMode: PreviewMode) => {
     if (newMode === mode) return
 
-    setIsTransitioning(true)
-
-    if (mode === 'edit' && newMode === 'preview') {
-      flushEditBuffer(activeTab?.sourceType !== 'git')
+    const leavingEditingToPreview = (mode === 'edit' || mode === 'live') && newMode === 'preview'
+    if (leavingEditingToPreview) {
+      updateFromMarkdown(editContent)
     }
 
-    setTimeout(() => {
-      setMode(newMode)
-      setIsTransitioning(false)
-    }, 150)
-  }, [activeTab?.sourceType, flushEditBuffer, mode])
+    const enteringEditing = mode === 'preview' && (newMode === 'edit' || newMode === 'live')
+    if (enteringEditing) {
+      setEditContent(markdown)
+    }
 
+    setMode(newMode)
+  }, [mode, editContent, markdown, updateFromMarkdown])
+
+  // 处理编辑内容变化
   const handleEditChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setEditContent(e.target.value)
   }, [])
 
-  const handleEditPaste = useCallback(async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    if (!hasClipboardImage(e.clipboardData)) return
+  const liveLabels =
+    currentLanguage === 'zh'
+      ? { short: '实时', mode: '实时模式', title: '实时编辑预览' }
+      : { short: 'Live', mode: 'Live mode', title: 'Live Edit & Preview' }
 
-    e.preventDefault()
+  const syncLiveScrollByRatio = useCallback((source: HTMLElement, target: HTMLElement) => {
+    const sourceScrollable = source.scrollHeight - source.clientHeight
+    const targetScrollable = target.scrollHeight - target.clientHeight
 
-    const target = e.currentTarget
-    const activeTab = useTabsStore.getState().getActiveTab()
-    const isGitTab = activeTab?.sourceType === 'git' && !!activeTab.fileId
-
-    if (isGitTab && activeTab.fileId) {
-      const uploadResult = await getGitMarkdownImagePasteResult({
-        documentId: activeTab.fileId,
-        clipboardData: e.clipboardData,
-        value: editContent,
-        selectionStart: target.selectionStart ?? editContent.length,
-        selectionEnd: target.selectionEnd ?? editContent.length,
-      })
-      if (!uploadResult) return
-
-      setEditContent(uploadResult.nextValue)
-      updateFromMarkdown(uploadResult.nextValue)
-      useGitStore.getState().updateDraftContent(activeTab.fileId, uploadResult.nextValue)
-      useTabsStore.getState().updateTabContent(activeTab.id, uploadResult.nextValue)
-
-      window.requestAnimationFrame(() => {
-        target.focus()
-        target.setSelectionRange(uploadResult.selectionStart, uploadResult.selectionEnd)
-      })
+    if (sourceScrollable <= 0 || targetScrollable <= 0) {
+      target.scrollTop = 0
       return
     }
 
-    const result = await getMarkdownImagePasteResult({
-      clipboardData: e.clipboardData,
-      value: editContent,
-      selectionStart: target.selectionStart ?? editContent.length,
-      selectionEnd: target.selectionEnd ?? editContent.length,
-    })
+    const progress = source.scrollTop / sourceScrollable
+    target.scrollTop = progress * targetScrollable
+  }, [])
 
-    if (!result) return
+  const withLiveScrollSyncGuard = useCallback((syncAction: () => void) => {
+    if (isSyncingLiveScrollRef.current) {
+      return
+    }
 
-    setEditContent(result.nextValue)
-
+    isSyncingLiveScrollRef.current = true
+    syncAction()
     window.requestAnimationFrame(() => {
-      target.focus()
-      target.setSelectionRange(result.selectionStart, result.selectionEnd)
+      isSyncingLiveScrollRef.current = false
     })
-  }, [editContent, updateFromMarkdown])
+  }, [])
 
+  const handleLiveEditorScroll = useCallback(() => {
+    const source = liveEditorRef.current
+    const target = livePreviewRef.current
+    if (!source || !target || mode !== 'live') {
+      return
+    }
+
+    withLiveScrollSyncGuard(() => {
+      syncLiveScrollByRatio(source, target)
+    })
+  }, [mode, syncLiveScrollByRatio, withLiveScrollSyncGuard])
+
+  const handleLivePreviewScroll = useCallback(() => {
+    const source = livePreviewRef.current
+    const target = liveEditorRef.current
+    if (!source || !target || mode !== 'live') {
+      return
+    }
+
+    withLiveScrollSyncGuard(() => {
+      syncLiveScrollByRatio(source, target)
+    })
+  }, [mode, syncLiveScrollByRatio, withLiveScrollSyncGuard])
+
+  useEffect(() => {
+    if (mode !== 'live') return
+    if (skipLiveSyncRef.current) {
+      skipLiveSyncRef.current = false
+      return
+    }
+
+    const timer = setTimeout(() => {
+      if (editContent !== markdown) {
+        updateFromMarkdown(editContent)
+      }
+    }, 180)
+
+    return () => {
+      clearTimeout(timer)
+    }
+  }, [editContent, markdown, mode, updateFromMarkdown])
+
+  // 如果没有文档，显示空状态
   if (!document) {
     return (
       <div className="flex h-full flex-col" style={{ backgroundColor: themeConfig.background }}>
         <div className="flex h-14 items-center border-b px-5" style={{ backgroundColor: themeConfig.card, borderColor: themeConfig.border }}>
-          <h2 className="text-lg font-semibold" style={{ color: themeConfig.heading }}>{mounted ? t('preview.preview') : 'Document Preview'}</h2>
+          <h2 className="text-lg font-semibold" style={{ color: themeConfig.heading }}>{mounted ? t('preview.preview') : '文档预览'}</h2>
         </div>
         <div className="flex flex-1 items-center justify-center">
-          <p style={{ color: themeConfig.muted }}>{mounted ? t('preview.noContent') : 'No content to preview'}</p>
+          <p style={{ color: themeConfig.muted }}>{mounted ? t('preview.noContent') : '没有可预览的内容'}</p>
         </div>
       </div>
     )
@@ -573,83 +370,149 @@ export function MarkdownPreview() {
 
   return (
     <div className="flex h-full flex-col" style={{ backgroundColor: themeConfig.background }}>
+      {/* 头部 */}
       <div className="flex h-14 items-center justify-between gap-4 border-b px-5" style={{ backgroundColor: themeConfig.card, borderColor: themeConfig.border }}>
         <div className="flex min-w-0 flex-1 items-center">
           <h2 className="flex-shrink-0 whitespace-nowrap text-lg font-semibold" style={{ color: themeConfig.heading }}>
-            {mode === 'preview' ? (mounted ? t('preview.preview') : 'Document Preview') : (mounted ? t('preview.edit') : 'Edit Document')}
+            {mode === 'preview'
+              ? (mounted ? t('preview.preview') : '文档预览')
+              : mode === 'edit'
+                ? (mounted ? t('preview.edit') : '编辑文档')
+                : liveLabels.title}
           </h2>
           <span
             className="ml-3 block min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-sm"
             style={{ color: themeConfig.muted }}
-            title={document.fileName || undefined}
+            title={document.fileName || (mounted ? t('file.untitled') : '鏈懡鍚?')}
           >
-            {document.fileName || (mounted ? t('file.untitled') : 'Untitled')}
+            {document.fileName || (mounted ? t('file.untitled') : '未命名')}
           </span>
         </div>
 
-        <div className="flex flex-shrink-0 items-center rounded-lg p-1" style={{ backgroundColor: themeConfig.background }}>
+        {/* 模式切换按钮 */}
+        <div
+          className="flex flex-shrink-0 items-center rounded-lg p-1"
+          style={{ backgroundColor: themeConfig.background }}
+        >
           <button
             onClick={() => handleModeChange('preview')}
             className={cn(
               'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-all duration-200',
-              mode === 'preview' ? 'shadow-sm' : 'hover:opacity-80'
+              mode === 'preview'
+                ? 'shadow-sm'
+                : 'hover:opacity-80'
             )}
             style={{
               backgroundColor: mode === 'preview' ? themeConfig.card : 'transparent',
               color: mode === 'preview' ? themeConfig.heading : themeConfig.muted,
             }}
-            title={mounted ? t('preview.previewMode') : 'Preview mode'}
+            title={mounted ? t('preview.previewMode') : '预览模式'}
           >
             <BookOpen className="h-4 w-4" />
-            <span>{mounted ? t('preview.read') : 'Read'}</span>
+            <span>{mounted ? t('preview.read') : '阅读'}</span>
           </button>
           <button
             onClick={() => handleModeChange('edit')}
             className={cn(
               'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-all duration-200',
-              mode === 'edit' ? 'shadow-sm' : 'hover:opacity-80'
+              mode === 'edit'
+                ? 'shadow-sm'
+                : 'hover:opacity-80'
             )}
             style={{
               backgroundColor: mode === 'edit' ? themeConfig.card : 'transparent',
               color: mode === 'edit' ? themeConfig.heading : themeConfig.muted,
             }}
-            title={mounted ? t('preview.editMode') : 'Edit mode'}
+            title={mounted ? t('preview.editMode') : '编辑模式'}
           >
             <Pencil className="h-4 w-4" />
-            <span>{mounted ? t('preview.edit') : 'Edit'}</span>
+            <span>{mounted ? t('preview.edit') : '编辑'}</span>
+          </button>
+          <button
+            onClick={() => handleModeChange('live')}
+            className={cn(
+              'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-all duration-200',
+              mode === 'live'
+                ? 'shadow-sm'
+                : 'hover:opacity-80'
+            )}
+            style={{
+              backgroundColor: mode === 'live' ? themeConfig.card : 'transparent',
+              color: mode === 'live' ? themeConfig.heading : themeConfig.muted,
+            }}
+            title={liveLabels.mode}
+          >
+            <SplitSquareHorizontal className="h-4 w-4" />
+            <span>{liveLabels.short}</span>
           </button>
         </div>
       </div>
 
-      <div className="relative flex-1 overflow-hidden">
-        {mode === 'preview' && !isTransitioning ? (
-          <div className="absolute inset-0 overflow-y-auto overflow-x-hidden transition-all duration-200 opacity-100 translate-x-0">
+      {/* 内容区域 */}
+      <div className="flex flex-1 overflow-hidden">
+        {mode === 'preview' && (
+          <div className="h-full w-full overflow-y-auto overflow-x-hidden">
             <div className="max-w-none p-8">
               <style>{getThemeStyles(theme)}</style>
-              <article className="markdown-body max-w-none" dangerouslySetInnerHTML={{ __html: html }} />
+              <article
+                className="markdown-body max-w-none"
+                dangerouslySetInnerHTML={{ __html: html }}
+              />
             </div>
           </div>
-        ) : null}
+        )}
 
-        {mode === 'edit' && !isTransitioning ? (
-          <div className="absolute inset-0 transition-all duration-200 opacity-100 translate-x-0">
-            <textarea
-              value={editContent}
-              onChange={handleEditChange}
-              onPaste={(e) => {
-                void handleEditPaste(e)
-              }}
-              className="h-full w-full resize-none border-0 p-6 font-mono text-sm outline-none"
-              style={{
-                backgroundColor: themeConfig.background,
-                color: themeConfig.text,
-                lineHeight: 1.6,
-              }}
-              placeholder={mounted ? t('preview.editPlaceholder') : 'Edit Markdown here...'}
-              spellCheck={false}
-            />
-          </div>
-        ) : null}
+        {mode === 'edit' && (
+          <textarea
+            value={editContent}
+            onChange={handleEditChange}
+            className="h-full w-full resize-none border-0 p-6 font-mono text-sm outline-none"
+            style={{
+              backgroundColor: themeConfig.background,
+              color: themeConfig.text,
+              lineHeight: 1.6,
+            }}
+            placeholder={mounted ? t('preview.editPlaceholder') : '在此编辑 Markdown 文档...'}
+            spellCheck={false}
+          />
+        )}
+
+        {mode === 'live' && (
+          <>
+            <div
+              className="h-full w-1/2 border-r"
+              style={{ borderColor: themeConfig.border }}
+            >
+              <textarea
+                ref={liveEditorRef}
+                value={editContent}
+                onChange={handleEditChange}
+                onScroll={handleLiveEditorScroll}
+                className="h-full w-full resize-none border-0 p-5 font-mono text-sm outline-none"
+                style={{
+                  backgroundColor: themeConfig.background,
+                  color: themeConfig.text,
+                  lineHeight: 1.6,
+                }}
+                placeholder={mounted ? t('preview.editPlaceholder') : '在此编辑 Markdown 文档...'}
+                spellCheck={false}
+              />
+            </div>
+            <div
+              ref={livePreviewRef}
+              onScroll={handleLivePreviewScroll}
+              className="h-full w-1/2 overflow-y-auto overflow-x-hidden"
+            >
+              <div className="max-w-none p-5">
+                <style>{getThemeStyles(theme)}</style>
+                <article
+                  className="markdown-body max-w-none"
+                  dangerouslySetInnerHTML={{ __html: html }}
+                />
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )
