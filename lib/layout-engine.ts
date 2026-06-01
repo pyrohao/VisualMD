@@ -45,6 +45,21 @@ export const DEFAULT_LAYOUT_CONFIG: LayoutConfig = {
   startY: 40,
 }
 
+/**
+ * 向下布局会复用横向布局再旋转，原先按“节点高度”估算同层间距会过小。
+ * 这里按实际节点宽度提供更接近视觉占位的估算，避免同层节点挤在一起。
+ */
+const DOWN_LAYOUT_NODE_SPAN = 220
+const DOWN_LAYOUT_SIBLING_GAP = 24
+
+function resolveDownLayoutConfig(config: LayoutConfig): LayoutConfig {
+  return {
+    ...config,
+    nodeHeight: Math.max(config.nodeHeight, DOWN_LAYOUT_NODE_SPAN),
+    siblingGap: Math.max(config.siblingGap, DOWN_LAYOUT_SIBLING_GAP),
+  }
+}
+
 function calculateSubtreeHeight(node: TreeNode, config: LayoutConfig): number {
   if (node.children.length === 0 || node.isCollapsed) {
     return config.nodeHeight + config.siblingGap
@@ -319,7 +334,8 @@ export function calculateTreeLayoutResult(
   mode: TreeLayoutMode = 'balanced'
 ): LayoutResult {
   if (mode === 'down') {
-    const rightLayout = calculateHorizontalTreeLayoutResult(root, detachedNodes, config, 'right')
+    const downConfig = resolveDownLayoutConfig(config)
+    const rightLayout = calculateHorizontalTreeLayoutResult(root, detachedNodes, downConfig, 'right')
     return rotateToDownLayout(rightLayout, root.id)
   }
 
