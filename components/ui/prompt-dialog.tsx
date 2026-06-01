@@ -17,6 +17,7 @@ import {
 } from './dialog'
 import { Button } from './button'
 import { Input } from './input'
+import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 
 interface PromptDialogProps {
   isOpen: boolean
@@ -41,7 +42,14 @@ export function PromptDialog({
   cancelText = '取消',
   placeholder,
 }: PromptDialogProps) {
+  const { getThemeConfig } = useThemeStore()
+  const [mounted, setMounted] = useState(false)
+  const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
   const [value, setValue] = useState(defaultValue)
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
 
   useEffect(() => {
     if (isOpen) {
@@ -62,10 +70,19 @@ export function PromptDialog({
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-[425px] bg-gray-50 text-black border-gray-200">
+      <DialogContent
+        className="sm:max-w-[425px]"
+        style={{
+          backgroundColor: themeConfig.card,
+          borderColor: themeConfig.border,
+          color: themeConfig.text,
+        }}
+      >
         <DialogHeader>
-          <DialogTitle className="text-black font-semibold">{title}</DialogTitle>
-          {description && <DialogDescription className="text-gray-700">{description}</DialogDescription>}
+          <DialogTitle className="font-semibold" style={{ color: themeConfig.heading }}>
+            {title}
+          </DialogTitle>
+          {description && <DialogDescription style={{ color: themeConfig.muted }}>{description}</DialogDescription>}
         </DialogHeader>
         <div className="py-4">
           <Input
@@ -74,14 +91,35 @@ export function PromptDialog({
             onKeyDown={handleKeyDown}
             placeholder={placeholder}
             autoFocus
-            className="border-gray-300 text-black placeholder:text-gray-500 bg-white"
+            className="transition-colors"
+            style={{
+              backgroundColor: themeConfig.input,
+              borderColor: themeConfig.border,
+              color: themeConfig.text,
+            }}
           />
         </div>
-        <DialogFooter className="gap-2">
-          <Button onClick={onClose} className="bg-green-600 hover:bg-green-700 text-white">
+        <DialogFooter className="gap-2 border-t pt-4" style={{ borderColor: themeConfig.border }}>
+          <Button
+            onClick={onClose}
+            variant="outline"
+            className="transition-opacity hover:opacity-90"
+            style={{
+              backgroundColor: themeConfig.buttonSecondaryBg,
+              borderColor: themeConfig.border,
+              color: themeConfig.text,
+            }}
+          >
             {cancelText}
           </Button>
-          <Button onClick={handleConfirm} className="bg-blue-600 hover:bg-blue-700 text-white">
+          <Button
+            onClick={handleConfirm}
+            className="transition-opacity hover:opacity-90"
+            style={{
+              backgroundColor: themeConfig.primary,
+              color: themeConfig.buttonText || '#fff',
+            }}
+          >
             {confirmText}
           </Button>
         </DialogFooter>

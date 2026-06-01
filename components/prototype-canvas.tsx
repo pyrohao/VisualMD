@@ -23,6 +23,8 @@ import {
 } from '@/components/ui/dialog'
 import { themeConfigs, useThemeStore } from '@/stores/themeStore'
 import { useTranslation } from '@/stores/languageStore'
+import { useTabsStore } from '@/stores/tabsStore'
+import { useGitStore } from '@/stores/gitStore'
 import type { DocumentState } from '@/types/tree'
 import {
   parseDocumentToPrototype,
@@ -33,6 +35,9 @@ import {
   type PrototypeMarkdownBlock,
   type PrototypeSection,
 } from '@/lib/prototype-parser'
+import { getGitProviderClient } from '@/lib/git/providers'
+import { joinGitPath, normalizeGitPath } from '@/lib/git/utils'
+import { decryptSecret } from '@/lib/secret-storage'
 
 interface PrototypeCanvasProps {
   document: DocumentState | null
@@ -42,6 +47,77 @@ interface PrototypeCanvasProps {
 interface DialogState {
   title: string
   description: string
+}
+
+const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  svg: 'image/svg+xml',
+  bmp: 'image/bmp',
+  ico: 'image/x-icon',
+  avif: 'image/avif',
+}
+
+function isExternalLikeImageSource(src: string) {
+  return /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(src)
+}
+
+function safeDecodeUriPath(path: string) {
+  try {
+    return decodeURI(path)
+  } catch {
+    return path
+  }
+}
+
+function normalizeRepoRelativePath(path: string) {
+  const stack: string[] = []
+  for (const segment of path.replace(/\\/g, '/').split('/')) {
+    if (!segment || segment === '.') continue
+    if (segment === '..') {
+      stack.pop()
+      continue
+    }
+    stack.push(segment)
+  }
+  return stack.join('/')
+}
+
+function resolveGitImageRepoPath(markdownPath: string, rawSrc: string) {
+  const trimmed = rawSrc.trim()
+  if (!trimmed || isExternalLikeImageSource(trimmed)) {
+    return null
+  }
+
+  const withoutHash = trimmed.split('#')[0] || ''
+  const rawPath = withoutHash.split('?')[0] || ''
+  const decodedPath = safeDecodeUriPath(rawPath)
+  if (!decodedPath) {
+    return null
+  }
+
+  if (decodedPath.startsWith('/')) {
+    return normalizeRepoRelativePath(decodedPath.slice(1))
+  }
+
+  const normalizedMarkdownPath = normalizeGitPath(markdownPath)
+  const markdownDir = normalizedMarkdownPath.includes('/')
+    ? normalizedMarkdownPath.split('/').slice(0, -1).join('/')
+    : ''
+  const joinedPath = markdownDir ? joinGitPath(markdownDir, decodedPath) : normalizeGitPath(decodedPath)
+
+  return normalizeRepoRelativePath(joinedPath)
+}
+
+function inferImageMimeType(repoPath: string, mimeType?: string) {
+  if (mimeType?.startsWith('image/')) {
+    return mimeType
+  }
+  const extension = repoPath.split('.').pop()?.toLowerCase() || ''
+  return IMAGE_MIME_BY_EXTENSION[extension] || 'application/octet-stream'
 }
 
 function collectBlockDefaults(
@@ -91,12 +167,16 @@ function collectDefaults(
   return { fields, toggles, checklists, tabs }
 }
 
-function renderInlineSegments(segments: PrototypeInlineSegment[]) {
+function renderInlineSegments(
+  segments: PrototypeInlineSegment[],
+  resolveImageSrc?: (src: string) => string | null
+) {
   return segments.map((segment, index) => {
+    const imageSrc = segment.imageSrc ? (resolveImageSrc?.(segment.imageSrc) || segment.imageSrc) : undefined
     const content = segment.imageSrc ? (
       <img
         key={index}
-        src={segment.imageSrc}
+        src={imageSrc}
         alt={segment.text}
         className="my-3 max-h-80 max-w-full rounded-xl border object-contain"
       />
@@ -124,6 +204,13 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
   const { getThemeConfig } = useThemeStore()
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
   const { currentLanguage } = useTranslation()
+  const activeGitMeta = useTabsStore((state) => {
+    const activeTab = state.tabs.find((item) => item.id === state.activeTabId)
+    if (!activeTab || activeTab.sourceType !== 'git' || !activeTab.gitMeta?.path) {
+      return null
+    }
+    return activeTab.gitMeta
+  })
   const prototype = useMemo(() => parseDocumentToPrototype(document), [document])
   const [activeSectionId, setActiveSectionId] = useState<string>('')
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({})
@@ -132,6 +219,7 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
   const [tabValues, setTabValues] = useState<Record<string, string>>({})
   const [lastAction, setLastAction] = useState<string>('')
   const [dialogState, setDialogState] = useState<DialogState | null>(null)
+  const [resolvedImageMap, setResolvedImageMap] = useState<Record<string, string>>({})
 
   useEffect(() => {
     setMounted(true)
@@ -145,6 +233,7 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
       setChecklistValues({})
       setTabValues({})
       setLastAction('')
+      setResolvedImageMap({})
       return
     }
 
@@ -155,7 +244,126 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
     setTabValues(defaults.tabs)
     setActiveSectionId(prototype.sections[0]?.id || '')
     setLastAction('')
+    setResolvedImageMap({})
   }, [prototype])
+
+  useEffect(() => {
+    if (!prototype || !activeGitMeta?.path) {
+      return
+    }
+
+    const imageSources = new Set<string>()
+    const collectFromSegments = (segments: PrototypeInlineSegment[]) => {
+      for (const segment of segments) {
+        if (segment.imageSrc) {
+          imageSources.add(segment.imageSrc)
+        }
+      }
+    }
+    const collectFromBlocks = (blocks: PrototypeBlock[]) => {
+      for (const block of blocks) {
+        if (block.type === 'note') {
+          collectFromSegments(block.content)
+          continue
+        }
+        if (block.type !== 'markdown') {
+          continue
+        }
+        if (block.block.type === 'paragraph' || block.block.type === 'blockquote') {
+          collectFromSegments(block.block.segments)
+          continue
+        }
+        if (block.block.type === 'list') {
+          block.block.items.forEach(collectFromSegments)
+          continue
+        }
+        if (block.block.type === 'checklist') {
+          block.block.items.forEach((item) => collectFromSegments(item.segments))
+          continue
+        }
+        if (block.block.type === 'table') {
+          block.block.rows.forEach((row) => {
+            row.cells.forEach((cell) => collectFromSegments(parseInlineSegments(cell)))
+          })
+        }
+      }
+    }
+    const walkSections = (sections: PrototypeSection[]) => {
+      sections.forEach((section) => {
+        collectFromBlocks(section.blocks)
+        walkSections(section.children)
+      })
+    }
+
+    collectFromBlocks(prototype.rootBlocks)
+    walkSections(prototype.sections)
+
+    const imageSrcList = Array.from(imageSources)
+    if (!imageSrcList.length) {
+      return
+    }
+
+    const gitState = useGitStore.getState()
+    const decryptedToken = decryptSecret(gitState.config.token || '')
+    if (!decryptedToken) {
+      return
+    }
+
+    const runtimeConfig = {
+      ...gitState.config,
+      provider: activeGitMeta.provider,
+      ownerOrNamespace: activeGitMeta.ownerOrNamespace,
+      repo: activeGitMeta.repo,
+      branch: activeGitMeta.branch,
+      token: decryptedToken,
+    }
+    const client = getGitProviderClient(runtimeConfig)
+    const getBinaryFile = client.getBinaryFile
+    if (!getBinaryFile) {
+      return
+    }
+
+    let cancelled = false
+
+    void (async () => {
+      const resolvedEntries = await Promise.all(imageSrcList.map(async (rawSrc) => {
+        const repoPath = resolveGitImageRepoPath(activeGitMeta.path, rawSrc)
+        if (!repoPath) {
+          return null
+        }
+
+        try {
+          const binary = await getBinaryFile(runtimeConfig, repoPath)
+          if (!binary?.contentBase64) {
+            return null
+          }
+          const mimeType = inferImageMimeType(repoPath, binary.mimeType)
+          return [rawSrc, `data:${mimeType};base64,${binary.contentBase64}`] as const
+        } catch {
+          return null
+        }
+      }))
+
+      if (cancelled) {
+        return
+      }
+
+      const nextMap: Record<string, string> = {}
+      for (const entry of resolvedEntries) {
+        if (!entry) continue
+        nextMap[entry[0]] = entry[1]
+      }
+      if (Object.keys(nextMap).length === 0) {
+        return
+      }
+
+      setResolvedImageMap((current) => ({ ...current, ...nextMap }))
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeGitMeta, prototype])
 
   const copy =
     currentLanguage === 'zh'
@@ -190,6 +398,8 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
           childNodes: 'children',
         }
 
+  const resolvePrototypeImageSrc = (src: string) => resolvedImageMap[src] || null
+
   const handleButtonAction = (block: Extract<PrototypeBlock, { type: 'button' }>) => {
     if (block.target && prototype) {
       const targetSection = prototype.sections.find(
@@ -216,7 +426,7 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
       case 'paragraph':
         return (
           <p key={block.id} className="text-sm leading-7" style={{ color: themeConfig.text }}>
-            {renderInlineSegments(block.segments)}
+            {renderInlineSegments(block.segments, resolvePrototypeImageSrc)}
           </p>
         )
       case 'blockquote':
@@ -230,7 +440,7 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
               color: themeConfig.text,
             }}
           >
-            {renderInlineSegments(block.segments)}
+            {renderInlineSegments(block.segments, resolvePrototypeImageSrc)}
           </blockquote>
         )
       case 'list': {
@@ -242,7 +452,7 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
             style={{ color: themeConfig.text }}
           >
             {block.items.map((item, index) => (
-              <li key={`${block.id}-${index}`}>{renderInlineSegments(item)}</li>
+              <li key={`${block.id}-${index}`}>{renderInlineSegments(item, resolvePrototypeImageSrc)}</li>
             ))}
           </Tag>
         )
@@ -272,7 +482,7 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
                     color: themeConfig.text,
                   }}
                 >
-                  <span>{renderInlineSegments(item.segments)}</span>
+                  <span>{renderInlineSegments(item.segments, resolvePrototypeImageSrc)}</span>
                   {checked && (
                     <span className="flex items-center gap-1 text-xs" style={{ color: themeConfig.success }}>
                       <CheckCircle2 className="h-4 w-4" />
@@ -310,7 +520,7 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
                         className="border-b px-4 py-3 align-top"
                         style={{ borderColor: themeConfig.border, color: themeConfig.text }}
                       >
-                        {renderInlineSegments(parseInlineSegments(cell))}
+                        {renderInlineSegments(parseInlineSegments(cell), resolvePrototypeImageSrc)}
                       </td>
                     ))}
                   </tr>
@@ -381,7 +591,7 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
               color: themeConfig.text,
             }}
           >
-            {renderInlineSegments(block.content)}
+            {renderInlineSegments(block.content, resolvePrototypeImageSrc)}
           </div>
         )
       case 'input':

@@ -72,6 +72,8 @@ Visual MD approaches this differently:
 - Drag nodes to reorganize content
 - Batch-create child nodes, reorder sections, and clean up layout quickly
 - One-click layout organization for large documents
+- Added top-left canvas controls: view switcher (Mindmap / Prototype) and layout switcher (Balanced / Left / Right / Down)
+- Improved spacing calculation for the Down layout (org-chart style) to reduce sibling-node crowding
 
 ### 2. Bidirectional editing
 
@@ -79,6 +81,7 @@ Visual MD approaches this differently:
 - **Text mode** for direct Markdown editing
 - **Read / Edit preview switching** inside one panel
 - Changes stay synchronized across representations
+- Live mode now supports synchronized scrolling between the editor pane and preview pane for long-document side-by-side review
 
 ### 3. HTML prototype rendering
 
@@ -122,7 +125,7 @@ Visual MD is no longer just “able to open Markdown files from Git”. It now s
 
 ### Supported today
 
-- Connect to **GitHub / GitLab / Gitee / custom Git APIs (GitLab- or Gitea-style)**
+- Connect to **GitHub / Gitee**
 - Browse repository trees and open Markdown files
 - Fetch remote updates, detect conflicts, preserve local drafts
 - Stage content changes
@@ -242,6 +245,16 @@ pnpm lint
 - **Git-backed document editing now has actual staging semantics**
 - **Image paste no longer bloats Markdown or pollutes remote history early**
 - **Preview now has a meaningful baseline XSS defense**
+
+---
+
+## Recent Updates (2026-06)
+
+- Canvas interaction refresh: top-left unified view/layout controls, dedicated top-right Metadata entry, improved hover hints, and better theme adaptation.
+- Down-layout spacing optimization: fixed sibling nodes being too crowded in organization-style layouts.
+- Node-handle and edge rendering fixes: removed duplicated side handles, fixed missing bezier segments in two-sided down layout, and unified handle visibility rules across layout modes.
+- Live preview enhancement: synchronized scrolling between edit and preview panes.
+- Unsaved-state fix: switching files no longer triggers a false unsaved prompt on first switch when no actual edits were made.
 
 ---
 

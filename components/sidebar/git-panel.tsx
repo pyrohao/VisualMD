@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import {
+  Plus,
   AlertTriangle,
   ChevronDown,
   ChevronRight,
@@ -234,6 +235,7 @@ export function GitPanel() {
     expandedPaths,
     drafts,
     stagedChanges,
+    pendingAssetChanges,
     currentDocumentId,
     isConnecting,
     isLoadingTree,
@@ -248,7 +250,9 @@ export function GitPanel() {
     toggleExpandedPath,
     openFile,
     setCurrentDocumentId,
+    stageGitDraft,
     unstageChange,
+    restagePendingAsset,
     fetchRemoteFile,
     syncRemoteStatus,
     commitCurrentFile,
@@ -261,16 +265,30 @@ export function GitPanel() {
 
   const currentDraft = currentDocumentId ? drafts[currentDocumentId] : null
   const currentPath = currentDraft?.path || null
+  const stagedCurrentDraftChange = currentDraft
+    ? stagedChanges.find((item) => item.kind === 'git-draft' && item.documentId === currentDraft.documentId)
+    : null
+  const stagedChangeIdSet = useMemo(() => new Set(stagedChanges.map((item) => item.id)), [stagedChanges])
+  const canStageCurrentDraft = Boolean(currentDraft?.isDirty && !stagedCurrentDraftChange)
+  const pendingDraft = canStageCurrentDraft ? currentDraft : null
+  const currentDraftPendingAssets = currentDraft
+    ? pendingAssetChanges.filter((item) => (
+      item.kind === 'git-asset' &&
+      item.documentId === currentDraft.documentId &&
+      !stagedChangeIdSet.has(item.id)
+    ))
+    : []
+  const hasPendingStageItems = Boolean(pendingDraft) || currentDraftPendingAssets.length > 0
   const hasCommitCandidates = Boolean(currentDraft?.isDirty) || stagedChanges.length > 0
   const pendingSummary = useMemo(() => {
-    if (currentDraft) {
-      return `${currentDraft.path}${currentDraft.isDirty ? ` - ${t('git.uncommitted')}` : ''}`
+    if (pendingDraft) {
+      return `${pendingDraft.path} - ${t('git.uncommitted')}`
     }
-    if (stagedChanges.length) {
-      return t('git.stagedCount').replace('{count}', String(stagedChanges.length))
+    if (currentDraftPendingAssets.length) {
+      return t('git.stagedCount').replace('{count}', String(currentDraftPendingAssets.length))
     }
-    return t('git.noGitFileOpen')
-  }, [currentDraft, stagedChanges.length, t])
+    return t('git.noStagedChanges')
+  }, [pendingDraft, currentDraftPendingAssets.length, t])
 
   useEffect(() => {
     setMounted(true)
@@ -445,6 +463,17 @@ export function GitPanel() {
 
     openDraftInTab(change.documentId)
     useTabsStore.getState().markTabAsSaved(useTabsStore.getState().activeTabId || activeTab.id, restoredDraft.name)
+  }
+
+  const handleStageCurrentDraft = () => {
+    if (!currentDraft?.documentId) return
+    stageGitDraft(currentDraft.documentId)
+    toast({ title: t('git.stagedToGit') })
+  }
+
+  const handleRestagePendingAsset = (changeId: string) => {
+    restagePendingAsset(changeId)
+    toast({ title: t('git.stagedToGit') })
   }
 
   const handlePromptConfirm = async (value: string) => {
@@ -712,6 +741,69 @@ export function GitPanel() {
             <div className="text-xs" style={{ color: themeConfig.muted }}>
               {pendingSummary}
             </div>
+          </div>
+
+          <div className="max-h-[180px] space-y-2 overflow-y-auto rounded-md border p-2" style={{ borderColor: themeConfig.border }}>
+            {pendingDraft ? (
+              <div
+                className="flex items-center gap-2 rounded-md border px-2 py-2"
+                style={{ borderColor: themeConfig.border, backgroundColor: themeConfig.background }}
+              >
+                <button
+                  type="button"
+                  className="min-w-0 flex-1 text-left"
+                  onClick={() => void handleOpenFile(pendingDraft.path)}
+                >
+                  <div className="truncate text-sm" style={{ color: themeConfig.text }}>
+                    {pendingDraft.name}
+                  </div>
+                  <div className="truncate text-[11px]" style={{ color: themeConfig.muted }}>
+                    {pendingDraft.path}
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleStageCurrentDraft}
+                  className="rounded p-1 transition-colors"
+                  style={{ color: themeConfig.primary }}
+                  title={t('git.stageConfirm')}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ) : null}
+
+            {currentDraftPendingAssets.map((change) => (
+              <div
+                key={change.id}
+                className="flex items-center gap-2 rounded-md border px-2 py-2"
+                style={{ borderColor: themeConfig.border, backgroundColor: themeConfig.background }}
+              >
+                <div className="min-w-0 flex-1 text-left">
+                  <div className="truncate text-sm" style={{ color: themeConfig.text }}>
+                    {change.label}
+                  </div>
+                  <div className="truncate text-[11px]" style={{ color: themeConfig.muted }}>
+                    {change.repoPath}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleRestagePendingAsset(change.id)}
+                  className="rounded p-1 transition-colors"
+                  style={{ color: themeConfig.primary }}
+                  title={t('git.stageConfirm')}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+
+            {!hasPendingStageItems ? (
+              <div className="py-6 text-center text-sm" style={{ color: themeConfig.muted }}>
+                {t('git.noStagedChanges')}
+              </div>
+            ) : null}
           </div>
 
           {currentDraft?.hasConflict ? (

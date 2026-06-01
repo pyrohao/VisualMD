@@ -1,6 +1,8 @@
 import type { GitBranchRef, GitProviderClient, GitProviderConfig, GitRepoRef } from '../types'
 import { withGitProviderError } from '../provider-errors'
 import { getLegacyGitProviderClient } from './legacy-adapter'
+import type { GitBatchCommitAction } from '../types'
+import { normalizeGitPath, safeJson } from '../utils'
 
 type GiteeSdkModule = {
   client?: {
@@ -73,6 +75,29 @@ async function tryValidateWithSdk(config: GitProviderConfig, baseUrl: string) {
     })
     return true
   })
+}
+
+async function validateWithRawRepoName(config: GitProviderConfig, baseUrl: string) {
+  const normalizedBaseUrl = getRequestBaseUrl(baseUrl).replace(/\/+$/, '')
+  const owner = config.ownerOrNamespace.trim()
+  const repo = config.repo.trim()
+  const token = config.token.trim()
+
+  const headers: HeadersInit = {
+    Accept: 'application/json',
+  }
+  if (token) {
+    headers.Authorization = `token ${token}`
+  }
+
+  const query = new URLSearchParams()
+  if (token) {
+    query.set('access_token', token)
+  }
+
+  const queryString = query.toString()
+  const url = `${normalizedBaseUrl}/repos/${encodeURIComponent(owner)}/${repo}${queryString ? `?${queryString}` : ''}`
+  await safeJson<unknown>(await fetch(url, { headers }))
 }
 
 async function tryListReposWithSdk(config: GitProviderConfig, baseUrl: string): Promise<GitRepoRef[] | null> {
@@ -167,11 +192,85 @@ async function tryGetBranchesWithSdk(config: GitProviderConfig, baseUrl: string)
   })
 }
 
+function getGiteeRepoUrl(
+  baseUrl: string,
+  owner: string,
+  repo: string,
+  endpoint: string,
+  token?: string
+) {
+  const normalizedBaseUrl = getRequestBaseUrl(baseUrl).replace(/\/+$/, '')
+  const query = new URLSearchParams()
+  if (token) {
+    query.set('access_token', token)
+  }
+  const queryString = query.toString()
+  return `${normalizedBaseUrl}/repos/${encodeURIComponent(owner)}/${repo}${endpoint}${queryString ? `?${queryString}` : ''}`
+}
+
+function getGiteeHeaders(token?: string): HeadersInit {
+  const headers: HeadersInit = {
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+  }
+  if (token) {
+    headers.Authorization = `token ${token}`
+  }
+  return headers
+}
+
+async function commitBatchViaCommitsApi(
+  config: GitProviderConfig,
+  baseUrl: string,
+  message: string,
+  actions: GitBatchCommitAction[]
+) {
+  const owner = config.ownerOrNamespace.trim()
+  const repo = config.repo.trim()
+  const token = config.token.trim()
+
+  const payload = {
+    branch: config.branch,
+    message,
+    actions: actions.map((action) => {
+      if (action.kind === 'delete') {
+        return {
+          action: 'delete',
+          path: normalizeGitPath(action.path),
+          ...(action.previousSha ? { last_commit_id: action.previousSha } : {}),
+        }
+      }
+
+      if (action.content === undefined) {
+        throw new Error(`Missing content for ${action.path}`)
+      }
+
+      return {
+        action: action.isCreate ? 'create' : 'update',
+        path: normalizeGitPath(action.path),
+        content: action.content,
+        encoding: action.encoding === 'base64' ? 'base64' : 'text',
+        ...(action.previousSha ? { last_commit_id: action.previousSha } : {}),
+      }
+    }),
+  }
+
+  const url = getGiteeRepoUrl(baseUrl, owner, repo, '/commits', token)
+  await safeJson<unknown>(
+    await fetch(url, {
+      method: 'POST',
+      headers: getGiteeHeaders(token),
+      body: JSON.stringify(payload),
+    })
+  )
+}
+
 export function createGiteeSdkClient(baseUrl: string): GitProviderClient {
   const useLegacy = (config: GitProviderConfig) => getLegacyGitProviderClient(config)
 
   return {
     validateConnection: (config) => withGitProviderError('gitee', async () => {
+      await validateWithRawRepoName(config, baseUrl)
       const usedSdk = await tryValidateWithSdk(config, baseUrl)
       if (usedSdk) return
       await useLegacy(config).validateConnection(config)
@@ -207,11 +306,7 @@ export function createGiteeSdkClient(baseUrl: string): GitProviderClient {
       return legacy.createOrUpdateBinaryFile(config, path, contentBase64, message, sha)
     }),
     commitBatch: (config, message, actions) => withGitProviderError('gitee', async () => {
-      const legacy = useLegacy(config)
-      if (!legacy.commitBatch) {
-        throw new Error('Current Git provider does not support atomic batch commits')
-      }
-      await legacy.commitBatch(config, message, actions)
+      await commitBatchViaCommitsApi(config, baseUrl, message, actions)
     }),
     deleteFile: (config, path, message, sha) => withGitProviderError('gitee', async () => {
       await useLegacy(config).deleteFile(config, path, message, sha)

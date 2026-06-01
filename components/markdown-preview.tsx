@@ -12,6 +12,7 @@
 
 import { useDocumentStore } from '@/stores/documentStore'
 import { useTabsStore } from '@/stores/tabsStore'
+import { useGitStore } from '@/stores/gitStore'
 import { useThemeStore, themeConfigs, type ThemeMode } from '@/stores/themeStore'
 import { useTranslation } from '@/stores/languageStore'
 import { useEffect, useState, useCallback, useRef } from 'react'
@@ -22,6 +23,12 @@ import remarkRehype from 'remark-rehype'
 import rehypeStringify from 'rehype-stringify'
 import { BookOpen, Pencil, SplitSquareHorizontal } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { getGitProviderClient } from '@/lib/git/providers'
+import { joinGitPath, normalizeGitPath } from '@/lib/git/utils'
+import { decryptSecret } from '@/lib/secret-storage'
+import { getMarkdownImagePasteResult, hasClipboardImage } from '@/lib/clipboard-image'
+import { getGitMarkdownImagePasteResult } from '@/lib/git-asset-paste'
+import { persistActiveTabSave } from '@/lib/editor-persistence'
 
 /**
  * 预览模式类型
@@ -191,19 +198,102 @@ function removeMetadata(markdown: string): string {
   return markdown.replace(/^---\n[\s\S]*?\n---\n?/, '')
 }
 
+const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  svg: 'image/svg+xml',
+  bmp: 'image/bmp',
+  ico: 'image/x-icon',
+  avif: 'image/avif',
+}
+
+function isExternalLikeImageSource(src: string) {
+  return /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(src)
+}
+
+function safeDecodeUriPath(path: string) {
+  try {
+    return decodeURI(path)
+  } catch {
+    return path
+  }
+}
+
+function normalizeRepoRelativePath(path: string) {
+  const stack: string[] = []
+
+  for (const segment of path.replace(/\\/g, '/').split('/')) {
+    if (!segment || segment === '.') continue
+    if (segment === '..') {
+      stack.pop()
+      continue
+    }
+    stack.push(segment)
+  }
+
+  return stack.join('/')
+}
+
+function resolveGitImageRepoPath(markdownPath: string, rawSrc: string) {
+  const trimmed = rawSrc.trim()
+  if (!trimmed || isExternalLikeImageSource(trimmed)) {
+    return null
+  }
+
+  const withoutHash = trimmed.split('#')[0] || ''
+  const rawPath = withoutHash.split('?')[0] || ''
+  const decodedPath = safeDecodeUriPath(rawPath)
+  if (!decodedPath) {
+    return null
+  }
+
+  if (decodedPath.startsWith('/')) {
+    return normalizeRepoRelativePath(decodedPath.slice(1))
+  }
+
+  const normalizedMarkdownPath = normalizeGitPath(markdownPath)
+  const markdownDir = normalizedMarkdownPath.includes('/')
+    ? normalizedMarkdownPath.split('/').slice(0, -1).join('/')
+    : ''
+  const joinedPath = markdownDir ? joinGitPath(markdownDir, decodedPath) : normalizeGitPath(decodedPath)
+
+  return normalizeRepoRelativePath(joinedPath)
+}
+
+function inferImageMimeType(repoPath: string, mimeType?: string) {
+  if (mimeType?.startsWith('image/')) {
+    return mimeType
+  }
+
+  const extension = repoPath.split('.').pop()?.toLowerCase() || ''
+  return IMAGE_MIME_BY_EXTENSION[extension] || 'application/octet-stream'
+}
+
 export function MarkdownPreview() {
   const { document, updateFromMarkdown } = useDocumentStore()
   const activeTabId = useTabsStore((state) => state.activeTabId)
+  const activeGitMeta = useTabsStore((state) => {
+    const activeTab = state.tabs.find((item) => item.id === state.activeTabId)
+    if (!activeTab || activeTab.sourceType !== 'git' || !activeTab.gitMeta?.path) {
+      return null
+    }
+    return activeTab.gitMeta
+  })
   const { theme, getThemeConfig } = useThemeStore()
   const [mounted, setMounted] = useState(false)
   const [mode, setMode] = useState<PreviewMode>('preview')
   const [html, setHtml] = useState('')
   const [editContent, setEditContent] = useState('')
+  const editTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const liveEditorRef = useRef<HTMLTextAreaElement | null>(null)
   const livePreviewRef = useRef<HTMLDivElement | null>(null)
   const isSyncingLiveScrollRef = useRef(false)
   const previousDocumentKeyRef = useRef<string>('')
   const skipLiveSyncRef = useRef(false)
+  const gitImageCacheRef = useRef<Map<string, string>>(new Map())
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
   const { t, currentLanguage } = useTranslation()
 
@@ -234,6 +324,89 @@ export function MarkdownPreview() {
     setEditContent(markdown)
   }, [documentKey, markdown])
 
+  const resolveGitImageSources = useCallback(async (rawHtml: string) => {
+    if (!activeGitMeta?.path) {
+      return rawHtml
+    }
+
+    const parser = new DOMParser()
+    const parsed = parser.parseFromString(rawHtml, 'text/html')
+    const images = Array.from(parsed.querySelectorAll('img[src]'))
+    if (!images.length) {
+      return rawHtml
+    }
+
+    const gitState = useGitStore.getState()
+    const stagedGitAssets = new Map<string, { contentBase64: string; mimeType?: string }>()
+    for (const change of gitState.stagedChanges) {
+      if (change.kind !== 'git-asset' || !change.contentBase64) {
+        continue
+      }
+      stagedGitAssets.set(normalizeGitPath(change.repoPath), {
+        contentBase64: change.contentBase64,
+        mimeType: change.mimeType,
+      })
+    }
+
+    const decryptedToken = decryptSecret(gitState.config.token || '')
+    const runtimeConfig = decryptedToken
+      ? {
+          ...gitState.config,
+          provider: activeGitMeta.provider,
+          ownerOrNamespace: activeGitMeta.ownerOrNamespace,
+          repo: activeGitMeta.repo,
+          branch: activeGitMeta.branch,
+          token: decryptedToken,
+        }
+      : null
+    const getBinaryFile = runtimeConfig
+      ? getGitProviderClient(runtimeConfig).getBinaryFile
+      : undefined
+
+    await Promise.all(images.map(async (img) => {
+      const src = img.getAttribute('src') || ''
+      const repoPath = resolveGitImageRepoPath(activeGitMeta.path, src)
+      if (!repoPath) {
+        return
+      }
+      const normalizedRepoPath = normalizeGitPath(repoPath)
+
+      const stagedAsset = stagedGitAssets.get(normalizedRepoPath)
+      if (stagedAsset?.contentBase64) {
+        const mimeType = inferImageMimeType(normalizedRepoPath, stagedAsset.mimeType)
+        const dataUrl = `data:${mimeType};base64,${stagedAsset.contentBase64}`
+        img.setAttribute('src', dataUrl)
+        return
+      }
+
+      if (!runtimeConfig || !getBinaryFile) {
+        return
+      }
+
+      const cacheKey = `${runtimeConfig.provider}:${runtimeConfig.ownerOrNamespace}/${runtimeConfig.repo}:${runtimeConfig.branch}:${normalizedRepoPath}`
+      const cached = gitImageCacheRef.current.get(cacheKey)
+      if (cached) {
+        img.setAttribute('src', cached)
+        return
+      }
+
+      try {
+        const binary = await getBinaryFile(runtimeConfig, normalizedRepoPath)
+        if (!binary?.contentBase64) {
+          return
+        }
+        const mimeType = inferImageMimeType(normalizedRepoPath, binary.mimeType)
+        const dataUrl = `data:${mimeType};base64,${binary.contentBase64}`
+        gitImageCacheRef.current.set(cacheKey, dataUrl)
+        img.setAttribute('src', dataUrl)
+      } catch {
+        // keep original src for troubleshooting
+      }
+    }))
+
+    return parsed.body.innerHTML
+  }, [activeGitMeta])
+
   // 使用 remark 处理 markdown
   useEffect(() => {
     let cancelled = false
@@ -248,9 +421,17 @@ export function MarkdownPreview() {
         .use(rehypeStringify, { allowDangerousHtml: true })
         .process(content)
       
+      const rawHtml = String(result)
       if (!cancelled) {
-        setHtml(String(result))
+        setHtml(rawHtml)
       }
+
+      void resolveGitImageSources(rawHtml).then((resolvedHtml) => {
+        if (cancelled || resolvedHtml === rawHtml) {
+          return
+        }
+        setHtml(resolvedHtml)
+      })
     }
     
     processMarkdown()
@@ -258,7 +439,7 @@ export function MarkdownPreview() {
     return () => {
       cancelled = true
     }
-  }, [renderMarkdown])
+  }, [renderMarkdown, resolveGitImageSources])
 
   // 处理模式切换
   const handleModeChange = useCallback((newMode: PreviewMode) => {
@@ -281,6 +462,68 @@ export function MarkdownPreview() {
   const handleEditChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setEditContent(e.target.value)
   }, [])
+
+  const persistGitDraftAfterPaste = useCallback((nextValue: string) => {
+    const activeTab = useTabsStore.getState().getActiveTab()
+    if (!activeTab || activeTab.sourceType !== 'git' || !activeTab.fileId) {
+      return
+    }
+
+    useGitStore.getState().updateDraftContent(activeTab.fileId, nextValue)
+    useTabsStore.getState().updateTabContent(activeTab.id, nextValue)
+    useTabsStore.getState().markTabAsModified(activeTab.id, true)
+    persistActiveTabSave()
+  }, [])
+
+  const handleEditPaste = useCallback(async (
+    e: React.ClipboardEvent<HTMLTextAreaElement>,
+    sourceValue: string,
+    textareaRef: React.RefObject<HTMLTextAreaElement | null>
+  ) => {
+    if (!hasClipboardImage(e.clipboardData)) return
+
+    e.preventDefault()
+
+    const target = e.currentTarget
+    const activeTab = useTabsStore.getState().getActiveTab()
+    const isGitTab = activeTab?.sourceType === 'git' && !!activeTab.fileId
+
+    const selectionStart = target.selectionStart ?? sourceValue.length
+    const selectionEnd = target.selectionEnd ?? sourceValue.length
+
+    const result = isGitTab && activeTab.fileId
+      ? await getGitMarkdownImagePasteResult({
+          documentId: activeTab.fileId,
+          clipboardData: e.clipboardData,
+          value: sourceValue,
+          selectionStart,
+          selectionEnd,
+        })
+      : await getMarkdownImagePasteResult({
+          clipboardData: e.clipboardData,
+          value: sourceValue,
+          selectionStart,
+          selectionEnd,
+        })
+
+    if (!result) return
+
+    setEditContent(result.nextValue)
+    if (mode === 'live') {
+      updateFromMarkdown(result.nextValue)
+    }
+
+    if (isGitTab) {
+      persistGitDraftAfterPaste(result.nextValue)
+    }
+
+    window.requestAnimationFrame(() => {
+      const textarea = textareaRef.current
+      if (!textarea) return
+      textarea.focus()
+      textarea.setSelectionRange(result.selectionStart, result.selectionEnd)
+    })
+  }, [mode, persistGitDraftAfterPaste, updateFromMarkdown])
 
   const liveLabels =
     currentLanguage === 'zh'
@@ -464,8 +707,12 @@ export function MarkdownPreview() {
 
         {mode === 'edit' && (
           <textarea
+            ref={editTextareaRef}
             value={editContent}
             onChange={handleEditChange}
+            onPaste={(e) => {
+              void handleEditPaste(e, editContent, editTextareaRef)
+            }}
             className="h-full w-full resize-none border-0 p-6 font-mono text-sm outline-none"
             style={{
               backgroundColor: themeConfig.background,
@@ -487,6 +734,9 @@ export function MarkdownPreview() {
                 ref={liveEditorRef}
                 value={editContent}
                 onChange={handleEditChange}
+                onPaste={(e) => {
+                  void handleEditPaste(e, editContent, liveEditorRef)
+                }}
                 onScroll={handleLiveEditorScroll}
                 className="h-full w-full resize-none border-0 p-5 font-mono text-sm outline-none"
                 style={{

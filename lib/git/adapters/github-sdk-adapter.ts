@@ -1,6 +1,6 @@
 import { Octokit } from 'octokit'
 import type { GitBatchCommitAction, GitBranchRef, GitFileRef, GitProviderClient, GitProviderConfig, GitRepoRef, GitTreeItem } from '../types'
-import { arrayBufferToBase64, decodeBase64, encodeBase64, getGitFileName, joinGitPath, normalizeGitPath } from '../utils'
+import { decodeBase64, encodeBase64, getGitFileName, joinGitPath, normalizeGitPath } from '../utils'
 import { withGitProviderError } from '../provider-errors'
 
 type GitHubContent = {
@@ -95,17 +95,17 @@ async function readGitHubTextContent(
   const content = result.content
     ? decodeBase64(result.content.replace(/\n/g, ''))
     : await (async () => {
-      if (!result.download_url) return ''
-      const response = await fetch(result.download_url, {
-        headers: {
-          Authorization: `token ${config.token}`,
-          Accept: 'application/vnd.github.raw',
-        },
+      if (!result.sha) return ''
+      const blob = await octokit.rest.git.getBlob({
+        owner: config.ownerOrNamespace,
+        repo: config.repo,
+        file_sha: result.sha,
       })
-      if (!response.ok) {
-        throw new Error(`Failed to download remote file: HTTP ${response.status}`)
+      const blobContent = typeof blob.data.content === 'string' ? blob.data.content.replace(/\n/g, '') : ''
+      if (blob.data.encoding === 'base64') {
+        return decodeBase64(blobContent)
       }
-      return response.text()
+      return blobContent
     })()
 
   return {
@@ -130,23 +130,21 @@ async function readGitHubBinaryContent(
     return { contentBase64: result.content.replace(/\n/g, '') }
   }
 
-  if (!result.download_url) {
+  if (!result.sha) {
     return { contentBase64: '' }
   }
 
-  const response = await fetch(result.download_url, {
-    headers: {
-      Authorization: `token ${config.token}`,
-      Accept: 'application/vnd.github.raw',
-    },
+  const blob = await octokit.rest.git.getBlob({
+    owner: config.ownerOrNamespace,
+    repo: config.repo,
+    file_sha: result.sha,
   })
-  if (!response.ok) {
-    throw new Error(`Failed to download remote file: HTTP ${response.status}`)
+  const blobContent = typeof blob.data.content === 'string' ? blob.data.content.replace(/\n/g, '') : ''
+  if (blob.data.encoding === 'base64') {
+    return { contentBase64: blobContent }
   }
 
-  const mimeType = response.headers.get('content-type') || undefined
-  const buffer = await response.arrayBuffer()
-  return { contentBase64: arrayBufferToBase64(buffer), mimeType }
+  return { contentBase64: blobContent ? encodeBase64(blobContent) : '' }
 }
 
 async function createOrUpdateGitHubFile(

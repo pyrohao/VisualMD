@@ -427,9 +427,7 @@ export function SettingsPanel() {
                     style={{ backgroundColor: themeConfig.input, borderColor: themeConfig.border, color: themeConfig.text }}
                   >
                     <option value="github">GitHub</option>
-                    <option value="gitlab">GitLab</option>
                     <option value="gitee">Gitee</option>
-                    <option value="custom">{t('settings.custom')}</option>
                   </select>
                 </div>
                 <div className="space-y-1.5">
@@ -445,37 +443,6 @@ export function SettingsPanel() {
                   />
                 </div>
               </div>
-
-              {gitConfig.provider === 'custom' && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
-                    <Label className="text-xs" style={{ color: themeConfig.text }}>
-                      {t('git.baseUrl')}
-                    </Label>
-                    <Input
-                      value={gitConfig.baseUrl || ''}
-                      onChange={(e) => setGitConfig({ baseUrl: e.target.value })}
-                      placeholder="https://git.example.com/api/v4"
-                      className="h-9 text-xs"
-                      style={{ backgroundColor: themeConfig.input, borderColor: themeConfig.border, color: themeConfig.text }}
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs" style={{ color: themeConfig.text }}>
-                      {t('git.customFlavor')}
-                    </Label>
-                    <select
-                      value={gitConfig.customFlavor || 'gitlab'}
-                      onChange={(e) => setGitConfig({ customFlavor: e.target.value as 'gitlab' | 'gitea' })}
-                      className="h-9 w-full rounded-md border px-2 text-xs"
-                      style={{ backgroundColor: themeConfig.input, borderColor: themeConfig.border, color: themeConfig.text }}
-                    >
-                      <option value="gitlab">GitLab API</option>
-                      <option value="gitea">Gitea API</option>
-                    </select>
-                  </div>
-                </div>
-              )}
 
               <div className="space-y-1.5">
                 <div className="flex items-center gap-1.5">

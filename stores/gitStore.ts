@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { devtools, persist } from 'zustand/middleware'
+import { nanoid } from 'nanoid'
 import { getGitProviderClient } from '@/lib/git/providers'
 import type { GitBatchCommitAction, GitBranchRef, GitDraftFile, GitProviderConfig, GitRepoRef, GitTreeItem, StagedGitChange } from '@/lib/git/types'
 import { arrayBufferToBase64, buildGitDocumentId, getGitFileName, joinGitPath, normalizeGitPath } from '@/lib/git/utils'
@@ -16,6 +17,7 @@ interface GitStore {
   expandedPaths: string[]
   drafts: Record<string, GitDraftFile>
   stagedChanges: StagedGitChange[]
+  pendingAssetChanges: StagedGitChange[]
   currentDocumentId: string | null
   isConnecting: boolean
   isLoadingTree: boolean
@@ -40,6 +42,7 @@ interface GitStore {
   stageDeletedGitFile: (path: string) => Promise<void>
   stageDeletedGitFolder: (path: string) => Promise<void>
   unstageChange: (changeId: string) => void
+  restagePendingAsset: (changeId: string) => void
   uploadAsset: (documentId: string, file: File) => Promise<{ repoPath: string }>
   refreshCurrentFile: () => Promise<void>
   fetchRemoteFile: (documentId?: string) => Promise<GitDraftFile | null>
@@ -58,6 +61,7 @@ type GitStorePersistedState = {
   connected: boolean
   drafts: Record<string, GitDraftFile>
   stagedChanges: StagedGitChange[]
+  pendingAssetChanges: StagedGitChange[]
   currentDocumentId: string | null
   expandedPaths: string[]
 }
@@ -122,6 +126,17 @@ function getFolderPlaceholderPath(path: string) {
   return joinGitPath(normalizeGitPath(path), '.gitkeep')
 }
 
+function createAssetFileName(draftPath: string, file: File) {
+  const normalizedDraftPath = normalizeGitPath(draftPath)
+  const baseName = getGitFileName(normalizedDraftPath).replace(/\.[^.]+$/, '') || 'document'
+  const extension = file.name.includes('.')
+    ? file.name.split('.').pop()?.toLowerCase() || 'png'
+    : file.type.split('/')[1]?.toLowerCase() || 'png'
+  const safeExtension = extension.replace(/[^a-z0-9]/g, '') || 'png'
+  const shortSuffix = nanoid(6).toLowerCase()
+  return `${baseName}-${shortSuffix}.${safeExtension}`
+}
+
 function sanitizePersistedDrafts(input: unknown): Record<string, GitDraftFile> {
   if (!input || typeof input !== 'object') return {}
   return input as Record<string, GitDraftFile>
@@ -132,9 +147,25 @@ function sanitizePersistedStagedChanges(input: unknown): StagedGitChange[] {
   return input as StagedGitChange[]
 }
 
+function sanitizePersistedPendingAssetChanges(input: unknown): StagedGitChange[] {
+  if (!Array.isArray(input)) return []
+  return input.filter((item): item is StagedGitChange => (
+    !!item &&
+    typeof item === 'object' &&
+    (item as StagedGitChange).kind === 'git-asset' &&
+    typeof (item as StagedGitChange).id === 'string' &&
+    typeof (item as StagedGitChange).repoPath === 'string' &&
+    typeof (item as StagedGitChange).label === 'string'
+  ))
+}
+
 function sanitizePersistedExpandedPaths(input: unknown): string[] {
   if (!Array.isArray(input)) return []
   return input.filter((item): item is string => typeof item === 'string')
+}
+
+function normalizeSupportedProvider(provider: GitProviderConfig['provider'] | undefined): GitProviderConfig['provider'] {
+  return provider === 'gitee' ? 'gitee' : 'github'
 }
 
 export function migrateGitStorePersistedState(
@@ -150,6 +181,7 @@ export function migrateGitStorePersistedState(
     ...DEFAULT_CONFIG,
     ...(state.config || {}),
     token: normalizeEncryptedSecret(state.config?.token || ''),
+    provider: normalizeSupportedProvider(state.config?.provider),
   }
 
   // v1 only persisted connection config. v2 extends this with local git workspace state.
@@ -160,6 +192,7 @@ export function migrateGitStorePersistedState(
       connected: state.connected === true,
       drafts: sanitizePersistedDrafts(state.drafts),
       stagedChanges: sanitizePersistedStagedChanges(state.stagedChanges),
+      pendingAssetChanges: sanitizePersistedPendingAssetChanges(state.pendingAssetChanges),
       currentDocumentId: typeof state.currentDocumentId === 'string' ? state.currentDocumentId : null,
       expandedPaths: sanitizePersistedExpandedPaths(state.expandedPaths),
     }
@@ -172,6 +205,7 @@ export function migrateGitStorePersistedState(
     connected: state.connected === true,
     drafts: sanitizePersistedDrafts(state.drafts),
     stagedChanges: sanitizePersistedStagedChanges(state.stagedChanges),
+    pendingAssetChanges: sanitizePersistedPendingAssetChanges(state.pendingAssetChanges),
     currentDocumentId: typeof state.currentDocumentId === 'string' ? state.currentDocumentId : null,
     expandedPaths: sanitizePersistedExpandedPaths(state.expandedPaths),
   }
@@ -189,6 +223,7 @@ export const useGitStore = create<GitStore>()(
         expandedPaths: [],
         drafts: {},
         stagedChanges: [],
+        pendingAssetChanges: [],
         currentDocumentId: null,
         isConnecting: false,
         isLoadingTree: false,
@@ -204,6 +239,9 @@ export const useGitStore = create<GitStore>()(
               ...state.config,
               ...updates,
               token: updates.token !== undefined ? encryptSecret(updates.token) : state.config.token,
+              provider: normalizeSupportedProvider(
+                (updates.provider as GitProviderConfig['provider'] | undefined) ?? state.config.provider
+              ),
             }
             const nextSignature = buildConfigSignature(nextConfig)
             const configChanged = nextSignature !== state.lastConnectedConfigSignature
@@ -386,6 +424,13 @@ export const useGitStore = create<GitStore>()(
 
                 return draftReferencesRepoPath(draft.path, content, item.repoPath)
               }),
+              pendingAssetChanges: state.pendingAssetChanges.filter((item) => {
+                if (item.kind !== 'git-asset' || item.documentId !== documentId) {
+                  return true
+                }
+
+                return draftReferencesRepoPath(draft.path, content, item.repoPath)
+              }),
             }
           })
 
@@ -535,11 +580,24 @@ export const useGitStore = create<GitStore>()(
           set((state) => {
             const nextState: Partial<GitStore> & {
               stagedChanges: StagedGitChange[]
+              pendingAssetChanges?: StagedGitChange[]
               drafts?: Record<string, GitDraftFile>
               treeByPath?: Record<string, GitTreeItem[]>
               currentDocumentId?: string | null
             } = {
               stagedChanges: state.stagedChanges.filter((item) => item.id !== changeId),
+            }
+
+            if (change.kind === 'git-asset' && change.contentBase64) {
+              const pendingAsset: StagedGitChange = {
+                ...change,
+                kind: 'git-asset',
+                updatedAt: Date.now(),
+              }
+              nextState.pendingAssetChanges = [
+                ...state.pendingAssetChanges.filter((item) => item.id !== pendingAsset.id),
+                pendingAsset,
+              ]
             }
 
             if (change.kind === 'git-delete-file' && change.documentId && change.originalContent !== undefined) {
@@ -569,6 +627,29 @@ export const useGitStore = create<GitStore>()(
           if (change.kind === 'git-delete-folder') {
             void get().loadTree(change.repoPath.split('/').slice(0, -1).join('/'))
           }
+        },
+
+        restagePendingAsset: (changeId) => {
+          set((state) => {
+            const asset = state.pendingAssetChanges.find((item) => item.id === changeId)
+            if (!asset || asset.kind !== 'git-asset' || !asset.contentBase64) {
+              return state
+            }
+
+            const restagedAsset: StagedGitChange = {
+              ...asset,
+              kind: 'git-asset',
+              updatedAt: Date.now(),
+            }
+
+            return {
+              stagedChanges: [
+                ...state.stagedChanges.filter((item) => item.id !== restagedAsset.id),
+                restagedAsset,
+              ],
+              pendingAssetChanges: state.pendingAssetChanges.filter((item) => item.id !== changeId),
+            }
+          })
         },
 
         uploadAsset: async (documentId, file) => {
@@ -608,12 +689,7 @@ export const useGitStore = create<GitStore>()(
           const draftDir = normalizedDraftPath.includes('/')
             ? normalizedDraftPath.split('/').slice(0, -1).join('/')
             : ''
-          const baseName = getGitFileName(normalizedDraftPath).replace(/\.[^.]+$/, '') || 'document'
-          const extension = file.name.includes('.')
-            ? file.name.split('.').pop()?.toLowerCase() || 'png'
-            : file.type.split('/')[1]?.toLowerCase() || 'png'
-          const safeExtension = extension.replace(/[^a-z0-9]/g, '') || 'png'
-          const assetFileName = `${baseName}-${Date.now()}.${safeExtension}`
+          const assetFileName = createAssetFileName(normalizedDraftPath, file)
           const repoPath = joinGitPath(draftDir, '.visualmd-assets', assetFileName)
           const contentBase64 = arrayBufferToBase64(await file.arrayBuffer())
           const mimeType = file.type || undefined
@@ -632,6 +708,7 @@ export const useGitStore = create<GitStore>()(
                 updatedAt: Date.now(),
               },
             ],
+            pendingAssetChanges: state.pendingAssetChanges.filter((item) => item.id !== `git-asset:${documentId}:${repoPath}`),
           }))
 
           return { repoPath }
@@ -987,6 +1064,7 @@ export const useGitStore = create<GitStore>()(
           connected: state.connected,
           drafts: state.drafts,
           stagedChanges: state.stagedChanges,
+          pendingAssetChanges: state.pendingAssetChanges,
           currentDocumentId: state.currentDocumentId,
           expandedPaths: state.expandedPaths,
         }),
@@ -998,6 +1076,7 @@ export const useGitStore = create<GitStore>()(
             ...DEFAULT_CONFIG,
             ...(migratedState.config || {}),
             token: normalizeEncryptedSecret(migratedState.config?.token || ''),
+            provider: normalizeSupportedProvider(migratedState.config?.provider),
           }
           const lastConnectedConfigSignature = state.lastConnectedConfigSignature || null
           const hasValidConfig = !getConfigError(normalizedConfig)
@@ -1021,6 +1100,7 @@ export const useGitStore = create<GitStore>()(
             connected: shouldRestoreConnection,
             drafts: restoredDrafts,
             stagedChanges: sanitizePersistedStagedChanges(migratedState.stagedChanges),
+            pendingAssetChanges: sanitizePersistedPendingAssetChanges(migratedState.pendingAssetChanges),
             currentDocumentId: restoredCurrentDocumentId,
             expandedPaths: sanitizePersistedExpandedPaths(migratedState.expandedPaths),
           }))
