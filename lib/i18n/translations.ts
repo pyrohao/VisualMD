@@ -286,6 +286,21 @@ export interface Translations {
     stageToGitDescription: string
     stageConfirm: string
     stagedToGit: string
+    binaryReadonly: string
+    binaryReadonlyHint: string
+    previewMissingToken: string
+    binaryPreviewUnsupported: string
+    binaryPreviewEmptyContent: string
+    binaryPreviewFailed: string
+    filePreview: string
+    imagePreview: string
+    audioPreview: string
+    videoPreview: string
+    pdfPreview: string
+    binaryPreview: string
+    loadingPreview: string
+    inlinePreviewUnavailable: string
+    downloadFile: string
   }
   // Toast 消息
   toast: {
@@ -590,6 +605,21 @@ export const translations: Record<Language, Translations> = {
       stageToGitDescription: '输入此文件在仓库中的目标路径',
       stageConfirm: '暂存',
       stagedToGit: '已暂存到 Git',
+      binaryReadonly: '该 Git 文件为二进制内容，当前以只读方式打开。',
+      binaryReadonlyHint: '请在右侧预览面板查看实际内容。',
+      previewMissingToken: '当前 Git 配置缺少可用令牌',
+      binaryPreviewUnsupported: '当前 Git 渠道不支持二进制文件预览',
+      binaryPreviewEmptyContent: '未获取到文件内容',
+      binaryPreviewFailed: '预览加载失败',
+      filePreview: '文件预览',
+      imagePreview: '图片预览',
+      audioPreview: '音频预览',
+      videoPreview: '视频预览',
+      pdfPreview: 'PDF 预览',
+      binaryPreview: '二进制文件预览',
+      loadingPreview: '正在加载预览...',
+      inlinePreviewUnavailable: '当前文件类型暂不支持内嵌预览，可直接下载查看。',
+      downloadFile: '下载文件',
     },
     toast: {
       saved: '已保存',
@@ -890,6 +920,21 @@ export const translations: Record<Language, Translations> = {
       stageToGitDescription: 'Enter repository path for this file',
       stageConfirm: 'Stage',
       stagedToGit: 'Staged to Git',
+      binaryReadonly: 'This Git file contains binary content and is opened in read-only mode.',
+      binaryReadonlyHint: 'Use the preview panel on the right to inspect the actual content.',
+      previewMissingToken: 'Missing Git token',
+      binaryPreviewUnsupported: 'Binary preview is not supported',
+      binaryPreviewEmptyContent: 'Empty binary content',
+      binaryPreviewFailed: 'Preview failed',
+      filePreview: 'File Preview',
+      imagePreview: 'Image Preview',
+      audioPreview: 'Audio Preview',
+      videoPreview: 'Video Preview',
+      pdfPreview: 'PDF Preview',
+      binaryPreview: 'Binary Preview',
+      loadingPreview: 'Loading preview...',
+      inlinePreviewUnavailable: 'Inline preview is not available for this file type. Download to inspect it.',
+      downloadFile: 'Download File',
     },
     toast: {
       saved: 'Saved',

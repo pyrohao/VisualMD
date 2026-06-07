@@ -158,6 +158,37 @@ export function NodeEditPanel() {
     }
   }, [])
 
+  const syncGitNodeContentImmediately = useCallback((nextContent: string) => {
+    const doc = documentRef.current
+    const selNodeId = selectedNodeIdRef.current
+    const activeTab = useTabsStore.getState().getActiveTab()
+
+    if (!doc || !selNodeId || !activeTab || activeTab.sourceType !== 'git' || !activeTab.fileId) {
+      return
+    }
+
+    const liveNode = findNodeInTreeOrDetached(doc.root, doc.detachedNodes || [], selNodeId)
+    if (!liveNode || liveNode.isVirtual || liveNode.level === 0) {
+      return
+    }
+
+    const trimmedTitle = titleRef.current.trim()
+    const nextTitle = trimmedTitle || liveNode.title
+    const nextNodeContent = normalizeNodeContent(nextContent)
+
+    contentRef.current = nextContent
+    useDocumentStore.getState().updateNode(selNodeId, {
+      title: nextTitle,
+      content: nextNodeContent,
+    })
+
+    const latestMarkdown = useDocumentStore.getState().getCurrentMarkdown()
+    useGitStore.getState().updateDraftContent(activeTab.fileId, latestMarkdown)
+    useTabsStore.getState().updateTabContent(activeTab.id, latestMarkdown)
+    useTabsStore.getState().markTabAsModified(activeTab.id, true)
+    useUnsavedChangesStore.getState().setEditorDirty('node-edit-panel', false)
+  }, [])
+
   useEffect(() => {
     useUnsavedChangesStore.getState().setEditorDirty('node-edit-panel', hasPendingNodeChanges)
 
@@ -613,6 +644,7 @@ export function NodeEditPanel() {
               }}
               onTitleChange={setTitle}
               onContentChange={setContent}
+              onAfterGitPaste={syncGitNodeContentImmediately}
             />
           )}
 

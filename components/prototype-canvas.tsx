@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { CheckCircle2, ChevronRight, LayoutTemplate, MousePointerClick, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -35,9 +35,13 @@ import {
   type PrototypeMarkdownBlock,
   type PrototypeSection,
 } from '@/lib/prototype-parser'
-import { getGitProviderClient } from '@/lib/git/providers'
-import { joinGitPath, normalizeGitPath } from '@/lib/git/utils'
-import { decryptSecret } from '@/lib/secret-storage'
+import {
+  buildGitImageRuntimeConfig,
+  collectGitAssetMap,
+  GIT_IMAGE_PLACEHOLDER_DATA_URL,
+  resolveGitImageRepoPath,
+  resolveGitImageSourceMap,
+} from '@/lib/git-image-resolution'
 
 interface PrototypeCanvasProps {
   document: DocumentState | null
@@ -47,77 +51,6 @@ interface PrototypeCanvasProps {
 interface DialogState {
   title: string
   description: string
-}
-
-const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  gif: 'image/gif',
-  webp: 'image/webp',
-  svg: 'image/svg+xml',
-  bmp: 'image/bmp',
-  ico: 'image/x-icon',
-  avif: 'image/avif',
-}
-
-function isExternalLikeImageSource(src: string) {
-  return /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(src)
-}
-
-function safeDecodeUriPath(path: string) {
-  try {
-    return decodeURI(path)
-  } catch {
-    return path
-  }
-}
-
-function normalizeRepoRelativePath(path: string) {
-  const stack: string[] = []
-  for (const segment of path.replace(/\\/g, '/').split('/')) {
-    if (!segment || segment === '.') continue
-    if (segment === '..') {
-      stack.pop()
-      continue
-    }
-    stack.push(segment)
-  }
-  return stack.join('/')
-}
-
-function resolveGitImageRepoPath(markdownPath: string, rawSrc: string) {
-  const trimmed = rawSrc.trim()
-  if (!trimmed || isExternalLikeImageSource(trimmed)) {
-    return null
-  }
-
-  const withoutHash = trimmed.split('#')[0] || ''
-  const rawPath = withoutHash.split('?')[0] || ''
-  const decodedPath = safeDecodeUriPath(rawPath)
-  if (!decodedPath) {
-    return null
-  }
-
-  if (decodedPath.startsWith('/')) {
-    return normalizeRepoRelativePath(decodedPath.slice(1))
-  }
-
-  const normalizedMarkdownPath = normalizeGitPath(markdownPath)
-  const markdownDir = normalizedMarkdownPath.includes('/')
-    ? normalizedMarkdownPath.split('/').slice(0, -1).join('/')
-    : ''
-  const joinedPath = markdownDir ? joinGitPath(markdownDir, decodedPath) : normalizeGitPath(decodedPath)
-
-  return normalizeRepoRelativePath(joinedPath)
-}
-
-function inferImageMimeType(repoPath: string, mimeType?: string) {
-  if (mimeType?.startsWith('image/')) {
-    return mimeType
-  }
-  const extension = repoPath.split('.').pop()?.toLowerCase() || ''
-  return IMAGE_MIME_BY_EXTENSION[extension] || 'application/octet-stream'
 }
 
 function collectBlockDefaults(
@@ -211,6 +144,9 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
     }
     return activeTab.gitMeta
   })
+  const gitConfig = useGitStore((state) => state.config)
+  const stagedChanges = useGitStore((state) => state.stagedChanges)
+  const pendingAssetChanges = useGitStore((state) => state.pendingAssetChanges)
   const prototype = useMemo(() => parseDocumentToPrototype(document), [document])
   const [activeSectionId, setActiveSectionId] = useState<string>('')
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({})
@@ -220,6 +156,7 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
   const [lastAction, setLastAction] = useState<string>('')
   const [dialogState, setDialogState] = useState<DialogState | null>(null)
   const [resolvedImageMap, setResolvedImageMap] = useState<Record<string, string>>({})
+  const gitImageCacheRef = useRef<Map<string, string>>(new Map())
 
   useEffect(() => {
     setMounted(true)
@@ -303,56 +240,23 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
       return
     }
 
-    const gitState = useGitStore.getState()
-    const decryptedToken = decryptSecret(gitState.config.token || '')
-    if (!decryptedToken) {
-      return
-    }
-
-    const runtimeConfig = {
-      ...gitState.config,
-      provider: activeGitMeta.provider,
-      ownerOrNamespace: activeGitMeta.ownerOrNamespace,
-      repo: activeGitMeta.repo,
-      branch: activeGitMeta.branch,
-      token: decryptedToken,
-    }
-    const client = getGitProviderClient(runtimeConfig)
-    const getBinaryFile = client.getBinaryFile
-    if (!getBinaryFile) {
-      return
-    }
+    const gitAssets = collectGitAssetMap(stagedChanges, pendingAssetChanges)
+    const runtimeConfig = buildGitImageRuntimeConfig(gitConfig, activeGitMeta)
 
     let cancelled = false
 
     void (async () => {
-      const resolvedEntries = await Promise.all(imageSrcList.map(async (rawSrc) => {
-        const repoPath = resolveGitImageRepoPath(activeGitMeta.path, rawSrc)
-        if (!repoPath) {
-          return null
-        }
-
-        try {
-          const binary = await getBinaryFile(runtimeConfig, repoPath)
-          if (!binary?.contentBase64) {
-            return null
-          }
-          const mimeType = inferImageMimeType(repoPath, binary.mimeType)
-          return [rawSrc, `data:${mimeType};base64,${binary.contentBase64}`] as const
-        } catch {
-          return null
-        }
-      }))
-
+      const nextMap = await resolveGitImageSourceMap({
+        sources: imageSrcList,
+        markdownPath: activeGitMeta.path,
+        gitAssets,
+        runtimeConfig,
+        cache: gitImageCacheRef.current,
+      })
       if (cancelled) {
         return
       }
 
-      const nextMap: Record<string, string> = {}
-      for (const entry of resolvedEntries) {
-        if (!entry) continue
-        nextMap[entry[0]] = entry[1]
-      }
       if (Object.keys(nextMap).length === 0) {
         return
       }
@@ -363,7 +267,7 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
     return () => {
       cancelled = true
     }
-  }, [activeGitMeta, prototype])
+  }, [activeGitMeta, gitConfig, pendingAssetChanges, prototype, stagedChanges])
 
   const copy =
     currentLanguage === 'zh'
@@ -398,7 +302,17 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
           childNodes: 'children',
         }
 
-  const resolvePrototypeImageSrc = (src: string) => resolvedImageMap[src] || null
+  const resolvePrototypeImageSrc = (src: string) => {
+    if (resolvedImageMap[src]) {
+      return resolvedImageMap[src]
+    }
+
+    if (activeGitMeta?.path && resolveGitImageRepoPath(activeGitMeta.path, src)) {
+      return GIT_IMAGE_PLACEHOLDER_DATA_URL
+    }
+
+    return null
+  }
 
   const handleButtonAction = (block: Extract<PrototypeBlock, { type: 'button' }>) => {
     if (block.target && prototype) {

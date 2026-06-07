@@ -20,10 +20,9 @@ export async function getGitMarkdownImagePasteResult({
   if (!imageFiles.length) return null
 
   const snippets = await Promise.all(imageFiles.map(async ({ file, altText }) => {
-    const { repoPath } = await useGitStore.getState().uploadAsset(documentId, file)
-    const currentDraft = useGitStore.getState().drafts[documentId]
-    const draftDir = currentDraft?.path.includes('/')
-      ? currentDraft.path.split('/').slice(0, -1).join('/')
+    const { repoPath, draftPath } = await useGitStore.getState().uploadAsset(documentId, file)
+    const draftDir = draftPath.includes('/')
+      ? draftPath.split('/').slice(0, -1).join('/')
       : ''
     const relativePath = draftDir && repoPath.startsWith(`${draftDir}/`)
       ? repoPath.slice(draftDir.length + 1)

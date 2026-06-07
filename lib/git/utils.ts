@@ -4,6 +4,25 @@ export function buildGitDocumentId(config: Pick<GitProviderConfig, 'provider' | 
   return `git:${config.provider}:${config.ownerOrNamespace}/${config.repo}:${config.branch}:${path}`
 }
 
+export function parseGitDocumentId(documentId: string): (Pick<
+  GitProviderConfig,
+  'provider' | 'ownerOrNamespace' | 'repo' | 'branch'
+> & { path: string }) | null {
+  const match = /^git:([^:]+):([^/]+)\/([^:]+):([^:]+):(.+)$/.exec(documentId)
+  if (!match) {
+    return null
+  }
+
+  const [, provider, ownerOrNamespace, repo, branch, path] = match
+  return {
+    provider: provider as GitProviderConfig['provider'],
+    ownerOrNamespace,
+    repo,
+    branch,
+    path,
+  }
+}
+
 export function normalizeGitPath(path: string) {
   return path.replace(/^\/+/, '').replace(/\\/g, '/').replace(/\/+/g, '/')
 }

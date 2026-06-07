@@ -7,17 +7,21 @@ import {
   ChevronDown,
   ChevronRight,
   Download,
+  File,
   FilePlus2,
   FileText,
   FolderGit2,
   FolderPlus,
   GitBranch,
+  ImageIcon,
   Loader2,
+  Music,
   Pencil,
   RefreshCw,
   RotateCcw,
   Save,
   Trash2,
+  Video,
 } from 'lucide-react'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { useTranslation } from '@/stores/languageStore'
@@ -27,6 +31,7 @@ import { useTabsStore } from '@/stores/tabsStore'
 import { requestNavigationWithUnsavedGuard } from '@/stores/unsavedChangesStore'
 import { useDocumentStore } from '@/stores/documentStore'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
+import { inferGitFileKind, inferGitFileMimeType, isGitBinaryFileKind } from '@/lib/git/file-kind'
 import { buildGitDocumentId, getGitFileName, joinGitPath, normalizeGitPath } from '@/lib/git/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -79,6 +84,28 @@ function GitTreeNode({
 }) {
   const items = treeByPath[path] || []
 
+  const renderFileIcon = (itemPath: string) => {
+    const fileKind = inferGitFileKind(itemPath)
+
+    if (fileKind === 'image') {
+      return <ImageIcon className="h-4 w-4 shrink-0" style={{ color: themeConfig.primary }} />
+    }
+
+    if (fileKind === 'audio') {
+      return <Music className="h-4 w-4 shrink-0" style={{ color: themeConfig.primary }} />
+    }
+
+    if (fileKind === 'video') {
+      return <Video className="h-4 w-4 shrink-0" style={{ color: themeConfig.primary }} />
+    }
+
+    if (fileKind === 'pdf' || fileKind === 'binary') {
+      return <File className="h-4 w-4 shrink-0" style={{ color: themeConfig.muted }} />
+    }
+
+    return <FileText className="h-4 w-4 shrink-0" style={{ color: themeConfig.muted }} />
+  }
+
   return (
     <div className="space-y-1">
       {items.map((item) => {
@@ -116,7 +143,7 @@ function GitTreeNode({
                 {isDir ? (
                   <FolderGit2 className="h-4 w-4 shrink-0" style={{ color: themeConfig.primary }} />
                 ) : (
-                  <FileText className="h-4 w-4 shrink-0" style={{ color: themeConfig.muted }} />
+                  renderFileIcon(normalizedPath)
                 )}
                 <span className="min-w-0 truncate text-sm">{item.name}</span>
               </button>
@@ -214,6 +241,7 @@ function GitTreeNode({
 function getStagedChangeLabel(change: StagedGitChange, t: (key: string) => string) {
   if (change.kind === 'git-delete-file') return t('git.stagedDeleteFile').replace('{name}', change.label)
   if (change.kind === 'git-delete-folder') return t('git.stagedDeleteFolder').replace('{name}', change.label)
+  if (change.kind === 'git-create-folder') return `${t('git.createFolder')}: ${change.label}`
   return change.label
 }
 
@@ -263,13 +291,14 @@ export function GitPanel() {
     deleteFolder,
   } = useGitStore()
 
+  const activeTab = getActiveTab()
   const currentDraft = currentDocumentId ? drafts[currentDocumentId] : null
-  const currentPath = currentDraft?.path || null
+  const currentPath = currentDraft?.path || activeTab?.gitMeta?.path || null
   const stagedCurrentDraftChange = currentDraft
     ? stagedChanges.find((item) => item.kind === 'git-draft' && item.documentId === currentDraft.documentId)
     : null
   const stagedChangeIdSet = useMemo(() => new Set(stagedChanges.map((item) => item.id)), [stagedChanges])
-  const canStageCurrentDraft = Boolean(currentDraft?.isDirty && !stagedCurrentDraftChange)
+  const canStageCurrentDraft = Boolean(currentDraft && (currentDraft.isDirty || currentDraft.isNew) && !stagedCurrentDraftChange)
   const pendingDraft = canStageCurrentDraft ? currentDraft : null
   const currentDraftPendingAssets = currentDraft
     ? pendingAssetChanges.filter((item) => (
@@ -288,7 +317,7 @@ export function GitPanel() {
       return t('git.stagedCount').replace('{count}', String(currentDraftPendingAssets.length))
     }
     return t('git.noStagedChanges')
-  }, [pendingDraft, currentDraftPendingAssets.length, t])
+  }, [currentDraftPendingAssets.length, pendingDraft, t])
 
   useEffect(() => {
     setMounted(true)
@@ -344,6 +373,7 @@ export function GitPanel() {
         branch: draft.branch,
         path: draft.path,
         sha: draft.sha,
+        fileKind: 'text',
       },
     })
     setCurrentDocumentId(draft.documentId)
@@ -352,6 +382,32 @@ export function GitPanel() {
 
   const handleOpenFile = async (path: string) => {
     await requestNavigationWithUnsavedGuard(async () => {
+      const normalizedPath = normalizeGitPath(path)
+      const fileKind = inferGitFileKind(normalizedPath)
+
+      if (isGitBinaryFileKind(fileKind)) {
+        openGitFileInTab({
+          fileName: getGitFileName(normalizedPath),
+          content: '',
+          savedContent: '',
+          isModified: false,
+          isNew: false,
+          fileId: buildGitDocumentId(config, normalizedPath),
+          sourceType: 'git',
+          gitMeta: {
+            provider: config.provider,
+            ownerOrNamespace: config.ownerOrNamespace,
+            repo: config.repo,
+            branch: config.branch,
+            path: normalizedPath,
+            fileKind,
+            mimeType: inferGitFileMimeType(normalizedPath),
+          },
+        })
+        setCurrentDocumentId(null)
+        return
+      }
+
       const draft = await openFile(path)
       openDraftInTab(buildGitDocumentId(config, draft.path))
     }, getGitFileName(path))
@@ -438,6 +494,11 @@ export function GitPanel() {
         openFileInTab(file.name, file.content, change.localFileId)
         loadDocument(file.content, file.name, change.localFileId)
       }, file.name)
+      return
+    }
+
+    if (change.kind === 'git-create-folder') {
+      await toggleExpandedPath(change.repoPath)
     }
   }
 

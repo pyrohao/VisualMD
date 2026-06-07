@@ -25,6 +25,7 @@ interface NodeContentEditorProps {
   }
   onTitleChange: (title: string) => void
   onContentChange: (content: string) => void
+  onAfterGitPaste?: (content: string) => void
 }
 
 export function NodeContentEditor({
@@ -33,6 +34,7 @@ export function NodeContentEditor({
   themeConfig,
   onTitleChange,
   onContentChange,
+  onAfterGitPaste,
 }: NodeContentEditorProps) {
   const { t } = useTranslation()
   const contentTextareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -57,6 +59,7 @@ export function NodeContentEditor({
       if (!uploadResult) return
 
       onContentChange(uploadResult.nextValue)
+      onAfterGitPaste?.(uploadResult.nextValue)
 
       window.requestAnimationFrame(() => {
         const textarea = contentTextareaRef.current
@@ -84,7 +87,7 @@ export function NodeContentEditor({
       textarea.focus()
       textarea.setSelectionRange(result.selectionStart, result.selectionEnd)
     })
-  }, [content, onContentChange])
+  }, [content, onAfterGitPaste, onContentChange])
 
   return (
     <div className="space-y-6">

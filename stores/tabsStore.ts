@@ -5,7 +5,7 @@
 import { create } from 'zustand'
 import { devtools, persist } from 'zustand/middleware'
 import { nanoid } from 'nanoid'
-import type { GitProvider, GitSourceType } from '@/lib/git/types'
+import type { GitFileKind, GitProvider, GitSourceType } from '@/lib/git/types'
 
 export interface Tab {
   id: string
@@ -25,6 +25,8 @@ export interface Tab {
     branch: string
     path: string
     sha?: string
+    fileKind?: GitFileKind
+    mimeType?: string
   } | null
 }
 

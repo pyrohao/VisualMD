@@ -2,7 +2,7 @@ import type { GitBranchRef, GitProviderClient, GitProviderConfig, GitRepoRef } f
 import { withGitProviderError } from '../provider-errors'
 import { getLegacyGitProviderClient } from './legacy-adapter'
 import type { GitBatchCommitAction } from '../types'
-import { normalizeGitPath, safeJson } from '../utils'
+import { joinGitPath, normalizeGitPath, safeJson } from '../utils'
 
 type GiteeSdkModule = {
   client?: {
@@ -15,6 +15,29 @@ type GiteeSdkModule = {
 }
 
 type SdkResponse<T> = { data?: T } & T
+type GiteeContentResponse = {
+  path?: string
+  sha?: string
+  type?: string
+  commit?: {
+    sha?: string
+  }
+}
+type GiteeCommitSummary = {
+  sha?: string
+}
+type GiteeRemoteFileState = {
+  exists: boolean
+  lastCommitId?: string
+}
+
+type GiteeCommitActionPayload = {
+  action: 'create' | 'update' | 'delete'
+  path: string
+  content?: string
+  encoding?: 'text' | 'base64'
+  last_commit_id?: string
+}
 
 const runtimeImport = new Function(
   'specifier',
@@ -197,13 +220,18 @@ function getGiteeRepoUrl(
   owner: string,
   repo: string,
   endpoint: string,
-  token?: string
+  token?: string,
+  queryParams?: Record<string, string | undefined>
 ) {
   const normalizedBaseUrl = getRequestBaseUrl(baseUrl).replace(/\/+$/, '')
   const query = new URLSearchParams()
   if (token) {
     query.set('access_token', token)
   }
+  Object.entries(queryParams || {}).forEach(([key, value]) => {
+    if (!value) return
+    query.set(key, value)
+  })
   const queryString = query.toString()
   return `${normalizedBaseUrl}/repos/${encodeURIComponent(owner)}/${repo}${endpoint}${queryString ? `?${queryString}` : ''}`
 }
@@ -219,6 +247,127 @@ function getGiteeHeaders(token?: string): HeadersInit {
   return headers
 }
 
+function encodeGitPathForUrl(path: string) {
+  return normalizeGitPath(path)
+    .split('/')
+    .filter(Boolean)
+    .map((segment) => encodeURIComponent(segment))
+    .join('/')
+}
+
+async function tryGetLatestCommitIdForPath(
+  config: GitProviderConfig,
+  baseUrl: string,
+  normalizedPath: string
+) {
+  const owner = config.ownerOrNamespace.trim()
+  const repo = config.repo.trim()
+  const token = config.token.trim()
+  const url = getGiteeRepoUrl(baseUrl, owner, repo, '/commits', token, {
+    sha: config.branch,
+    path: normalizedPath,
+    page: '1',
+    per_page: '1',
+  })
+
+  try {
+    const commits = await safeJson<GiteeCommitSummary[]>(
+      await fetch(url, {
+        headers: getGiteeHeaders(token),
+      })
+    )
+    return Array.isArray(commits) ? commits[0]?.sha : undefined
+  } catch {
+    return undefined
+  }
+}
+
+async function getGiteeRemoteFileState(
+  config: GitProviderConfig,
+  baseUrl: string,
+  normalizedPath: string
+): Promise<GiteeRemoteFileState> {
+  const owner = config.ownerOrNamespace.trim()
+  const repo = config.repo.trim()
+  const token = config.token.trim()
+  const url = getGiteeRepoUrl(
+    baseUrl,
+    owner,
+    repo,
+    `/contents/${encodeGitPathForUrl(normalizedPath)}`,
+    token,
+    { ref: config.branch }
+  )
+
+  const response = await fetch(url, {
+    headers: getGiteeHeaders(token),
+  })
+
+  if (response.status === 404) {
+    return { exists: false }
+  }
+
+  const result = await safeJson<GiteeContentResponse | GiteeContentResponse[]>(response)
+  const payload = Array.isArray(result) ? result[0] : result
+  const inlineCommitId = typeof payload?.commit?.sha === 'string' ? payload.commit.sha : undefined
+
+  return {
+    exists: true,
+    lastCommitId: inlineCommitId || await tryGetLatestCommitIdForPath(config, baseUrl, normalizedPath),
+  }
+}
+
+function getParentDirectoryPaths(path: string) {
+  const normalizedPath = normalizeGitPath(path)
+  const segments = normalizedPath.split('/').filter(Boolean)
+  const parentPaths: string[] = []
+
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    parentPaths.push(segments.slice(0, index + 1).join('/'))
+  }
+
+  return parentPaths
+}
+
+async function buildGiteeCommitActionPayload(
+  config: GitProviderConfig,
+  baseUrl: string,
+  action: GitBatchCommitAction,
+  getRemoteState: (path: string) => Promise<GiteeRemoteFileState>
+): Promise<GiteeCommitActionPayload> {
+  const normalizedPath = normalizeGitPath(action.path)
+  const remoteState = await getRemoteState(normalizedPath)
+
+  if (action.kind === 'delete') {
+    return {
+      action: 'delete',
+      path: normalizedPath,
+      ...(remoteState.lastCommitId ? { last_commit_id: remoteState.lastCommitId } : {}),
+    }
+  }
+
+  if (action.content === undefined) {
+    throw new Error(`Missing content for ${action.path}`)
+  }
+
+  const actionType: 'create' | 'update' =
+    action.isCreate === true
+      ? 'create'
+      : remoteState.exists
+        ? 'update'
+        : 'create'
+
+  return {
+    action: actionType,
+    path: normalizedPath,
+    content: action.content,
+    encoding: action.encoding === 'base64' ? 'base64' : 'text',
+    ...(actionType === 'update' && remoteState.lastCommitId
+      ? { last_commit_id: remoteState.lastCommitId }
+      : {}),
+  }
+}
+
 async function commitBatchViaCommitsApi(
   config: GitProviderConfig,
   baseUrl: string,
@@ -228,31 +377,60 @@ async function commitBatchViaCommitsApi(
   const owner = config.ownerOrNamespace.trim()
   const repo = config.repo.trim()
   const token = config.token.trim()
+  const remoteStateCache = new Map<string, Promise<GiteeRemoteFileState>>()
+
+  const getRemoteState = (path: string) => {
+    const normalizedPath = normalizeGitPath(path)
+    const cached = remoteStateCache.get(normalizedPath)
+    if (cached) return cached
+    const pendingState = getGiteeRemoteFileState(config, baseUrl, normalizedPath)
+    remoteStateCache.set(normalizedPath, pendingState)
+    return pendingState
+  }
+
+  const normalizedActionPaths = new Set(actions.map((action) => normalizeGitPath(action.path)))
+  const placeholderPaths = new Set<string>()
+
+  for (const action of actions) {
+    if (action.kind !== 'upsert') {
+      continue
+    }
+
+    for (const parentPath of getParentDirectoryPaths(action.path)) {
+      const placeholderPath = joinGitPath(parentPath, '.gitkeep')
+      if (normalizedActionPaths.has(placeholderPath)) {
+        continue
+      }
+
+      const remoteState = await getRemoteState(placeholderPath)
+      if (remoteState.exists) {
+        continue
+      }
+
+      placeholderPaths.add(placeholderPath)
+    }
+  }
+
+  const placeholderActions: GitBatchCommitAction[] = Array.from(placeholderPaths)
+    .sort((left, right) => left.split('/').length - right.split('/').length)
+    .map((path) => ({
+      kind: 'upsert',
+      path,
+      content: '',
+      encoding: 'text',
+      isCreate: true,
+    }))
+
+  const resolvedActions = await Promise.all(
+    [...placeholderActions, ...actions].map((action) =>
+      buildGiteeCommitActionPayload(config, baseUrl, action, getRemoteState)
+    )
+  )
 
   const payload = {
     branch: config.branch,
     message,
-    actions: actions.map((action) => {
-      if (action.kind === 'delete') {
-        return {
-          action: 'delete',
-          path: normalizeGitPath(action.path),
-          ...(action.previousSha ? { last_commit_id: action.previousSha } : {}),
-        }
-      }
-
-      if (action.content === undefined) {
-        throw new Error(`Missing content for ${action.path}`)
-      }
-
-      return {
-        action: action.isCreate ? 'create' : 'update',
-        path: normalizeGitPath(action.path),
-        content: action.content,
-        encoding: action.encoding === 'base64' ? 'base64' : 'text',
-        ...(action.previousSha ? { last_commit_id: action.previousSha } : {}),
-      }
-    }),
+    actions: resolvedActions,
   }
 
   const url = getGiteeRepoUrl(baseUrl, owner, repo, '/commits', token)
@@ -315,7 +493,15 @@ export function createGiteeSdkClient(baseUrl: string): GitProviderClient {
       await useLegacy(config).renameFile(config, oldPath, newPath, message, content, sha)
     }),
     createFolder: (config, path, message) => withGitProviderError('gitee', async () => {
-      await useLegacy(config).createFolder(config, path, message)
+      await commitBatchViaCommitsApi(config, baseUrl, message, [
+        {
+          kind: 'upsert',
+          path: joinGitPath(path, '.gitkeep'),
+          content: '',
+          encoding: 'text',
+          isCreate: true,
+        },
+      ])
     }),
     deleteFolder: (config, path, message) => withGitProviderError('gitee', async () => {
       await useLegacy(config).deleteFolder(config, path, message)

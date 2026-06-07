@@ -30,6 +30,7 @@ import { useSidebarStore as useTemplateStore } from '@/stores/sidebarStore'
 import { EmptyTabView } from './empty-tab-view'
 import { EditorCanvasShell } from './editor-canvas-shell'
 import { persistActiveTabSave } from '@/lib/editor-persistence'
+import { inferGitFileKind, isGitBinaryFileKind } from '@/lib/git/file-kind'
 
 /**
  * 默认示例Markdown内容（英文版）
@@ -297,6 +298,41 @@ const RIGHT_PANEL_MIN_WIDTH = 780
 const CENTER_PANEL_MIN_WIDTH = 120
 const RESIZE_HANDLE_HIT_AREA = 14
 
+function BinaryGitCanvasPlaceholder({
+  fileName,
+  themeConfig,
+}: {
+  fileName: string
+  themeConfig: typeof themeConfigs.light
+}) {
+  const { t } = useTranslation()
+
+  return (
+    <div
+      className="flex h-full items-center justify-center px-8"
+      style={{ backgroundColor: themeConfig.background }}
+    >
+      <div
+        className="max-w-md rounded-2xl border px-6 py-8 text-center"
+        style={{
+          borderColor: themeConfig.border,
+          backgroundColor: themeConfig.card,
+          boxShadow: `0 20px 40px ${themeConfig.border}22`,
+        }}
+      >
+        <div className="text-lg font-semibold" style={{ color: themeConfig.heading }}>
+          {fileName}
+        </div>
+        <div className="mt-3 text-sm leading-6" style={{ color: themeConfig.muted }}>
+          {t('git.binaryReadonly')}
+          <br />
+          {t('git.binaryReadonlyHint')}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function MarkdownEditor() {
   // 面板收起状态
   const [rightCollapsed, setRightCollapsed] = useState(false)
@@ -337,6 +373,12 @@ export function MarkdownEditor() {
 
   // 获取当前激活的标签页
   const activeTab = getActiveTab()
+  const activeGitFileKind =
+    activeTab?.sourceType === 'git' && activeTab.gitMeta?.path
+      ? activeTab.gitMeta.fileKind || inferGitFileKind(activeTab.gitMeta.path)
+      : 'text'
+  const isActiveBinaryGitTab =
+    activeTab?.sourceType === 'git' && isGitBinaryFileKind(activeGitFileKind)
 
   // 计算当前文件
   const currentFile = files.find(f => f.id === currentFileId) || null
@@ -392,6 +434,18 @@ export function MarkdownEditor() {
       // 非模板标签，退出模板编辑模式
       setTemplateEditMode({ isActive: false, content: '', templateName: '', templateId: null })
       useTemplateStore.setState({ editingTemplateId: null, isTemplateModified: false })
+    }
+
+    const activeGitKind =
+      activeTab.sourceType === 'git' && activeTab.gitMeta?.path
+        ? activeTab.gitMeta.fileKind || inferGitFileKind(activeTab.gitMeta.path)
+        : 'text'
+
+    if (activeTab.sourceType === 'git' && isGitBinaryFileKind(activeGitKind)) {
+      loadDocument('', activeTab.fileName)
+      setCurrentDocumentId(null)
+      useFileSystemStore.setState({ currentFileId: null })
+      return
     }
 
     // 如果标签页有内容，加载到编辑器（传入 fileId 以恢复状态）
@@ -544,6 +598,11 @@ export function MarkdownEditor() {
     }
 
     if (currentTab?.sourceType === 'git' && currentTab.fileId) {
+      const currentGitKind =
+        currentTab.gitMeta?.fileKind || (currentTab.gitMeta?.path ? inferGitFileKind(currentTab.gitMeta.path) : 'text')
+      if (isGitBinaryFileKind(currentGitKind)) {
+        return
+      }
       persistActiveTabSave()
       toast({
         title: t('git.draftSaved'),
@@ -835,9 +894,11 @@ export function MarkdownEditor() {
           }}
         >
           {(() => {
-            const showEmptyView = !activeTabId || (activeTab?.isNew && !activeTab?.content?.trim())
+            const showEmptyView = !activeTabId || (!isActiveBinaryGitTab && activeTab?.isNew && !activeTab?.content?.trim())
             return showEmptyView ? (
               <EmptyTabView tabId={activeTabId || 'blank'} onOpenSearch={() => setSearchDialogOpen(true)} />
+            ) : isActiveBinaryGitTab ? (
+              <BinaryGitCanvasPlaceholder fileName={activeTab?.fileName || 'Binary File'} themeConfig={safeThemeConfig} />
             ) : (
               <EditorCanvasShell document={document} />
             )

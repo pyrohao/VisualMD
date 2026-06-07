@@ -11,11 +11,13 @@
  */
 
 import { useDocumentStore } from '@/stores/documentStore'
-import { useTabsStore } from '@/stores/tabsStore'
+import { useTabsStore, type Tab } from '@/stores/tabsStore'
 import { useGitStore } from '@/stores/gitStore'
 import { useThemeStore, themeConfigs, type ThemeMode } from '@/stores/themeStore'
 import { useTranslation } from '@/stores/languageStore'
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { getGitProviderClient } from '@/lib/git/providers'
+import { inferGitFileKind, inferGitFileMimeType, isGitBinaryFileKind } from '@/lib/git/file-kind'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
 import remarkGfm from 'remark-gfm'
@@ -23,12 +25,14 @@ import remarkRehype from 'remark-rehype'
 import rehypeStringify from 'rehype-stringify'
 import { BookOpen, Pencil, SplitSquareHorizontal } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { getGitProviderClient } from '@/lib/git/providers'
-import { joinGitPath, normalizeGitPath } from '@/lib/git/utils'
-import { decryptSecret } from '@/lib/secret-storage'
 import { getMarkdownImagePasteResult, hasClipboardImage } from '@/lib/clipboard-image'
 import { getGitMarkdownImagePasteResult } from '@/lib/git-asset-paste'
-import { persistActiveTabSave } from '@/lib/editor-persistence'
+import {
+  buildGitImageRuntimeConfig,
+  collectGitAssetMap,
+  prepareGitHtmlImageSources,
+  resolveGitHtmlImageSources,
+} from '@/lib/git-image-resolution'
 
 /**
  * 预览模式类型
@@ -198,83 +202,177 @@ function removeMetadata(markdown: string): string {
   return markdown.replace(/^---\n[\s\S]*?\n---\n?/, '')
 }
 
-const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  gif: 'image/gif',
-  webp: 'image/webp',
-  svg: 'image/svg+xml',
-  bmp: 'image/bmp',
-  ico: 'image/x-icon',
-  avif: 'image/avif',
-}
+function GitBinaryPreview({
+  fileName,
+  gitMeta,
+}: {
+  fileName: string
+  gitMeta: NonNullable<Tab['gitMeta']>
+}) {
+  const gitConfig = useGitStore((state) => state.config)
+  const { getThemeConfig } = useThemeStore()
+  const [mounted, setMounted] = useState(false)
+  const [previewUrl, setPreviewUrl] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const cacheRef = useRef<Map<string, string>>(new Map())
+  const { t, currentLanguage } = useTranslation()
+  const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
+  const fileKind = gitMeta.fileKind || inferGitFileKind(gitMeta.path)
 
-function isExternalLikeImageSource(src: string) {
-  return /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(src)
-}
+  useEffect(() => {
+    setMounted(true)
+  }, [])
 
-function safeDecodeUriPath(path: string) {
-  try {
-    return decodeURI(path)
-  } catch {
-    return path
-  }
-}
+  useEffect(() => {
+    let cancelled = false
 
-function normalizeRepoRelativePath(path: string) {
-  const stack: string[] = []
+    const loadPreview = async () => {
+      if (!isGitBinaryFileKind(fileKind)) {
+        setPreviewUrl('')
+        setLoading(false)
+        setError(null)
+        return
+      }
 
-  for (const segment of path.replace(/\\/g, '/').split('/')) {
-    if (!segment || segment === '.') continue
-    if (segment === '..') {
-      stack.pop()
-      continue
+      const runtimeConfig = buildGitImageRuntimeConfig(gitConfig, gitMeta)
+      if (!runtimeConfig) {
+        setPreviewUrl('')
+        setLoading(false)
+        setError(t('git.previewMissingToken'))
+        return
+      }
+
+      const cacheKey = `${runtimeConfig.provider}:${runtimeConfig.ownerOrNamespace}/${runtimeConfig.repo}:${runtimeConfig.branch}:${gitMeta.path}`
+      const cached = cacheRef.current.get(cacheKey)
+      if (cached) {
+        setPreviewUrl(cached)
+        setLoading(false)
+        setError(null)
+        return
+      }
+
+      setLoading(true)
+      setError(null)
+
+      try {
+        const getBinaryFile = getGitProviderClient(runtimeConfig).getBinaryFile
+        if (!getBinaryFile) {
+          throw new Error(t('git.binaryPreviewUnsupported'))
+        }
+
+        const binary = await getBinaryFile(runtimeConfig, gitMeta.path)
+        if (!binary?.contentBase64) {
+          throw new Error(t('git.binaryPreviewEmptyContent'))
+        }
+
+        const nextPreviewUrl = `data:${inferGitFileMimeType(gitMeta.path, binary.mimeType || gitMeta.mimeType)};base64,${binary.contentBase64}`
+        cacheRef.current.set(cacheKey, nextPreviewUrl)
+        if (!cancelled) {
+          setPreviewUrl(nextPreviewUrl)
+          setLoading(false)
+        }
+      } catch (loadError) {
+        if (!cancelled) {
+          setPreviewUrl('')
+          setLoading(false)
+          setError(loadError instanceof Error ? loadError.message : t('git.binaryPreviewFailed'))
+        }
+      }
     }
-    stack.push(segment)
+
+    void loadPreview()
+
+    return () => {
+      cancelled = true
+    }
+  }, [currentLanguage, fileKind, gitConfig, gitMeta])
+
+  const typeLabel = {
+    text: t('git.filePreview'),
+    image: t('git.imagePreview'),
+    audio: t('git.audioPreview'),
+    video: t('git.videoPreview'),
+    pdf: t('git.pdfPreview'),
+    binary: t('git.binaryPreview'),
   }
 
-  return stack.join('/')
-}
+  return (
+    <div className="flex h-full flex-col" style={{ backgroundColor: themeConfig.background }}>
+      <div
+        className="flex h-14 items-center justify-between gap-4 border-b px-5"
+        style={{ backgroundColor: themeConfig.card, borderColor: themeConfig.border }}
+      >
+        <div className="min-w-0">
+          <div className="text-lg font-semibold" style={{ color: themeConfig.heading }}>
+            {typeLabel[fileKind]}
+          </div>
+          <div className="truncate text-sm" style={{ color: themeConfig.muted }} title={gitMeta.path}>
+            {gitMeta.path}
+          </div>
+        </div>
+      </div>
 
-function resolveGitImageRepoPath(markdownPath: string, rawSrc: string) {
-  const trimmed = rawSrc.trim()
-  if (!trimmed || isExternalLikeImageSource(trimmed)) {
-    return null
-  }
-
-  const withoutHash = trimmed.split('#')[0] || ''
-  const rawPath = withoutHash.split('?')[0] || ''
-  const decodedPath = safeDecodeUriPath(rawPath)
-  if (!decodedPath) {
-    return null
-  }
-
-  if (decodedPath.startsWith('/')) {
-    return normalizeRepoRelativePath(decodedPath.slice(1))
-  }
-
-  const normalizedMarkdownPath = normalizeGitPath(markdownPath)
-  const markdownDir = normalizedMarkdownPath.includes('/')
-    ? normalizedMarkdownPath.split('/').slice(0, -1).join('/')
-    : ''
-  const joinedPath = markdownDir ? joinGitPath(markdownDir, decodedPath) : normalizeGitPath(decodedPath)
-
-  return normalizeRepoRelativePath(joinedPath)
-}
-
-function inferImageMimeType(repoPath: string, mimeType?: string) {
-  if (mimeType?.startsWith('image/')) {
-    return mimeType
-  }
-
-  const extension = repoPath.split('.').pop()?.toLowerCase() || ''
-  return IMAGE_MIME_BY_EXTENSION[extension] || 'application/octet-stream'
+      <div className="flex-1 overflow-auto p-6">
+        {loading ? (
+          <div className="flex h-full items-center justify-center text-sm" style={{ color: themeConfig.muted }}>
+            {t('git.loadingPreview')}
+          </div>
+        ) : error ? (
+          <div className="flex h-full items-center justify-center">
+            <div
+              className="max-w-md rounded-2xl border px-6 py-6 text-center text-sm"
+              style={{ borderColor: themeConfig.border, backgroundColor: themeConfig.card, color: themeConfig.muted }}
+            >
+              {error}
+            </div>
+          </div>
+        ) : fileKind === 'image' ? (
+          <div className="flex min-h-full items-center justify-center">
+            <img src={previewUrl} alt={fileName} className="max-h-full max-w-full rounded-xl object-contain shadow-lg" />
+          </div>
+        ) : fileKind === 'audio' ? (
+          <div className="flex min-h-full items-center justify-center">
+            <audio controls src={previewUrl} className="w-full max-w-xl" />
+          </div>
+        ) : fileKind === 'video' ? (
+          <div className="flex min-h-full items-center justify-center">
+            <video controls src={previewUrl} className="max-h-full max-w-full rounded-xl shadow-lg" />
+          </div>
+        ) : fileKind === 'pdf' ? (
+          <iframe title={fileName} src={previewUrl} className="h-full min-h-[70vh] w-full rounded-xl border-0" />
+        ) : (
+          <div className="flex h-full items-center justify-center">
+            <div
+              className="max-w-md rounded-2xl border px-6 py-6 text-center"
+              style={{ borderColor: themeConfig.border, backgroundColor: themeConfig.card }}
+            >
+              <div className="text-base font-semibold" style={{ color: themeConfig.heading }}>
+                {fileName}
+              </div>
+              <div className="mt-2 text-sm" style={{ color: themeConfig.muted }}>
+                {t('git.inlinePreviewUnavailable')}
+              </div>
+              <a
+                href={previewUrl}
+                download={fileName}
+                className="mt-4 inline-flex rounded-md border px-4 py-2 text-sm transition-opacity hover:opacity-80"
+                style={{ borderColor: themeConfig.border, color: themeConfig.text }}
+              >
+                {t('git.downloadFile')}
+              </a>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
 }
 
 export function MarkdownPreview() {
   const { document, updateFromMarkdown } = useDocumentStore()
   const activeTabId = useTabsStore((state) => state.activeTabId)
+  const activeTab = useTabsStore((state) => state.tabs.find((item) => item.id === state.activeTabId) || null)
   const activeGitMeta = useTabsStore((state) => {
     const activeTab = state.tabs.find((item) => item.id === state.activeTabId)
     if (!activeTab || activeTab.sourceType !== 'git' || !activeTab.gitMeta?.path) {
@@ -282,6 +380,9 @@ export function MarkdownPreview() {
     }
     return activeTab.gitMeta
   })
+  const gitConfig = useGitStore((state) => state.config)
+  const stagedChanges = useGitStore((state) => state.stagedChanges)
+  const pendingAssetChanges = useGitStore((state) => state.pendingAssetChanges)
   const { theme, getThemeConfig } = useThemeStore()
   const [mounted, setMounted] = useState(false)
   const [mode, setMode] = useState<PreviewMode>('preview')
@@ -300,6 +401,13 @@ export function MarkdownPreview() {
   useEffect(() => {
     setMounted(true)
   }, [])
+
+  const activeGitFileKind =
+    activeTab?.sourceType === 'git' && activeTab.gitMeta?.path
+      ? activeTab.gitMeta.fileKind || inferGitFileKind(activeTab.gitMeta.path)
+      : 'text'
+  const isActiveBinaryGitTab =
+    activeTab?.sourceType === 'git' && isGitBinaryFileKind(activeGitFileKind)
 
   // 从Store获取当前Markdown
   const markdown = useDocumentStore.getState().getCurrentMarkdown()
@@ -324,88 +432,26 @@ export function MarkdownPreview() {
     setEditContent(markdown)
   }, [documentKey, markdown])
 
+  const gitAssets = useMemo(
+    () => collectGitAssetMap(stagedChanges, pendingAssetChanges),
+    [pendingAssetChanges, stagedChanges]
+  )
+
   const resolveGitImageSources = useCallback(async (rawHtml: string) => {
     if (!activeGitMeta?.path) {
       return rawHtml
     }
 
-    const parser = new DOMParser()
-    const parsed = parser.parseFromString(rawHtml, 'text/html')
-    const images = Array.from(parsed.querySelectorAll('img[src]'))
-    if (!images.length) {
-      return rawHtml
-    }
+    const preparedHtml = prepareGitHtmlImageSources(rawHtml, activeGitMeta.path, gitAssets)
 
-    const gitState = useGitStore.getState()
-    const stagedGitAssets = new Map<string, { contentBase64: string; mimeType?: string }>()
-    for (const change of gitState.stagedChanges) {
-      if (change.kind !== 'git-asset' || !change.contentBase64) {
-        continue
-      }
-      stagedGitAssets.set(normalizeGitPath(change.repoPath), {
-        contentBase64: change.contentBase64,
-        mimeType: change.mimeType,
-      })
-    }
-
-    const decryptedToken = decryptSecret(gitState.config.token || '')
-    const runtimeConfig = decryptedToken
-      ? {
-          ...gitState.config,
-          provider: activeGitMeta.provider,
-          ownerOrNamespace: activeGitMeta.ownerOrNamespace,
-          repo: activeGitMeta.repo,
-          branch: activeGitMeta.branch,
-          token: decryptedToken,
-        }
-      : null
-    const getBinaryFile = runtimeConfig
-      ? getGitProviderClient(runtimeConfig).getBinaryFile
-      : undefined
-
-    await Promise.all(images.map(async (img) => {
-      const src = img.getAttribute('src') || ''
-      const repoPath = resolveGitImageRepoPath(activeGitMeta.path, src)
-      if (!repoPath) {
-        return
-      }
-      const normalizedRepoPath = normalizeGitPath(repoPath)
-
-      const stagedAsset = stagedGitAssets.get(normalizedRepoPath)
-      if (stagedAsset?.contentBase64) {
-        const mimeType = inferImageMimeType(normalizedRepoPath, stagedAsset.mimeType)
-        const dataUrl = `data:${mimeType};base64,${stagedAsset.contentBase64}`
-        img.setAttribute('src', dataUrl)
-        return
-      }
-
-      if (!runtimeConfig || !getBinaryFile) {
-        return
-      }
-
-      const cacheKey = `${runtimeConfig.provider}:${runtimeConfig.ownerOrNamespace}/${runtimeConfig.repo}:${runtimeConfig.branch}:${normalizedRepoPath}`
-      const cached = gitImageCacheRef.current.get(cacheKey)
-      if (cached) {
-        img.setAttribute('src', cached)
-        return
-      }
-
-      try {
-        const binary = await getBinaryFile(runtimeConfig, normalizedRepoPath)
-        if (!binary?.contentBase64) {
-          return
-        }
-        const mimeType = inferImageMimeType(normalizedRepoPath, binary.mimeType)
-        const dataUrl = `data:${mimeType};base64,${binary.contentBase64}`
-        gitImageCacheRef.current.set(cacheKey, dataUrl)
-        img.setAttribute('src', dataUrl)
-      } catch {
-        // keep original src for troubleshooting
-      }
-    }))
-
-    return parsed.body.innerHTML
-  }, [activeGitMeta])
+    return resolveGitHtmlImageSources({
+      rawHtml: preparedHtml,
+      markdownPath: activeGitMeta.path,
+      gitAssets,
+      runtimeConfig: buildGitImageRuntimeConfig(gitConfig, activeGitMeta),
+      cache: gitImageCacheRef.current,
+    })
+  }, [activeGitMeta, gitAssets, gitConfig])
 
   // 使用 remark 处理 markdown
   useEffect(() => {
@@ -422,12 +468,15 @@ export function MarkdownPreview() {
         .process(content)
       
       const rawHtml = String(result)
+      const immediateHtml = activeGitMeta?.path
+        ? prepareGitHtmlImageSources(rawHtml, activeGitMeta.path, gitAssets)
+        : rawHtml
       if (!cancelled) {
-        setHtml(rawHtml)
+        setHtml(immediateHtml)
       }
 
-      void resolveGitImageSources(rawHtml).then((resolvedHtml) => {
-        if (cancelled || resolvedHtml === rawHtml) {
+      void resolveGitImageSources(immediateHtml).then((resolvedHtml) => {
+        if (cancelled || resolvedHtml === immediateHtml) {
           return
         }
         setHtml(resolvedHtml)
@@ -439,7 +488,7 @@ export function MarkdownPreview() {
     return () => {
       cancelled = true
     }
-  }, [renderMarkdown, resolveGitImageSources])
+  }, [activeGitMeta?.path, gitAssets, renderMarkdown, resolveGitImageSources])
 
   // 处理模式切换
   const handleModeChange = useCallback((newMode: PreviewMode) => {
@@ -472,7 +521,6 @@ export function MarkdownPreview() {
     useGitStore.getState().updateDraftContent(activeTab.fileId, nextValue)
     useTabsStore.getState().updateTabContent(activeTab.id, nextValue)
     useTabsStore.getState().markTabAsModified(activeTab.id, true)
-    persistActiveTabSave()
   }, [])
 
   const handleEditPaste = useCallback(async (
@@ -598,6 +646,10 @@ export function MarkdownPreview() {
   }, [editContent, markdown, mode, updateFromMarkdown])
 
   // 如果没有文档，显示空状态
+  if (isActiveBinaryGitTab && activeTab?.gitMeta) {
+    return <GitBinaryPreview fileName={activeTab.fileName} gitMeta={activeTab.gitMeta} />
+  }
+
   if (!document) {
     return (
       <div className="flex h-full flex-col" style={{ backgroundColor: themeConfig.background }}>

@@ -4,6 +4,8 @@ export type CustomGitFlavor = 'gitlab' | 'gitea'
 
 export type GitSourceType = 'local' | 'git'
 
+export type GitFileKind = 'text' | 'image' | 'audio' | 'video' | 'pdf' | 'binary'
+
 export interface GitProviderConfig {
   provider: GitProvider
   token: string
@@ -50,6 +52,7 @@ export interface GitDraftFile extends GitFileRef {
   originalContent: string
   draftContent: string
   isDirty: boolean
+  isNew?: boolean
   remoteContent?: string
   remoteSha?: string
   hasRemoteUpdates?: boolean
@@ -59,7 +62,7 @@ export interface GitDraftFile extends GitFileRef {
 
 export interface StagedGitChange {
   id: string
-  kind: 'git-draft' | 'local-file' | 'git-asset' | 'git-delete-file' | 'git-delete-folder'
+  kind: 'git-draft' | 'local-file' | 'git-asset' | 'git-delete-file' | 'git-delete-folder' | 'git-create-folder'
   label: string
   repoPath: string
   documentId?: string

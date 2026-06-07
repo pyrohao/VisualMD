@@ -2,6 +2,7 @@ import { useDocumentStore } from '@/stores/documentStore'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useGitStore } from '@/stores/gitStore'
 import { useTabsStore } from '@/stores/tabsStore'
+import { inferGitFileKind, isGitBinaryFileKind } from '@/lib/git/file-kind'
 
 export function persistActiveTabSave() {
   const tabsStore = useTabsStore.getState()
@@ -12,8 +13,13 @@ export function persistActiveTabSave() {
   if (!activeTab || !document) return
 
   const latestMarkdown = documentStore.getCurrentMarkdown()
+  const activeGitKind =
+    activeTab.gitMeta?.fileKind || (activeTab.gitMeta?.path ? inferGitFileKind(activeTab.gitMeta.path) : 'text')
 
   if (activeTab.sourceType === 'git' && activeTab.fileId) {
+    if (isGitBinaryFileKind(activeGitKind)) {
+      return
+    }
     useGitStore.getState().updateDraftContent(activeTab.fileId, latestMarkdown)
     tabsStore.updateTabContent(activeTab.id, latestMarkdown)
     tabsStore.markTabAsSaved(activeTab.id, document.fileName)
@@ -48,8 +54,14 @@ export function discardActiveTabChanges() {
   if (!activeTab) return
 
   const discardContent = activeTab.savedContent ?? activeTab.content
+  const activeGitKind =
+    activeTab.gitMeta?.fileKind || (activeTab.gitMeta?.path ? inferGitFileKind(activeTab.gitMeta.path) : 'text')
 
   if (activeTab.sourceType === 'git' && activeTab.fileId) {
+    if (isGitBinaryFileKind(activeGitKind)) {
+      tabsStore.discardTabChanges(activeTab.id)
+      return
+    }
     useGitStore.getState().updateDraftContent(activeTab.fileId, discardContent)
   }
 
