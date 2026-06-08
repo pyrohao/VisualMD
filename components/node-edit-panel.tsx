@@ -102,7 +102,7 @@ export function NodeEditPanel() {
   // ========== 初始化数据 ==========
   const selectedNodeDraftSignature = useMemo(
     () => getNodeDraftSignature(selectedNode),
-    [selectedNodeId, selectedNode?.content, selectedNode?.isVirtual, selectedNode?.level, selectedNode?.title]
+    [selectedNode]
   )
 
   useEffect(() => {
@@ -116,7 +116,7 @@ export function NodeEditPanel() {
     setTitle('')
     setContent('')
     setDraftSourceSignature(null)
-  }, [selectedNodeDraftSignature, selectedNodeId, selectedNode?.content, selectedNode?.title])
+  }, [selectedNode, selectedNodeDraftSignature])
 
   const hasPendingNodeChanges = Boolean(
     selectedNode &&
@@ -289,7 +289,6 @@ export function NodeEditPanel() {
       }
     }
     useUnsavedChangesStore.getState().setEditorDirty('node-edit-panel', false)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [getPendingNodePersistState])
 
   // ========== 手动保存并重新解析（用于关闭面板时）==========
@@ -371,7 +370,6 @@ export function NodeEditPanel() {
       }))
     }
     useUnsavedChangesStore.getState().setEditorDirty('node-edit-panel', false)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [getPendingNodePersistState])
 
   useEffect(() => {
@@ -453,7 +451,6 @@ export function NodeEditPanel() {
         useDocumentStore.getState().refreshNodeStructure(pendingNodeState.selNodeId)
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [getPendingNodePersistState])
 
   // ========== 事件处理 ==========

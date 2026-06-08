@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Textarea } from './ui/textarea'
 import { ScrollArea } from './ui/scroll-area'
 import { useDocumentStore } from '@/stores/documentStore'
@@ -19,10 +19,10 @@ export function MarkdownTextEditor() {
 
     const store = useDocumentStore.getState()
     setLocalValue(store.getCurrentMarkdown())
-  }, [document?.root, document?.metadata])
+  }, [document])
 
-  const debouncedUpdate = useCallback(
-    debounce((value: string) => {
+  const debouncedUpdate = useMemo(
+    () => debounce((value: string) => {
       updateFromMarkdown(value)
     }, 500),
     [updateFromMarkdown]

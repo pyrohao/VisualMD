@@ -365,7 +365,7 @@ export function MarkdownEditor() {
   const { loadDocument, document, selectedNodeId, getCurrentMarkdown, getIsModified, updateNode } = useDocumentStore()
   const { currentFileId, files, saveFile, markFileAsSaved, openFile, createFile } = useFileSystemStore()
   const { setCurrentDocumentId } = useGitStore()
-  const { isPanelExpanded, panelWidth, setPanelWidth } = useSidebarStore()
+  const { isPanelExpanded, panelWidth, setPanelWidth, togglePanel, setActivePanel } = useSidebarStore()
   const { activeTabId, getActiveTab, tabs } = useTabsStore()
   const currentMarkdown = getCurrentMarkdown()
   const isModified = getIsModified()
@@ -462,7 +462,7 @@ export function MarkdownEditor() {
       useFileSystemStore.setState({ currentFileId: null })
       setCurrentDocumentId(null)
     }
-  }, [activeTabId, mounted, loadDocument, openFile, setCurrentDocumentId])
+  }, [activeTab, activeTabId, mounted, loadDocument, openFile, setCurrentDocumentId])
 
   // 创建默认文件（只在客户端挂载后且确实没有文件时执行一次）
   useEffect(() => {
@@ -619,6 +619,19 @@ export function MarkdownEditor() {
   // 监听 Ctrl+S 保存
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'o') {
+        e.preventDefault()
+        setActivePanel('files')
+        setSearchDialogOpen(true)
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        e.preventDefault()
+        setSearchDialogOpen(true)
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
+        e.preventDefault()
+        togglePanel()
+      }
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault()
         handleSave()
@@ -647,7 +660,7 @@ export function MarkdownEditor() {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [handleSave])
+  }, [handleSave, setActivePanel, togglePanel])
 
   // 处理编辑模板
   const handleEditTemplate = useCallback((content: string, templateName: string, templateId: string) => {

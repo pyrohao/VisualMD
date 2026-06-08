@@ -286,7 +286,7 @@ function GitBinaryPreview({
     return () => {
       cancelled = true
     }
-  }, [currentLanguage, fileKind, gitConfig, gitMeta])
+  }, [currentLanguage, fileKind, gitConfig, gitMeta, t])
 
   const typeLabel = {
     text: t('git.filePreview'),

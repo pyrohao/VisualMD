@@ -77,6 +77,7 @@ export function FlowCanvas() {
   const { t } = useTranslation()
   const { mode: layoutMode } = useCanvasLayoutStore()
   const hideVirtualRoot = document ? shouldHideVirtualRoot(document.root) : false
+  const detachedNodes = useMemo(() => document?.detachedNodes || [], [document?.detachedNodes])
 
   // 启用键盘快捷键
   useKeyboardShortcuts({
@@ -96,9 +97,8 @@ export function FlowCanvas() {
     if (!document) {
       return { nodes: [], edges: [] }
     }
-    const detachedNodes = (document as any).detachedNodes || []
     return treeToNodesAndEdges(document.root, detachedNodes, layoutMode)
-  }, [document?.root, (document as any)?.detachedNodes, layoutMode])
+  }, [detachedNodes, document, layoutMode])
 
   // React Flow??
 
@@ -630,7 +630,7 @@ export function FlowCanvas() {
         connectNode(target, source)
       }, 0)
     },
-    [document, detachNode, connectNode]
+    [connectNode, detachNode, document, t]
   )
 
   // 处理边的点击（选中边）
@@ -668,13 +668,11 @@ export function FlowCanvas() {
     }
 
     let targetNode = findNode(document.root, targetId)
-    let isDetachedEdge = false
     
     // 如果不在树中，在断开节点中查找
     
     if (!targetNode && document.detachedNodes) {
       targetNode = findNodeInDetached(document.detachedNodes, targetId)
-      isDetachedEdge = true
     }
     
     if (!targetNode) {
@@ -741,7 +739,7 @@ export function FlowCanvas() {
       // 清除错误
       clearError()
     }
-  }, [error, clearError])
+  }, [clearError, error, t])
 
   // 注意：已取消自动整理功能
   // 用户需要手动点击"整理布局"按钮来整理节点位置
