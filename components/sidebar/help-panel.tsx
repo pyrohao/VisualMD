@@ -3,19 +3,21 @@
 import { HelpCircle, Info, BookOpen, Github } from 'lucide-react'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { useState, useEffect } from 'react'
-
-const SHORTCUTS = [
-  { label: 'Quick Open / File Search', keys: 'Ctrl+O' },
-  { label: 'Save Document', keys: 'Ctrl+S' },
-  { label: 'Global Search', keys: 'Ctrl+F' },
-  { label: 'Toggle Left Panel', keys: 'Ctrl+B' },
-  { label: 'Files / Outline / Templates / AI / Git', keys: 'Ctrl+1~5' },
-]
+import { useTranslation } from '@/stores/languageStore'
 
 export function HelpPanel() {
   const { getThemeConfig } = useThemeStore()
+  const { t } = useTranslation()
   const [mounted, setMounted] = useState(false)
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
+
+  const shortcuts = [
+    { label: t('help.quickOpen'), keys: 'Ctrl+O' },
+    { label: t('help.saveDocument'), keys: 'Ctrl+S' },
+    { label: t('help.globalSearch'), keys: 'Ctrl+F' },
+    { label: t('help.toggleLeftPanel'), keys: 'Ctrl+B' },
+    { label: t('help.panelSwitch'), keys: 'Ctrl+1~5' },
+  ]
 
   useEffect(() => {
     setMounted(true)
@@ -26,7 +28,7 @@ export function HelpPanel() {
       <div className="flex h-14 items-center border-b px-4" style={{ borderColor: themeConfig.border }}>
         <HelpCircle className="mr-2 h-5 w-5" style={{ color: themeConfig.primary }} />
         <h2 className="text-sm font-semibold" style={{ color: themeConfig.heading }}>
-          Help
+          {t('sidebar.help')}
         </h2>
       </div>
 
@@ -39,7 +41,7 @@ export function HelpPanel() {
             Visual MD
           </h1>
           <p className="text-sm" style={{ color: themeConfig.textMuted }}>
-            Visual workspace for Markdown, structure, prototypes, and Git-backed docs
+            {t('help.productTagline')}
           </p>
         </div>
 
@@ -53,13 +55,11 @@ export function HelpPanel() {
           <div className="mb-3 flex items-center gap-2">
             <Info className="h-4 w-4" style={{ color: themeConfig.primary }} />
             <h3 className="text-sm font-medium" style={{ color: themeConfig.heading }}>
-              About
+              {t('help.about')}
             </h3>
           </div>
           <p className="text-xs leading-relaxed" style={{ color: themeConfig.text }}>
-            Visual MD is designed for people who work with structured Markdown content.
-            It combines visual tree editing, live preview, lightweight prototype rendering,
-            templates, AI-assisted drafting, and Git-friendly document workflows.
+            {t('help.aboutDescription')}
           </p>
         </div>
 
@@ -73,11 +73,11 @@ export function HelpPanel() {
           <div className="mb-3 flex items-center gap-2">
             <BookOpen className="h-4 w-4" style={{ color: themeConfig.primary }} />
             <h3 className="text-sm font-medium" style={{ color: themeConfig.heading }}>
-              Shortcuts
+              {t('help.shortcuts')}
             </h3>
           </div>
           <div className="space-y-2 text-xs">
-            {SHORTCUTS.map((shortcut) => (
+            {shortcuts.map((shortcut) => (
               <div key={shortcut.keys} className="flex justify-between gap-4">
                 <span style={{ color: themeConfig.textMuted }}>{shortcut.label}</span>
                 <span style={{ color: themeConfig.text }}>{shortcut.keys}</span>
@@ -96,11 +96,11 @@ export function HelpPanel() {
           <div className="mb-3 flex items-center gap-2">
             <Github className="h-4 w-4" style={{ color: themeConfig.primary }} />
             <h3 className="text-sm font-medium" style={{ color: themeConfig.heading }}>
-              Version
+              {t('help.version')}
             </h3>
           </div>
           <p className="text-xs" style={{ color: themeConfig.textMuted }}>
-            Version: 2.0.0
+            2.0.0
           </p>
         </div>
       </div>

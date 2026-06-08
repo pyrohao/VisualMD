@@ -191,6 +191,16 @@ export interface Translations {
   }
   // 帮助
   help: {
+    productTagline: string
+    about: string
+    aboutDescription: string
+    shortcuts: string
+    version: string
+    quickOpen: string
+    saveDocument: string
+    globalSearch: string
+    toggleLeftPanel: string
+    panelSwitch: string
     contactAuthor: string
     contactDesc: string
     contact: string
@@ -511,6 +521,16 @@ export const translations: Record<Language, Translations> = {
       lines: '行',
     },
     help: {
+      productTagline: '面向结构化 Markdown、原型与 GitHub/Gitee 文档协作的可视化工作台',
+      about: '关于',
+      aboutDescription: 'Visual MD 面向需要处理结构化 Markdown 内容的用户，整合了可视化树编辑、实时预览、轻量原型渲染、模板、AI 辅助起草，以及更贴近 GitHub/Gitee 仓库协作的文档工作流。',
+      shortcuts: '快捷键',
+      version: '版本',
+      quickOpen: '快速打开 / 文件搜索',
+      saveDocument: '保存文档',
+      globalSearch: '全局搜索',
+      toggleLeftPanel: '切换左侧面板',
+      panelSwitch: '文件 / 大纲 / 模板 / AI / Git',
       contactAuthor: '联系作者',
       contactDesc: '交流、学习、反馈问题',
       contact: '联系',
@@ -826,6 +846,16 @@ export const translations: Record<Language, Translations> = {
       lines: 'lines',
     },
     help: {
+      productTagline: 'A visual workspace for structured Markdown, prototypes, and GitHub/Gitee document workflows',
+      about: 'About',
+      aboutDescription: 'Visual MD is built for people working with structured Markdown content. It combines visual tree editing, live preview, lightweight prototype rendering, templates, AI-assisted drafting, and document workflows that fit GitHub/Gitee repository collaboration.',
+      shortcuts: 'Shortcuts',
+      version: 'Version',
+      quickOpen: 'Quick Open / File Search',
+      saveDocument: 'Save Document',
+      globalSearch: 'Global Search',
+      toggleLeftPanel: 'Toggle Left Panel',
+      panelSwitch: 'Files / Outline / Templates / AI / Git',
       contactAuthor: 'Contact Author',
       contactDesc: 'Exchange ideas, learn, and provide feedback',
       contact: 'Contact',
