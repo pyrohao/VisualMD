@@ -156,6 +156,7 @@ interface DocumentStore {
    * @param markdown Markdown文本
    */
   updateFromMarkdown: (markdown: string) => void
+  applyExternalMarkdown: (markdown: string) => void
 
   /**
    * Refresh structure near a node after node-panel edits.
@@ -196,6 +197,7 @@ interface DocumentStore {
    * @param nodeId 节点ID
    */
   findNodeById: (nodeId: string) => TreeNode | null
+  getDocumentVersion: () => number
 
   /**
    * 撤销操作
@@ -512,6 +514,10 @@ function cloneTreeNode(node: TreeNode): TreeNode {
     ...node,
     children: node.children.map(child => cloneTreeNode(child)),
   }
+}
+
+function bumpDocumentVersion(document: DocumentState): number {
+  return (document.version || 1) + 1
 }
 
 type StructuralRefreshScope = 'node' | 'parent' | 'document' | 'skipped'
@@ -855,6 +861,7 @@ export const useDocumentStore = create<DocumentStore>()(
               document: { 
                 ...document, 
                 detachedNodes: newDetachedNodes, 
+                version: bumpDocumentVersion(document),
                 isModified: true 
               } 
             })
@@ -865,6 +872,7 @@ export const useDocumentStore = create<DocumentStore>()(
               document: { 
                 ...document, 
                 root: newRoot, 
+                version: bumpDocumentVersion(document),
                 isModified: true 
               } 
             })
@@ -889,6 +897,7 @@ export const useDocumentStore = create<DocumentStore>()(
               document: { 
                 ...document, 
                 root: newRoot, 
+                version: bumpDocumentVersion(document),
                 isModified: true 
               } 
             })
@@ -915,6 +924,7 @@ export const useDocumentStore = create<DocumentStore>()(
             document: {
               ...document,
               root: newRoot,
+              version: bumpDocumentVersion(document),
               isModified: true
             },
             selectedNodeId: selectedNodeId === nodeId ? null : selectedNodeId
@@ -943,6 +953,7 @@ export const useDocumentStore = create<DocumentStore>()(
               ...document,
               root: newRoot,
               detachedNodes: newDetachedNodes,
+              version: bumpDocumentVersion(document),
               isModified: true
             },
             selectedNodeId: selectedNodeId === nodeId ? null : selectedNodeId
@@ -1018,6 +1029,7 @@ export const useDocumentStore = create<DocumentStore>()(
             document: {
               ...document,
               root: newRoot,
+              version: bumpDocumentVersion(document),
               isModified: true
             },
             expandedNodeIds: newExpanded,
@@ -1053,6 +1065,7 @@ export const useDocumentStore = create<DocumentStore>()(
                 ...document, 
                 root: newRoot,
                 detachedNodes: newDetachedNodes,
+                version: bumpDocumentVersion(document),
                 isModified: true 
               },
               error: null
@@ -1092,6 +1105,7 @@ export const useDocumentStore = create<DocumentStore>()(
               document: { 
                 ...document, 
                 detachedNodes: finalDetachedNodes,
+                version: bumpDocumentVersion(document),
                 isModified: true 
               },
               error: null
@@ -1244,6 +1258,7 @@ export const useDocumentStore = create<DocumentStore>()(
               document: {
                 ...document,
                 detachedNodes: updatedDetachedNodes,
+                version: bumpDocumentVersion(document),
                 isModified: true
               },
               error: null
@@ -1268,6 +1283,7 @@ export const useDocumentStore = create<DocumentStore>()(
                 ...document,
                 root: newRoot,
                 detachedNodes: newDetachedNodes,
+                version: bumpDocumentVersion(document),
                 isModified: true
               },
               error: null
@@ -1335,6 +1351,7 @@ export const useDocumentStore = create<DocumentStore>()(
           set({
             document: {
               ...document,
+              version: bumpDocumentVersion(document),
               isModified: true
             },
             error: null
@@ -1385,6 +1402,7 @@ export const useDocumentStore = create<DocumentStore>()(
             document: {
               ...document,
               root: newRoot,
+              version: bumpDocumentVersion(document),
               isModified: true
             },
             error: null
@@ -1434,6 +1452,7 @@ export const useDocumentStore = create<DocumentStore>()(
             document: {
               ...document,
               metadata,
+              version: bumpDocumentVersion(document),
               isModified: true
             }
           })
@@ -1453,6 +1472,7 @@ export const useDocumentStore = create<DocumentStore>()(
             document: {
               ...document,
               fileName,
+              version: bumpDocumentVersion(document),
               isModified: true
             }
           })
@@ -1472,6 +1492,7 @@ export const useDocumentStore = create<DocumentStore>()(
             // 保留 fileId 和断开节点状态
             newDocument.fileId = document.fileId
             newDocument.detachedNodes = document.detachedNodes || []
+            newDocument.version = bumpDocumentVersion(document)
             
             set({ 
               document: { ...newDocument, isModified: true },
@@ -1482,6 +1503,10 @@ export const useDocumentStore = create<DocumentStore>()(
               error: error instanceof Error ? error.message : 'Failed to parse markdown' 
             })
           }
+        },
+
+        applyExternalMarkdown: (markdown: string) => {
+          get().updateFromMarkdown(markdown)
         },
 
         refreshNodeStructure: (nodeId: string): StructuralRefreshScope => {
@@ -1510,6 +1535,7 @@ export const useDocumentStore = create<DocumentStore>()(
                 document: {
                   ...document,
                   root: newRoot,
+                  version: bumpDocumentVersion(document),
                   isModified: true,
                 },
                 error: null,
@@ -1533,6 +1559,7 @@ export const useDocumentStore = create<DocumentStore>()(
                 document: {
                   ...document,
                   root: newRoot,
+                  version: bumpDocumentVersion(document),
                   isModified: true,
                 },
                 error: null,
@@ -1578,6 +1605,11 @@ export const useDocumentStore = create<DocumentStore>()(
           return findNodeInTree(document.root, nodeId)
         },
 
+        getDocumentVersion: () => {
+          const { document } = get()
+          return document?.version || 0
+        },
+
         undo: () => {
           const historyState = useHistoryStore.getState()
           const result = historyState.undo() as { root: TreeNode; detachedNodes: TreeNode[]; metadata: DocumentMetadata } | null
@@ -1591,6 +1623,7 @@ export const useDocumentStore = create<DocumentStore>()(
                   root: result.root,
                   detachedNodes: result.detachedNodes,
                   metadata: result.metadata,
+                  version: bumpDocumentVersion(document),
                   isModified: true
                 }
               })
@@ -1611,6 +1644,7 @@ export const useDocumentStore = create<DocumentStore>()(
                   root: result.root,
                   detachedNodes: result.detachedNodes,
                   metadata: result.metadata,
+                  version: bumpDocumentVersion(document),
                   isModified: true
                 }
               })

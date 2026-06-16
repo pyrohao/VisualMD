@@ -1,24 +1,18 @@
 'use client'
 
-/**
- * 编辑器工具栏组件
- *
- * 顶部工具栏，左侧文件操作、中间标签栏、右侧视图控制
- * 浏览器风格的动态多标签页设计 - 标签自动堆叠效果
- */
-
-import { useCallback, useState, useRef, useEffect, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  FolderOpen,
-  Download,
-  Search,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Plus,
-  X,
-  ChevronDown,
+  Download,
   FileText,
+  FolderOpen,
   GitBranch,
+  Plus,
+  Search,
+  Sparkles,
+  X,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useSidebarStore } from '@/stores/sidebarStore'
@@ -42,85 +36,64 @@ import {
 } from './ui/dropdown-menu'
 
 interface EditorToolbarProps {
-  onToggleRight: () => void
-  rightCollapsed: boolean
   onSearch?: () => void
+  onToggleAiDock?: () => void
+  aiDockOpen?: boolean
 }
 
-// 标签尺寸配置
 const TAB_CONFIG = {
-  maxWidth: 200,      // 最大宽度
-  minWidth: 40,       // 最小宽度（堆叠时）
-  normalWidth: 140,   // 正常宽度
-  padding: 4,         // 标签间距
+  maxWidth: 200,
+  minWidth: 40,
+  normalWidth: 140,
+  overlap: 4,
+  reserveWidth: 84,
 }
+
+const TAB_ACTIONS_TRIGGER_ID = 'editor-toolbar-tab-actions-trigger'
 
 export function EditorToolbar({
-  onToggleRight,
-  rightCollapsed,
   onSearch,
+  onToggleAiDock,
+  aiDockOpen = false,
 }: EditorToolbarProps) {
   const { importFile } = useFileSystemStore()
   const { getThemeConfig } = useThemeStore()
   const { isPanelExpanded, togglePanel } = useSidebarStore()
-  const { tabs, activeTabId, activateTab, closeTab, createTab, openFileInTab, getActiveTab, closeAllTabs, reorderTabs } = useTabsStore()
+  const {
+    tabs,
+    activeTabId,
+    activateTab,
+    closeTab,
+    createTab,
+    openFileInTab,
+    getActiveTab,
+    closeAllTabs,
+    reorderTabs,
+  } = useTabsStore()
   const { t } = useTranslation()
-  const [isLoading, setIsLoading] = useState(false)
-  const [hoveredTabId, setHoveredTabId] = useState<string | null>(null)
-  const tabsContainerRef = useRef<HTMLDivElement>(null)
-  const [containerWidth, setContainerWidth] = useState(0)
 
   const [mounted, setMounted] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
+  const [hoveredTabId, setHoveredTabId] = useState<string | null>(null)
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null)
   const [dragOverTabId, setDragOverTabId] = useState<string | null>(null)
-  const activeTab = getActiveTab()
+  const [containerWidth, setContainerWidth] = useState(0)
 
-  // 使用安全的主题配置，避免 SSR 不匹配
+  const tabsContainerRef = useRef<HTMLDivElement>(null)
+  const activeTab = getActiveTab()
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
 
   useEffect(() => {
     setMounted(true)
   }, [])
 
-  // 计算每个标签的宽度
-  const tabWidths = useMemo(() => {
-    if (tabs.length === 0) return {}
-    
-    const totalTabs = tabs.length
-    const availableWidth = containerWidth - 40 // 减去新建按钮的空间
-    
-    // 计算理想宽度
-    const idealWidth = Math.min(
-      TAB_CONFIG.normalWidth,
-      Math.max(TAB_CONFIG.minWidth, (availableWidth - (totalTabs - 1) * TAB_CONFIG.padding) / totalTabs)
-    )
-    
-    // 为每个标签计算宽度
-    const widths: Record<string, number> = {}
-    tabs.forEach((tab) => {
-      // 激活的标签或悬停的标签显示更宽
-      const isActive = tab.id === activeTabId
-      const isHovered = tab.id === hoveredTabId
-      
-      if (isActive) {
-        widths[tab.id] = Math.min(TAB_CONFIG.maxWidth, Math.max(idealWidth, TAB_CONFIG.normalWidth))
-      } else if (isHovered) {
-        widths[tab.id] = Math.min(TAB_CONFIG.maxWidth, idealWidth * 1.2)
-      } else {
-        widths[tab.id] = idealWidth
-      }
-    })
-    
-    return widths
-  }, [tabs, containerWidth, activeTabId, hoveredTabId])
-
-  // 监听容器宽度变化
   useEffect(() => {
     const container = tabsContainerRef.current
     if (!container) return
 
     const resizeObserver = new ResizeObserver((entries) => {
-      for (const entry of entries) {
+      const entry = entries[0]
+      if (entry) {
         setContainerWidth(entry.contentRect.width)
       }
     })
@@ -131,7 +104,55 @@ export function EditorToolbar({
     return () => resizeObserver.disconnect()
   }, [])
 
-  // 处理打开文件
+  const tabWidths = useMemo(() => {
+    if (tabs.length === 0) return {}
+
+    const availableWidth = Math.max(0, containerWidth - TAB_CONFIG.reserveWidth)
+    const idealWidth = Math.min(
+      TAB_CONFIG.normalWidth,
+      Math.max(
+        TAB_CONFIG.minWidth,
+        (availableWidth - (tabs.length - 1) * TAB_CONFIG.overlap) / tabs.length
+      )
+    )
+
+    const widths: Record<string, number> = {}
+
+    tabs.forEach((tab) => {
+      const isActive = tab.id === activeTabId
+      const isHovered = tab.id === hoveredTabId
+
+      if (isActive) {
+        widths[tab.id] = Math.min(TAB_CONFIG.maxWidth, Math.max(idealWidth, TAB_CONFIG.normalWidth))
+        return
+      }
+
+      if (isHovered) {
+        widths[tab.id] = Math.min(TAB_CONFIG.maxWidth, idealWidth * 1.2)
+        return
+      }
+
+      widths[tab.id] = idealWidth
+    })
+
+    return widths
+  }, [activeTabId, containerWidth, hoveredTabId, tabs])
+
+  const interactiveIconProps = useCallback(
+    (active = false) => ({
+      style: { color: active ? themeConfig.primary : themeConfig.muted },
+      onMouseEnter: (event: React.MouseEvent<HTMLElement>) => {
+        event.currentTarget.style.color = themeConfig.text
+        event.currentTarget.style.backgroundColor = themeConfig.hover
+      },
+      onMouseLeave: (event: React.MouseEvent<HTMLElement>) => {
+        event.currentTarget.style.color = active ? themeConfig.primary : themeConfig.muted
+        event.currentTarget.style.backgroundColor = 'transparent'
+      },
+    }),
+    [themeConfig]
+  )
+
   const handleOpen = useCallback(async () => {
     setIsLoading(true)
     try {
@@ -151,18 +172,15 @@ export function EditorToolbar({
     }
   }, [importFile, openFileInTab, t])
 
-  // 处理导出 - 使用最新的 Markdown 内容
   const handleExport = useCallback(async () => {
     if (!activeTab) return
 
     setIsLoading(true)
     try {
-      // 从 documentStore 获取最新的 Markdown 内容
       const { getCurrentMarkdown } = useDocumentStore.getState()
       const latestContent = getCurrentMarkdown()
 
-      const success = exportAsMarkdown(latestContent, activeTab.fileName)
-      if (success) {
+      if (exportAsMarkdown(latestContent, activeTab.fileName)) {
         toast({ title: t('file.exportSuccess') })
       }
     } catch (error) {
@@ -176,29 +194,34 @@ export function EditorToolbar({
     }
   }, [activeTab, t])
 
-  // 处理新建标签 - 创建空白标签页
-  const handleNewTab = () => {
+  const handleNewTab = useCallback(() => {
     void requestNavigationWithUnsavedGuard(
       () => {
         createTab(undefined, undefined, true)
       },
       mounted ? t('node.newDocument') : 'New document'
     )
-  }
+  }, [createTab, mounted, t])
 
-  const handleTabActivate = useCallback((tabId: string, fileName: string) => {
-    if (tabId === activeTabId) return
-    void requestNavigationWithUnsavedGuard(() => activateTab(tabId), fileName)
-  }, [activateTab, activeTabId])
+  const handleTabActivate = useCallback(
+    (tabId: string, fileName: string) => {
+      if (tabId === activeTabId) return
+      void requestNavigationWithUnsavedGuard(() => activateTab(tabId), fileName)
+    },
+    [activateTab, activeTabId]
+  )
 
-  const handleTabClose = useCallback((tabId: string) => {
-    if (tabId !== activeTabId) {
-      closeTab(tabId)
-      return
-    }
+  const handleTabClose = useCallback(
+    (tabId: string) => {
+      if (tabId !== activeTabId) {
+        closeTab(tabId)
+        return
+      }
 
-    void requestNavigationWithUnsavedGuard(() => closeTab(tabId), getActiveTab()?.fileName || null)
-  }, [activeTabId, closeTab, getActiveTab])
+      void requestNavigationWithUnsavedGuard(() => closeTab(tabId), getActiveTab()?.fileName || null)
+    },
+    [activeTabId, closeTab, getActiveTab]
+  )
 
   const handleCloseAllTabs = useCallback(() => {
     void requestNavigationWithUnsavedGuard(() => {
@@ -209,67 +232,67 @@ export function EditorToolbar({
     }, mounted ? t('common.closeAll') : 'Close all')
   }, [closeAllTabs, mounted, t])
 
-  // 处理标签拖拽开始
-  const handleDragStart = useCallback((e: React.DragEvent, tabId: string) => {
-    setDraggedTabId(tabId)
-    e.dataTransfer.effectAllowed = 'move'
-    // 设置拖拽时的透明图像
-    const dragImage = document.createElement('div')
-    dragImage.style.cssText = `
-      position: fixed;
-      top: -1000px;
-      padding: 4px 12px;
-      background: ${themeConfig.card};
-      border: 1px solid ${themeConfig.border};
-      border-radius: 4px;
-      color: ${themeConfig.text};
-      font-size: 12px;
-      pointer-events: none;
-      z-index: 9999;
-    `
-    dragImage.textContent = tabs.find(t => t.id === tabId)?.fileName || ''
-    document.body.appendChild(dragImage)
-    e.dataTransfer.setDragImage(dragImage, 0, 0)
-    setTimeout(() => document.body.removeChild(dragImage), 0)
-  }, [tabs, themeConfig])
+  const handleDragStart = useCallback(
+    (event: React.DragEvent, tabId: string) => {
+      setDraggedTabId(tabId)
+      event.dataTransfer.effectAllowed = 'move'
 
-  // 处理标签拖拽经过
-  const handleDragOver = useCallback((e: React.DragEvent, tabId: string) => {
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'move'
-    if (tabId !== draggedTabId) {
-      setDragOverTabId(tabId)
-    }
-  }, [draggedTabId])
+      const dragImage = document.createElement('div')
+      dragImage.style.cssText = [
+        'position: fixed',
+        'top: -1000px',
+        'padding: 4px 12px',
+        `background: ${themeConfig.card}`,
+        `border: 1px solid ${themeConfig.border}`,
+        'border-radius: 6px',
+        `color: ${themeConfig.text}`,
+        'font-size: 12px',
+        'pointer-events: none',
+        'z-index: 9999',
+      ].join(';')
+      dragImage.textContent = tabs.find((tab) => tab.id === tabId)?.fileName || ''
+      document.body.appendChild(dragImage)
+      event.dataTransfer.setDragImage(dragImage, 0, 0)
+      setTimeout(() => document.body.removeChild(dragImage), 0)
+    },
+    [tabs, themeConfig]
+  )
 
-  // 处理标签拖拽离开
-  const handleDragLeave = useCallback(() => {
-    setDragOverTabId(null)
-  }, [])
+  const handleDragOver = useCallback(
+    (event: React.DragEvent, tabId: string) => {
+      event.preventDefault()
+      event.dataTransfer.dropEffect = 'move'
+      if (tabId !== draggedTabId) {
+        setDragOverTabId(tabId)
+      }
+    },
+    [draggedTabId]
+  )
 
-  // 处理标签放置
-  const handleDrop = useCallback((e: React.DragEvent, targetTabId: string) => {
-    e.preventDefault()
-    e.stopPropagation()
-    
-    if (!draggedTabId || draggedTabId === targetTabId) {
+  const handleDrop = useCallback(
+    (event: React.DragEvent, targetTabId: string) => {
+      event.preventDefault()
+      event.stopPropagation()
+
+      if (!draggedTabId || draggedTabId === targetTabId) {
+        setDraggedTabId(null)
+        setDragOverTabId(null)
+        return
+      }
+
+      const dragIndex = tabs.findIndex((tab) => tab.id === draggedTabId)
+      const hoverIndex = tabs.findIndex((tab) => tab.id === targetTabId)
+
+      if (dragIndex !== -1 && hoverIndex !== -1) {
+        reorderTabs(dragIndex, hoverIndex)
+      }
+
       setDraggedTabId(null)
       setDragOverTabId(null)
-      return
-    }
+    },
+    [draggedTabId, reorderTabs, tabs]
+  )
 
-    const dragIndex = tabs.findIndex(t => t.id === draggedTabId)
-    const hoverIndex = tabs.findIndex(t => t.id === targetTabId)
-    
-    if (dragIndex !== -1 && hoverIndex !== -1) {
-      reorderTabs(dragIndex, hoverIndex)
-    }
-    
-    setDraggedTabId(null)
-    setDragOverTabId(null)
-  }, [draggedTabId, tabs, reorderTabs])
-
-  // 处理拖拽结束
   const handleDragEnd = useCallback(() => {
     setDraggedTabId(null)
     setDragOverTabId(null)
@@ -277,41 +300,24 @@ export function EditorToolbar({
 
   return (
     <div
-      className="flex h-11 items-center justify-between border-b px-2 shadow-sm"
+      className="flex h-11 items-center border-b px-2 shadow-sm"
       style={{
         backgroundColor: themeConfig.card,
         borderColor: themeConfig.border,
       }}
     >
-      {/* 左侧：文件操作 */}
-      <div className="flex items-center gap-1 flex-shrink-0">
-        {/* 展开/收起左侧面板按钮 */}
+      <div className="flex flex-shrink-0 items-center gap-1">
         <Button
           variant="ghost"
           size="icon"
           onClick={togglePanel}
           className="h-8 w-8 transition-colors"
-          style={{ color: themeConfig.muted }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.color = themeConfig.text
-            e.currentTarget.style.backgroundColor = themeConfig.hover
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.color = themeConfig.muted
-            e.currentTarget.style.backgroundColor = 'transparent'
-          }}
+          {...interactiveIconProps()}
         >
-          {isPanelExpanded ? (
-            <ChevronLeft className="h-4 w-4" />
-          ) : (
-            <ChevronRight className="h-4 w-4" />
-          )}
+          {isPanelExpanded ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
         </Button>
 
-        <div
-          className="mx-1 h-4 w-px"
-          style={{ backgroundColor: themeConfig.border }}
-        />
+        <div className="mx-1 h-4 w-px" style={{ backgroundColor: themeConfig.border }} />
 
         <Button
           variant="ghost"
@@ -324,15 +330,7 @@ export function EditorToolbar({
           }}
           disabled={isLoading}
           className="h-8 w-8 transition-colors"
-          style={{ color: themeConfig.muted }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.color = themeConfig.text
-            e.currentTarget.style.backgroundColor = themeConfig.hover
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.color = themeConfig.muted
-            e.currentTarget.style.backgroundColor = 'transparent'
-          }}
+          {...interactiveIconProps()}
         >
           <FolderOpen className="h-4 w-4" />
         </Button>
@@ -343,15 +341,7 @@ export function EditorToolbar({
           onClick={handleExport}
           disabled={isLoading || !mounted || !activeTab}
           className="h-8 w-8 transition-colors"
-          style={{ color: themeConfig.muted }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.color = themeConfig.text
-            e.currentTarget.style.backgroundColor = themeConfig.hover
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.color = themeConfig.muted
-            e.currentTarget.style.backgroundColor = 'transparent'
-          }}
+          {...interactiveIconProps()}
         >
           <Download className="h-4 w-4" />
         </Button>
@@ -361,255 +351,297 @@ export function EditorToolbar({
           size="icon"
           onClick={onSearch}
           className="h-8 w-8 transition-colors"
-          style={{ color: themeConfig.muted }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.color = themeConfig.text
-            e.currentTarget.style.backgroundColor = themeConfig.hover
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.color = themeConfig.muted
-            e.currentTarget.style.backgroundColor = 'transparent'
-          }}
+          {...interactiveIconProps()}
         >
           <Search className="h-4 w-4" />
         </Button>
       </div>
 
-      {/* 中间：标签栏 */}
-      <div 
-        ref={tabsContainerRef}
-        className="flex-1 mx-2 relative overflow-hidden h-full flex items-center"
-      >
-        {tabs.length === 0 ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleNewTab}
-            className="h-7 gap-1 text-xs transition-colors"
-            style={{ color: themeConfig.muted }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.color = themeConfig.text
-              e.currentTarget.style.backgroundColor = themeConfig.hover
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.color = themeConfig.muted
-              e.currentTarget.style.backgroundColor = 'transparent'
-            }}
-            suppressHydrationWarning
-          >
-            <Plus className="h-3 w-3" />
-            {mounted ? t('node.newDocument') : '新建文档'}
-          </Button>
-        ) : (
-          <div className="flex items-center h-full relative">
-            {tabs.map((tab, index) => {
-              const width = tabWidths[tab.id] || TAB_CONFIG.normalWidth
-              const isActive = tab.id === activeTabId
-              const isHovered = tab.id === hoveredTabId
-              const isDragged = tab.id === draggedTabId
-              const isDragOver = tab.id === dragOverTabId
-
-              return (
-                <div
-                  key={tab.id}
-                  draggable
-                  onClick={() => handleTabActivate(tab.id, tab.fileName)}
-                  onMouseEnter={() => setHoveredTabId(tab.id)}
-                  onMouseLeave={() => setHoveredTabId(null)}
-                  onDragStart={(e) => handleDragStart(e, tab.id)}
-                  onDragOver={(e) => handleDragOver(e, tab.id)}
-                  onDragLeave={handleDragLeave}
-                  onDrop={(e) => handleDrop(e, tab.id)}
-                  onDragEnd={handleDragEnd}
-                  className={cn(
-                    'group relative flex items-center h-7 rounded-md cursor-pointer select-none',
-                    'transition-all duration-200 ease-out',
-                    isActive && 'z-10'
-                  )}
-                  style={{
-                    width: `${width}px`,
-                    marginLeft: index > 0 ? `-${TAB_CONFIG.padding}px` : '0',
-                    backgroundColor: isActive
-                      ? themeConfig.background
-                      : isDragOver
-                        ? themeConfig.primary + '20'
-                        : themeConfig.card,
-                    border: `1px solid ${isActive ? themeConfig.border : isDragOver ? themeConfig.primary : themeConfig.border + '80'}`,
-                    boxShadow: isActive
-                      ? `0 2px 4px #00000020`
-                      : isDragOver
-                        ? `0 0 0 2px ${themeConfig.primary}40`
-                        : 'none',
-                    zIndex: isActive ? 10 : isHovered ? 5 : tabs.length - index,
-                    opacity: isDragged ? 0.5 : 1,
-                    transform: isDragOver ? 'scale(1.02)' : 'scale(1)',
-                  }}
-                >
-                  {/* 左侧装饰线（扑克牌堆叠效果） */}
-                  <div 
-                    className="absolute left-0 top-0 bottom-0 w-0.5 rounded-l-md"
-                    style={{
-                      backgroundColor: isActive 
-                        ? themeConfig.primary 
-                        : 'transparent',
-                    }}
-                  />
-                  
-                  {/* 模板图标 */}
-                  {tab.sourceType === 'git' && (
-                    <span
-                      className="text-[10px] px-1 rounded mr-1 flex-shrink-0"
-                      style={{
-                        backgroundColor: themeConfig.success + '20',
-                        color: themeConfig.success,
-                      }}
-                    >
-                      Git
-                    </span>
-                  )}
-
-                  {tab.isTemplate && (
-                    <span 
-                      className="text-[10px] px-1 rounded mr-1 flex-shrink-0"
-                      style={{
-                        backgroundColor: themeConfig.primary + '20',
-                        color: themeConfig.primary,
-                      }}
-                    >
-                      模板
-                    </span>
-                  )}
-
-                  {/* 文件名 */}
-                  <span 
-                    className="flex-1 text-xs truncate px-2"
-                    style={{
-                      color: isActive ? themeConfig.text : themeConfig.muted,
-                      fontWeight: isActive ? 500 : 400,
-                    }}
-                  >
-                    {tab.fileName}
-                  </span>
-
-                  {/* 修改标记 */}
-                  {tab.isModified && (
-                    <span
-                      className="w-1.5 h-1.5 rounded-full mr-1 flex-shrink-0"
-                      style={{ backgroundColor: themeConfig.primary }}
-                    />
-                  )}
-
-                  {/* 关闭按钮 */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      handleTabClose(tab.id)
-                    }}
-                    className={cn(
-                      'p-0.5 rounded mr-1 flex-shrink-0 transition-all duration-150',
-                      tabs.length === 1 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-                    )}
-                    style={{ color: themeConfig.muted }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.color = themeConfig.text
-                      e.currentTarget.style.backgroundColor = themeConfig.hover
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.color = themeConfig.muted
-                      e.currentTarget.style.backgroundColor = 'transparent'
-                    }}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-              )
-            })}
-
-            {/* 新建按钮 */}
+      <div className="mx-2 flex min-w-0 flex-1 items-center">
+        <div
+          ref={tabsContainerRef}
+          className="relative flex h-full min-w-0 flex-1 items-center overflow-hidden"
+        >
+          {tabs.length === 0 ? (
             <Button
               variant="ghost"
-              size="icon"
+              size="sm"
               onClick={handleNewTab}
-              className="h-7 w-7 flex-shrink-0 ml-1 transition-colors"
-              style={{ color: themeConfig.muted }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.color = themeConfig.text
-                e.currentTarget.style.backgroundColor = themeConfig.hover
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.color = themeConfig.muted
-                e.currentTarget.style.backgroundColor = 'transparent'
-              }}
+              className="h-7 gap-1 text-xs transition-colors"
+              {...interactiveIconProps()}
+              suppressHydrationWarning
             >
-              <Plus className="h-3.5 w-3.5" />
+              <Plus className="h-3 w-3" />
+              {mounted ? t('node.newDocument') : 'New document'}
             </Button>
-          </div>
-        )}
+          ) : (
+            <div className="relative flex h-full items-center">
+              {tabs.map((tab, index) => {
+                const width = tabWidths[tab.id] || TAB_CONFIG.normalWidth
+                const isActive = tab.id === activeTabId
+                const isHovered = tab.id === hoveredTabId
+                const isDragged = tab.id === draggedTabId
+                const isDragOver = tab.id === dragOverTabId
+
+                return (
+                  <div
+                    key={tab.id}
+                    draggable
+                    onClick={() => handleTabActivate(tab.id, tab.fileName)}
+                    onMouseEnter={() => setHoveredTabId(tab.id)}
+                    onMouseLeave={() => setHoveredTabId(null)}
+                    onDragStart={(event) => handleDragStart(event, tab.id)}
+                    onDragOver={(event) => handleDragOver(event, tab.id)}
+                    onDragLeave={() => setDragOverTabId(null)}
+                    onDrop={(event) => handleDrop(event, tab.id)}
+                    onDragEnd={handleDragEnd}
+                    className={cn(
+                      'group relative flex h-7 cursor-pointer select-none items-center rounded-md transition-all duration-200 ease-out',
+                      isActive && 'z-10'
+                    )}
+                    style={{
+                      width: `${width}px`,
+                      marginLeft: index > 0 ? `-${TAB_CONFIG.overlap}px` : '0',
+                      backgroundColor: isActive
+                        ? themeConfig.background
+                        : isDragOver
+                          ? `${themeConfig.primary}20`
+                          : themeConfig.card,
+                      border: `1px solid ${
+                        isActive
+                          ? themeConfig.border
+                          : isDragOver
+                            ? themeConfig.primary
+                            : `${themeConfig.border}80`
+                      }`,
+                      boxShadow: isActive
+                        ? '0 2px 4px #00000020'
+                        : isDragOver
+                          ? `0 0 0 2px ${themeConfig.primary}40`
+                          : 'none',
+                      zIndex: isActive ? 10 : isHovered ? 5 : tabs.length - index,
+                      opacity: isDragged ? 0.5 : 1,
+                      transform: isDragOver ? 'scale(1.02)' : 'scale(1)',
+                    }}
+                  >
+                    <div
+                      className="absolute bottom-0 left-0 top-0 w-0.5 rounded-l-md"
+                      style={{
+                        backgroundColor: isActive ? themeConfig.primary : 'transparent',
+                      }}
+                    />
+
+                    {tab.sourceType === 'git' && (
+                      <span
+                        className="mr-1 flex-shrink-0 rounded px-1 text-[10px]"
+                        style={{
+                          backgroundColor: `${themeConfig.success}20`,
+                          color: themeConfig.success,
+                        }}
+                      >
+                        Git
+                      </span>
+                    )}
+
+                    {tab.isTemplate && (
+                      <span
+                        className="mr-1 flex-shrink-0 rounded px-1 text-[10px]"
+                        style={{
+                          backgroundColor: `${themeConfig.primary}20`,
+                          color: themeConfig.primary,
+                        }}
+                      >
+                        Template
+                      </span>
+                    )}
+
+                    <span
+                      className="flex-1 truncate px-2 text-xs"
+                      style={{
+                        color: isActive ? themeConfig.text : themeConfig.muted,
+                        fontWeight: isActive ? 500 : 400,
+                      }}
+                    >
+                      {tab.fileName}
+                    </span>
+
+                    {tab.isModified && (
+                      <span
+                        className="mr-1 h-1.5 w-1.5 flex-shrink-0 rounded-full"
+                        style={{ backgroundColor: themeConfig.primary }}
+                      />
+                    )}
+
+                    <button
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        handleTabClose(tab.id)
+                      }}
+                      className={cn(
+                        'mr-1 flex-shrink-0 rounded p-0.5 transition-all duration-150',
+                        tabs.length === 1 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                      )}
+                      style={{ color: themeConfig.muted }}
+                      onMouseEnter={(event) => {
+                        event.currentTarget.style.color = themeConfig.text
+                        event.currentTarget.style.backgroundColor = themeConfig.hover
+                      }}
+                      onMouseLeave={(event) => {
+                        event.currentTarget.style.color = themeConfig.muted
+                        event.currentTarget.style.backgroundColor = 'transparent'
+                      }}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                )
+              })}
+
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleNewTab}
+                className="ml-1 h-7 w-7 flex-shrink-0 transition-colors"
+                {...interactiveIconProps()}
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </Button>
+
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    id={TAB_ACTIONS_TRIGGER_ID}
+                    className="h-7 w-7 flex-shrink-0 transition-colors"
+                    {...interactiveIconProps()}
+                  >
+                    <ChevronDown className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  align="end"
+                  className="max-h-[70vh] w-56 overflow-y-auto"
+                  onCloseAutoFocus={() => {
+                    window.setTimeout(() => {
+                      document.getElementById(TAB_ACTIONS_TRIGGER_ID)?.blur()
+                    }, 0)
+                  }}
+                  style={{
+                    backgroundColor: themeConfig.card,
+                    borderColor: themeConfig.border,
+                  }}
+                >
+                  <DropdownMenuItem
+                    onClick={handleCloseAllTabs}
+                    className="cursor-pointer focus:bg-transparent"
+                    style={{ color: themeConfig.text }}
+                    onMouseEnter={(event) => {
+                      event.currentTarget.style.backgroundColor = themeConfig.hover
+                    }}
+                    onMouseLeave={(event) => {
+                      event.currentTarget.style.backgroundColor = 'transparent'
+                    }}
+                    suppressHydrationWarning
+                  >
+                    <X className="mr-2 h-4 w-4" style={{ color: themeConfig.muted }} />
+                    <span suppressHydrationWarning>{mounted ? t('common.closeAll') : 'Close all'}</span>
+                  </DropdownMenuItem>
+
+                  <DropdownMenuSeparator style={{ backgroundColor: themeConfig.border }} />
+
+                  {tabs.length === 0 ? (
+                    <div
+                      className="px-2 py-3 text-center text-sm"
+                      style={{ color: themeConfig.muted }}
+                      suppressHydrationWarning
+                    >
+                      {mounted ? t('common.noOpenTabs') : 'No open tabs'}
+                    </div>
+                  ) : (
+                    tabs.map((tab) => (
+                      <DropdownMenuItem
+                        key={tab.id}
+                        onClick={() => handleTabActivate(tab.id, tab.fileName)}
+                        className="cursor-pointer"
+                        style={{
+                          color: tab.id === activeTabId ? themeConfig.primary : themeConfig.text,
+                          backgroundColor: tab.id === activeTabId ? `${themeConfig.primary}15` : 'transparent',
+                        }}
+                      >
+                        {tab.sourceType === 'git' ? (
+                          <GitBranch
+                            className="mr-2 h-4 w-4 flex-shrink-0"
+                            style={{ color: tab.id === activeTabId ? themeConfig.primary : themeConfig.muted }}
+                          />
+                        ) : (
+                          <FileText
+                            className="mr-2 h-4 w-4 flex-shrink-0"
+                            style={{ color: tab.id === activeTabId ? themeConfig.primary : themeConfig.muted }}
+                          />
+                        )}
+                        <span className="truncate">{tab.fileName}</span>
+                        {tab.isModified && (
+                          <span className="ml-1" style={{ color: themeConfig.primary }}>
+                            鈥?
+                          </span>
+                        )}
+                      </DropdownMenuItem>
+                    ))
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* 右侧：标签页菜单和主题切换 */}
-      <div className="flex items-center gap-1 flex-shrink-0">
-        {/* 标签页下拉菜单 */}
-        <DropdownMenu>
+      <div className="flex flex-shrink-0 items-center gap-1">
+        <div className="hidden">
+          <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
               size="icon"
               className="h-8 w-8 transition-colors"
-              style={{ color: themeConfig.muted }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.color = themeConfig.text
-                e.currentTarget.style.backgroundColor = themeConfig.hover
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.color = themeConfig.muted
-                e.currentTarget.style.backgroundColor = 'transparent'
-              }}
+              {...interactiveIconProps()}
             >
               <ChevronDown className="h-4 w-4" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent
             align="end"
-            className="w-56 max-h-[70vh] overflow-y-auto"
+            className="max-h-[70vh] w-56 overflow-y-auto"
             style={{
               backgroundColor: themeConfig.card,
               borderColor: themeConfig.border,
             }}
           >
-            {/* 全部关闭 */}
             <DropdownMenuItem
-              onClick={() => {
-                handleCloseAllTabs()
-                return
-                toast({
-                  title: mounted ? t('file.closeAllTabs') : '已关闭所有标签页',
-                })
-              }}
+              onClick={handleCloseAllTabs}
               className="cursor-pointer focus:bg-transparent"
               style={{ color: themeConfig.text }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = themeConfig.hover
+              onMouseEnter={(event) => {
+                event.currentTarget.style.backgroundColor = themeConfig.hover
               }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.backgroundColor = 'transparent'
+              onMouseLeave={(event) => {
+                event.currentTarget.style.backgroundColor = 'transparent'
               }}
               suppressHydrationWarning
             >
               <X className="mr-2 h-4 w-4" style={{ color: themeConfig.muted }} />
-              <span suppressHydrationWarning>{mounted ? t('common.closeAll') : '全部关闭'}</span>
+              <span suppressHydrationWarning>{mounted ? t('common.closeAll') : 'Close all'}</span>
             </DropdownMenuItem>
 
             <DropdownMenuSeparator style={{ backgroundColor: themeConfig.border }} />
 
-            {/* 当前打开的标签页列表 */}
             {tabs.length === 0 ? (
               <div
-                className="px-2 py-3 text-sm text-center"
+                className="px-2 py-3 text-center text-sm"
                 style={{ color: themeConfig.muted }}
                 suppressHydrationWarning
               >
-                {mounted ? t('common.noOpenTabs') : '没有打开的标签页'}
+                {mounted ? t('common.noOpenTabs') : 'No open tabs'}
               </div>
             ) : (
               tabs.map((tab) => (
@@ -619,7 +651,7 @@ export function EditorToolbar({
                   className="cursor-pointer"
                   style={{
                     color: tab.id === activeTabId ? themeConfig.primary : themeConfig.text,
-                    backgroundColor: tab.id === activeTabId ? themeConfig.primary + '15' : 'transparent',
+                    backgroundColor: tab.id === activeTabId ? `${themeConfig.primary}15` : 'transparent',
                   }}
                 >
                   {tab.sourceType === 'git' ? (
@@ -635,28 +667,31 @@ export function EditorToolbar({
                   )}
                   <span className="truncate">{tab.fileName}</span>
                   {tab.isModified && (
-                    <span style={{ color: themeConfig.primary }} className="ml-1">
-                      ●
+                    <span className="ml-1" style={{ color: themeConfig.primary }}>
+                      •
                     </span>
                   )}
                 </DropdownMenuItem>
               ))
             )}
           </DropdownMenuContent>
-        </DropdownMenu>
+          </DropdownMenu>
+        </div>
 
-        <div
-          className="mx-1 h-4 w-px"
-          style={{ backgroundColor: themeConfig.border }}
-        />
+        <div className="mx-1 h-4 w-px" style={{ backgroundColor: themeConfig.border }} />
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onToggleAiDock}
+          className="h-8 w-8 transition-colors"
+          {...interactiveIconProps(aiDockOpen)}
+          title={mounted ? t('sidebar.ai') : 'AI'}
+        >
+          <Sparkles className="h-4 w-4" />
+        </Button>
 
         <ThemeToggle />
-
-        <div
-          className="mx-1 h-4 w-px"
-          style={{ backgroundColor: themeConfig.border }}
-        />
-
+        <div className="mx-1 h-4 w-px" style={{ backgroundColor: themeConfig.border }} />
         <LanguageToggle />
       </div>
     </div>

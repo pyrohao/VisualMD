@@ -15,6 +15,7 @@ import { useTabsStore, type Tab } from '@/stores/tabsStore'
 import { useGitStore } from '@/stores/gitStore'
 import { useThemeStore, themeConfigs, type ThemeMode } from '@/stores/themeStore'
 import { useTranslation } from '@/stores/languageStore'
+import { useAiChatStore } from '@/stores/aiChatStore'
 import { getGitProviderClient } from '@/lib/git/providers'
 import { inferGitFileKind, inferGitFileMimeType, isGitBinaryFileKind } from '@/lib/git/file-kind'
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
@@ -23,9 +24,10 @@ import remarkParse from 'remark-parse'
 import remarkGfm from 'remark-gfm'
 import remarkRehype from 'remark-rehype'
 import rehypeStringify from 'rehype-stringify'
-import { BookOpen, Pencil, SplitSquareHorizontal } from 'lucide-react'
+import { BookOpen, Pencil, Plus, SplitSquareHorizontal, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getMarkdownImagePasteResult, hasClipboardImage } from '@/lib/clipboard-image'
+import { buildMarkdownBlockIndex, deriveTextEdit } from '@/lib/ai-doc-chat'
 import { getGitMarkdownImagePasteResult } from '@/lib/git-asset-paste'
 import {
   buildGitImageRuntimeConfig,
@@ -33,6 +35,8 @@ import {
   prepareGitHtmlImageSources,
   resolveGitHtmlImageSources,
 } from '@/lib/git-image-resolution'
+import { toast } from '@/hooks/use-toast'
+import { Button } from '@/components/ui/button'
 
 /**
  * 预览模式类型
@@ -200,6 +204,39 @@ function getThemeStyles(theme: ThemeMode): string {
  */
 function removeMetadata(markdown: string): string {
   return markdown.replace(/^---\n[\s\S]*?\n---\n?/, '')
+}
+
+function escapeHtmlAttribute(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+function injectPreviewBlockAttributes(markdown: string, html: string) {
+  const blocks = buildMarkdownBlockIndex(markdown)
+  const eligibleBlocks = blocks.filter((block) =>
+    ['heading', 'paragraph', 'list', 'table', 'code', 'image'].includes(block.blockType)
+  )
+
+  if (!eligibleBlocks.length) {
+    return html
+  }
+
+  const tagRegex = /<(h[1-6]|p|ul|ol|blockquote|pre|table|img)(\s|>)/gi
+  let matchIndex = 0
+
+  return html.replace(tagRegex, (match, tagName, suffix) => {
+    const block = eligibleBlocks[matchIndex]
+    matchIndex += 1
+
+    if (!block) {
+      return match
+    }
+
+    return `<${tagName} data-ai-block-index="${block.blockIndex}" data-ai-block-type="${escapeHtmlAttribute(block.blockType)}"${suffix}`
+  })
 }
 
 function GitBinaryPreview({
@@ -371,6 +408,16 @@ function GitBinaryPreview({
 
 export function MarkdownPreview() {
   const { document, updateFromMarkdown } = useDocumentStore()
+  const addEditorSelectionReference = useAiChatStore((state) => state.addEditorSelectionReference)
+  const addPreviewReference = useAiChatStore((state) => state.addPreviewReference)
+  const selectionCandidate = useAiChatStore((state) => state.selectionCandidate)
+  const selectionHint = useAiChatStore((state) => state.selectionHint)
+  const commitSelectionCandidate = useAiChatStore((state) => state.commitSelectionCandidate)
+  const clearSelectionCandidate = useAiChatStore((state) => state.clearSelectionCandidate)
+  const currentConversationId = useAiChatStore((state) => state.currentConversationId)
+  const referencesByConversation = useAiChatStore((state) => state.referencesByConversation)
+  const selectedReferenceIds = useAiChatStore((state) => state.selectedReferenceIds)
+  const validateEditForPendingReplace = useAiChatStore((state) => state.validateEditForPendingReplace)
   const activeTabId = useTabsStore((state) => state.activeTabId)
   const activeTab = useTabsStore((state) => state.tabs.find((item) => item.id === state.activeTabId) || null)
   const activeGitMeta = useTabsStore((state) => {
@@ -390,6 +437,7 @@ export function MarkdownPreview() {
   const [editContent, setEditContent] = useState('')
   const editTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const liveEditorRef = useRef<HTMLTextAreaElement | null>(null)
+  const previewContainerRef = useRef<HTMLDivElement | null>(null)
   const livePreviewRef = useRef<HTMLDivElement | null>(null)
   const isSyncingLiveScrollRef = useRef(false)
   const previousDocumentKeyRef = useRef<string>('')
@@ -414,6 +462,11 @@ export function MarkdownPreview() {
   const isEditingMode = mode === 'edit' || mode === 'live'
   const renderMarkdown = mode === 'live' ? editContent : markdown
   const documentKey = `${activeTabId || ''}\u0000${document?.fileId || ''}\u0000${document?.fileName || ''}`
+  const currentReferences = currentConversationId ? referencesByConversation[currentConversationId] || [] : []
+  const selectedReferences = useMemo(
+    () => currentReferences.filter((reference) => selectedReferenceIds.includes(reference.id)),
+    [currentReferences, selectedReferenceIds]
+  )
 
   // 当 markdown 变化时，更新编辑内容
   useEffect(() => {
@@ -467,7 +520,7 @@ export function MarkdownPreview() {
         .use(rehypeStringify, { allowDangerousHtml: true })
         .process(content)
       
-      const rawHtml = String(result)
+      const rawHtml = injectPreviewBlockAttributes(renderMarkdown, String(result))
       const immediateHtml = activeGitMeta?.path
         ? prepareGitHtmlImageSources(rawHtml, activeGitMeta.path, gitAssets)
         : rawHtml
@@ -509,8 +562,38 @@ export function MarkdownPreview() {
 
   // 处理编辑内容变化
   const handleEditChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setEditContent(e.target.value)
-  }, [])
+    const nextValue = e.target.value
+    const edit = deriveTextEdit(editContent, nextValue)
+    if (edit) {
+      const validation = validateEditForPendingReplace(edit)
+      if (!validation.allowed) {
+        toast({
+          title: currentLanguage === 'zh' ? '目标区块已锁定' : 'Target block is locked',
+          description: validation.reason,
+          variant: 'destructive',
+        })
+        return
+      }
+    }
+
+    setEditContent(nextValue)
+  }, [currentLanguage, editContent, validateEditForPendingReplace])
+
+  const handleAddTextareaSelection = useCallback((textarea: HTMLTextAreaElement | null, sourceMarkdown: string) => {
+    if (!textarea) return
+    const selectionStart = textarea.selectionStart ?? 0
+    const selectionEnd = textarea.selectionEnd ?? 0
+    if (selectionStart === selectionEnd) return
+    if (sourceMarkdown !== useDocumentStore.getState().getCurrentMarkdown()) {
+      updateFromMarkdown(sourceMarkdown)
+    }
+    void addEditorSelectionReference(
+      selectionStart,
+      selectionEnd,
+      sourceMarkdown,
+      useDocumentStore.getState().document?.version
+    )
+  }, [addEditorSelectionReference, updateFromMarkdown])
 
   const persistGitDraftAfterPaste = useCallback((nextValue: string) => {
     const activeTab = useTabsStore.getState().getActiveTab()
@@ -556,6 +639,19 @@ export function MarkdownPreview() {
 
     if (!result) return
 
+    const edit = deriveTextEdit(sourceValue, result.nextValue)
+    if (edit) {
+      const validation = validateEditForPendingReplace(edit)
+      if (!validation.allowed) {
+        toast({
+          title: currentLanguage === 'zh' ? '目标区块已锁定' : 'Target block is locked',
+          description: validation.reason,
+          variant: 'destructive',
+        })
+        return
+      }
+    }
+
     setEditContent(result.nextValue)
     if (mode === 'live') {
       updateFromMarkdown(result.nextValue)
@@ -571,7 +667,7 @@ export function MarkdownPreview() {
       textarea.focus()
       textarea.setSelectionRange(result.selectionStart, result.selectionEnd)
     })
-  }, [mode, persistGitDraftAfterPaste, updateFromMarkdown])
+  }, [currentLanguage, mode, persistGitDraftAfterPaste, updateFromMarkdown, validateEditForPendingReplace])
 
   const liveLabels =
     currentLanguage === 'zh'
@@ -636,6 +732,20 @@ export function MarkdownPreview() {
 
     const timer = setTimeout(() => {
       if (editContent !== markdown) {
+        const edit = deriveTextEdit(markdown, editContent)
+        if (edit) {
+          const validation = validateEditForPendingReplace(edit)
+          if (!validation.allowed) {
+            toast({
+              title: currentLanguage === 'zh' ? '目标区块已锁定' : 'Target block is locked',
+              description: validation.reason,
+              variant: 'destructive',
+            })
+            setEditContent(markdown)
+            return
+          }
+        }
+
         updateFromMarkdown(editContent)
       }
     }, 180)
@@ -643,7 +753,102 @@ export function MarkdownPreview() {
     return () => {
       clearTimeout(timer)
     }
-  }, [editContent, markdown, mode, updateFromMarkdown])
+  }, [currentLanguage, editContent, markdown, mode, updateFromMarkdown, validateEditForPendingReplace])
+
+  useEffect(() => {
+    const rootNodes = [previewContainerRef.current, livePreviewRef.current]
+
+    rootNodes.forEach((rootNode) => {
+      if (!rootNode) return
+      const blockNodes = rootNode.querySelectorAll<HTMLElement>('[data-ai-block-index]')
+      blockNodes.forEach((node) => {
+        const blockIndexValue = node.dataset.aiBlockIndex
+        const blockIndex = blockIndexValue ? Number(blockIndexValue) : NaN
+        if (!Number.isFinite(blockIndex)) return
+
+        const isCandidate =
+          !!selectionCandidate &&
+          blockIndex >= selectionCandidate.startBlockIndex &&
+          blockIndex < selectionCandidate.startBlockIndex + selectionCandidate.blockCount
+        const isSelected = selectedReferences.some(
+          (reference) =>
+            blockIndex >= reference.startBlockIndex &&
+            blockIndex < reference.startBlockIndex + reference.blockCount
+        )
+
+        node.style.transition = 'background-color 160ms ease, box-shadow 160ms ease, opacity 160ms ease'
+        node.style.borderRadius = '10px'
+        node.style.boxShadow = 'none'
+        node.style.backgroundColor = 'transparent'
+        node.style.opacity = '1'
+
+        if (isSelected) {
+          node.style.backgroundColor = `${themeConfig.primary}12`
+          node.style.boxShadow = `inset 0 0 0 1px ${themeConfig.primary}30`
+        }
+
+        if (isCandidate) {
+          node.style.backgroundColor = `${themeConfig.primary}18`
+          node.style.boxShadow = `inset 0 0 0 1px ${themeConfig.primary}55`
+        }
+      })
+    })
+
+    return () => {
+      rootNodes.forEach((rootNode) => {
+        if (!rootNode) return
+        const blockNodes = rootNode.querySelectorAll<HTMLElement>('[data-ai-block-index]')
+        blockNodes.forEach((node) => {
+          node.style.backgroundColor = ''
+          node.style.boxShadow = ''
+          node.style.opacity = ''
+          node.style.borderRadius = ''
+          node.style.transition = ''
+        })
+      })
+    }
+  }, [html, selectedReferences, selectionCandidate, themeConfig.primary])
+
+  useEffect(() => {
+    if (!selectionCandidate) {
+      return
+    }
+
+    const applySelection = (textarea: HTMLTextAreaElement | null) => {
+      if (!textarea) return
+      textarea.setSelectionRange(selectionCandidate.startOffset, selectionCandidate.endOffset)
+    }
+
+    if (mode === 'edit') {
+      applySelection(editTextareaRef.current)
+      return
+    }
+
+    if (mode === 'live') {
+      applySelection(liveEditorRef.current)
+    }
+  }, [mode, selectionCandidate])
+
+  const handlePreviewClickCapture = useCallback((event: React.MouseEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement | null
+    if (!target) return
+
+    const blockElement = target.closest<HTMLElement>('[data-ai-block-index]')
+    if (!blockElement) return
+
+    const blockIndexValue = blockElement.dataset.aiBlockIndex
+    const blockIndex = blockIndexValue ? Number(blockIndexValue) : NaN
+    if (!Number.isFinite(blockIndex)) return
+
+    const tagName = blockElement.tagName?.toLowerCase()
+    const text =
+      tagName === 'img'
+        ? blockElement.getAttribute('alt')?.trim() || 'image'
+        : blockElement.innerText?.trim()
+
+    if (!text) return
+    void addPreviewReference(text, tagName, blockIndex)
+  }, [addPreviewReference])
 
   // 如果没有文档，显示空状态
   if (isActiveBinaryGitTab && activeTab?.gitMeta) {
@@ -744,13 +949,61 @@ export function MarkdownPreview() {
       </div>
 
       {/* 内容区域 */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="relative flex flex-1 overflow-hidden">
+        {(selectionCandidate || selectionHint) && (
+          <div
+            className="absolute left-5 right-5 top-5 z-20 flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 shadow-sm"
+            style={{
+              borderColor: themeConfig.border,
+              backgroundColor: themeConfig.card,
+            }}
+          >
+            <div className="min-w-0 text-sm" style={{ color: themeConfig.textMuted }}>
+              {selectionCandidate
+                ? currentLanguage === 'zh'
+                  ? '已选择段落，点击加入对话或按 Ctrl+K'
+                  : 'Block selected. Add to chat or press Ctrl+K'
+                : selectionHint}
+            </div>
+            {selectionCandidate && (
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-9 rounded-full px-3 hover:bg-transparent focus-visible:ring-0"
+                  style={{
+                    color: themeConfig.textMuted,
+                    backgroundColor: 'transparent',
+                  }}
+                  onClick={() => clearSelectionCandidate()}
+                >
+                  <X className="mr-1 h-4 w-4" />
+                  {currentLanguage === 'zh' ? '取消' : 'Dismiss'}
+                </Button>
+                <Button
+                  type="button"
+                  className="h-9 rounded-full px-4 shadow-none hover:opacity-90"
+                  style={{
+                    backgroundColor: `${themeConfig.primary}14`,
+                    color: themeConfig.primary,
+                  }}
+                  onClick={() => void commitSelectionCandidate()}
+                >
+                  <Plus className="mr-1 h-4 w-4" />
+                  {currentLanguage === 'zh' ? '加入对话' : 'Add to chat'}
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+
         {mode === 'preview' && (
-          <div className="h-full w-full overflow-y-auto overflow-x-hidden">
+          <div ref={previewContainerRef} className="h-full w-full overflow-y-auto overflow-x-hidden">
             <div className="max-w-none p-8">
               <style>{getThemeStyles(theme)}</style>
               <article
                 className="markdown-body max-w-none"
+                onClick={handlePreviewClickCapture}
                 dangerouslySetInnerHTML={{ __html: html }}
               />
             </div>
@@ -773,6 +1026,8 @@ export function MarkdownPreview() {
             }}
             placeholder={mounted ? t('preview.editPlaceholder') : '在此编辑 Markdown 文档...'}
             spellCheck={false}
+            onMouseUp={(event) => handleAddTextareaSelection(event.currentTarget, editContent)}
+            onKeyUp={(event) => handleAddTextareaSelection(event.currentTarget, editContent)}
           />
         )}
 
@@ -798,6 +1053,8 @@ export function MarkdownPreview() {
                 }}
                 placeholder={mounted ? t('preview.editPlaceholder') : '在此编辑 Markdown 文档...'}
                 spellCheck={false}
+                onMouseUp={(event) => handleAddTextareaSelection(event.currentTarget, editContent)}
+                onKeyUp={(event) => handleAddTextareaSelection(event.currentTarget, editContent)}
               />
             </div>
             <div
@@ -809,6 +1066,7 @@ export function MarkdownPreview() {
                 <style>{getThemeStyles(theme)}</style>
                 <article
                   className="markdown-body max-w-none"
+                  onClick={handlePreviewClickCapture}
                   dangerouslySetInnerHTML={{ __html: html }}
                 />
               </div>

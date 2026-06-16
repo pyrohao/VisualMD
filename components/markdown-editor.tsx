@@ -12,6 +12,7 @@ import { EditorToolbar } from './editor-toolbar'
 import { IconSidebar } from './sidebar/icon-sidebar'
 import { PanelContainer } from './sidebar/panel-container'
 import { MarkdownPreview } from './markdown-preview'
+import { AiChatDock } from './ai-chat-dock'
 import { NodeEditPanel } from './node-edit-panel'
 import { SearchDialog } from './search-dialog'
 import { UnsavedChangesDialog } from './unsaved-changes-dialog'
@@ -27,6 +28,8 @@ import { SIDEBAR_PANEL_MIN_WIDTH, useSidebarStore } from '@/stores/sidebarStore'
 import { useTabsStore } from '@/stores/tabsStore'
 import { initTheme, useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { useSidebarStore as useTemplateStore } from '@/stores/sidebarStore'
+import { MIN_AI_DOCK_WIDTH, useAiDockStore } from '@/stores/aiDockStore'
+import { useAiChatStore } from '@/stores/aiChatStore'
 import { EmptyTabView } from './empty-tab-view'
 import { EditorCanvasShell } from './editor-canvas-shell'
 import { persistActiveTabSave } from '@/lib/editor-persistence'
@@ -297,6 +300,8 @@ const LEFT_ICON_BAR_WIDTH = 48
 const RIGHT_PANEL_MIN_WIDTH = 780
 const CENTER_PANEL_MIN_WIDTH = 120
 const RESIZE_HANDLE_HIT_AREA = 14
+const AI_DOCK_RESIZE_HIT_AREA = 16
+const AI_DOCK_DEFAULT_WIDTH_RATIO = 0.5
 
 function BinaryGitCanvasPlaceholder({
   fileName,
@@ -338,6 +343,7 @@ export function MarkdownEditor() {
   const [rightCollapsed, setRightCollapsed] = useState(false)
   const [rightPanelWidth, setRightPanelWidth] = useState(RIGHT_PANEL_MIN_WIDTH)
   const [isResizing, setIsResizing] = useState(false)
+  const [isAiDockResizing, setIsAiDockResizing] = useState(false)
   // 客户端挂载状态，用于避免 hydration 不匹配
   const [mounted, setMounted] = useState(false)
   // 模板编辑模式
@@ -353,6 +359,7 @@ export function MarkdownEditor() {
   const leftPanelMinWidthRef = useRef(LEFT_ICON_BAR_WIDTH + SIDEBAR_PANEL_MIN_WIDTH)
   const rightPanelMinWidthRef = useRef(RIGHT_PANEL_MIN_WIDTH)
   const resizeHandleRef = useRef<HTMLDivElement | null>(null)
+  const aiResizeHandleRef = useRef<HTMLDivElement | null>(null)
   const dragStateRef = useRef<{
     side: 'left' | 'right'
     startX: number
@@ -360,11 +367,24 @@ export function MarkdownEditor() {
     startRightWidth: number
     pointerId: number
   } | null>(null)
+  const aiDragStateRef = useRef<{
+    startX: number
+    startWidth: number
+    pointerId: number
+  } | null>(null)
 
   // 获取Store
   const { loadDocument, document, selectedNodeId, getCurrentMarkdown, getIsModified, updateNode } = useDocumentStore()
   const { currentFileId, files, saveFile, markFileAsSaved, openFile, createFile } = useFileSystemStore()
   const { setCurrentDocumentId } = useGitStore()
+  const {
+    isOpen: isAiDockOpen,
+    width: aiDockWidth,
+    hasCustomWidth: aiDockHasCustomWidth,
+    setOpen: setAiDockOpen,
+    setWidth: setAiDockWidth,
+    primeWidth: primeAiDockWidth,
+  } = useAiDockStore()
   const { isPanelExpanded, panelWidth, setPanelWidth, togglePanel, setActivePanel } = useSidebarStore()
   const { activeTabId, getActiveTab, tabs } = useTabsStore()
   const currentMarkdown = getCurrentMarkdown()
@@ -636,6 +656,13 @@ export function MarkdownEditor() {
         e.preventDefault()
         handleSave()
       }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        const aiChatStore = useAiChatStore.getState()
+        if (aiChatStore.selectionCandidate) {
+          e.preventDefault()
+          void aiChatStore.commitSelectionCandidate()
+        }
+      }
       // 面板切换快捷键
       if ((e.ctrlKey || e.metaKey) && e.key === '1') {
         e.preventDefault()
@@ -721,19 +748,33 @@ export function MarkdownEditor() {
 
   // 计算左侧面板总宽度
   const leftPanelWidth = isPanelExpanded ? LEFT_ICON_BAR_WIDTH + panelWidth : LEFT_ICON_BAR_WIDTH
+  const visibleAiDockWidth = isAiDockOpen ? aiDockWidth : 0
+  const visiblePreviewWidth = rightCollapsed ? 0 : rightPanelWidth
+  const rightSidebarOccupiedWidth = visiblePreviewWidth + visibleAiDockWidth
 
   const getMaxSidebarWidths = useCallback(() => {
     const containerWidth = containerRef.current?.clientWidth ?? 0
     const availableWidth = Math.max(0, containerWidth - CENTER_PANEL_MIN_WIDTH)
 
     return {
-      left: Math.max(leftPanelMinWidthRef.current, availableWidth - rightPanelWidth),
-      right: Math.max(rightPanelMinWidthRef.current, availableWidth - leftPanelWidth),
+      left: Math.max(leftPanelMinWidthRef.current, availableWidth - rightSidebarOccupiedWidth),
+      right: Math.max(rightPanelMinWidthRef.current, availableWidth - leftPanelWidth - visibleAiDockWidth),
+      ai: Math.max(MIN_AI_DOCK_WIDTH, availableWidth - leftPanelWidth - visiblePreviewWidth),
     }
-  }, [leftPanelWidth, rightPanelWidth])
+  }, [leftPanelWidth, rightSidebarOccupiedWidth, visibleAiDockWidth, visiblePreviewWidth])
+
+  const getInitialAiDockWidth = useCallback(() => {
+    const containerWidth = containerRef.current?.clientWidth ?? 0
+    const availableWidth = Math.max(
+      MIN_AI_DOCK_WIDTH,
+      containerWidth - leftPanelWidth - visiblePreviewWidth - CENTER_PANEL_MIN_WIDTH
+    )
+
+    return Math.max(MIN_AI_DOCK_WIDTH, Math.round(availableWidth * AI_DOCK_DEFAULT_WIDTH_RATIO))
+  }, [leftPanelWidth, visiblePreviewWidth])
 
   useEffect(() => {
-    const { left, right } = getMaxSidebarWidths()
+    const { left, right, ai } = getMaxSidebarWidths()
 
     if (leftPanelWidth > left && isPanelExpanded) {
       setPanelWidth(Math.max(leftPanelMinWidthRef.current - LEFT_ICON_BAR_WIDTH, left - LEFT_ICON_BAR_WIDTH))
@@ -742,7 +783,19 @@ export function MarkdownEditor() {
     if (rightPanelWidth > right) {
       setRightPanelWidth(Math.max(rightPanelMinWidthRef.current, right))
     }
-  }, [getMaxSidebarWidths, isPanelExpanded, leftPanelWidth, rightPanelWidth, setPanelWidth])
+
+    if (isAiDockOpen && aiDockWidth > ai) {
+      setAiDockWidth(ai)
+    }
+  }, [aiDockWidth, getMaxSidebarWidths, isAiDockOpen, isPanelExpanded, leftPanelWidth, rightPanelWidth, setAiDockWidth, setPanelWidth])
+
+  useEffect(() => {
+    if (!mounted || aiDockHasCustomWidth) {
+      return
+    }
+
+    primeAiDockWidth(getInitialAiDockWidth())
+  }, [aiDockHasCustomWidth, getInitialAiDockWidth, mounted, primeAiDockWidth])
 
   const clearResizeState = useCallback(() => {
     const dragState = dragStateRef.current
@@ -762,6 +815,26 @@ export function MarkdownEditor() {
 
     resizeHandleRef.current = null
     setIsResizing(false)
+  }, [])
+
+  const clearAiResizeState = useCallback(() => {
+    const dragState = aiDragStateRef.current
+    const handle = aiResizeHandleRef.current
+
+    if (dragState && handle?.hasPointerCapture?.(dragState.pointerId)) {
+      handle.releasePointerCapture(dragState.pointerId)
+    }
+
+    aiDragStateRef.current = null
+
+    const body = globalThis.document?.body ?? null
+    if (body) {
+      body.style.cursor = ''
+      body.style.userSelect = ''
+    }
+
+    aiResizeHandleRef.current = null
+    setIsAiDockResizing(false)
   }, [])
 
   useEffect(() => {
@@ -792,22 +865,48 @@ export function MarkdownEditor() {
       setRightPanelWidth(clampedRightWidth)
     }
 
+    const handleAiPointerMove = (event: PointerEvent) => {
+      const dragState = aiDragStateRef.current
+      const container = containerRef.current
+      if (!dragState || !container) return
+
+      const totalWidth = container.getBoundingClientRect().width
+      const maxWidth = Math.max(
+        MIN_AI_DOCK_WIDTH,
+        totalWidth - leftPanelWidth - visiblePreviewWidth - CENTER_PANEL_MIN_WIDTH
+      )
+      const nextWidth = dragState.startWidth + (dragState.startX - event.clientX)
+      const clampedWidth = Math.min(Math.max(MIN_AI_DOCK_WIDTH, nextWidth), maxWidth)
+      setAiDockWidth(clampedWidth)
+    }
+
     const handlePointerUp = () => clearResizeState()
     const handlePointerCancel = () => clearResizeState()
     const handleWindowBlur = () => clearResizeState()
+    const handleAiPointerUp = () => clearAiResizeState()
+    const handleAiPointerCancel = () => clearAiResizeState()
+    const handleAiWindowBlur = () => clearAiResizeState()
 
     window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointermove', handleAiPointerMove)
     window.addEventListener('pointerup', handlePointerUp)
+    window.addEventListener('pointerup', handleAiPointerUp)
     window.addEventListener('pointercancel', handlePointerCancel)
+    window.addEventListener('pointercancel', handleAiPointerCancel)
     window.addEventListener('blur', handleWindowBlur)
+    window.addEventListener('blur', handleAiWindowBlur)
 
     return () => {
       window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointermove', handleAiPointerMove)
       window.removeEventListener('pointerup', handlePointerUp)
+      window.removeEventListener('pointerup', handleAiPointerUp)
       window.removeEventListener('pointercancel', handlePointerCancel)
+      window.removeEventListener('pointercancel', handleAiPointerCancel)
       window.removeEventListener('blur', handleWindowBlur)
+      window.removeEventListener('blur', handleAiWindowBlur)
     }
-  }, [clearResizeState, setPanelWidth])
+  }, [clearAiResizeState, clearResizeState, leftPanelWidth, setAiDockWidth, setPanelWidth, visiblePreviewWidth])
 
   useEffect(() => {
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -845,13 +944,33 @@ export function MarkdownEditor() {
     setIsResizing(true)
   }, [leftPanelWidth, rightPanelWidth])
 
+  const startAiResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+
+    const handle = event.currentTarget
+    handle.setPointerCapture(event.pointerId)
+    aiResizeHandleRef.current = handle
+    aiDragStateRef.current = {
+      startX: event.clientX,
+      startWidth: aiDockWidth,
+      pointerId: event.pointerId,
+    }
+    const body = globalThis.document?.body ?? null
+    if (body) {
+      body.style.cursor = 'col-resize'
+      body.style.userSelect = 'none'
+    }
+    setIsAiDockResizing(true)
+  }, [aiDockWidth])
+
   return (
     <div className="flex h-screen flex-col" style={{ backgroundColor: safeThemeConfig.background }}>
       {/* 工具栏 */}
       <EditorToolbar
-        onToggleRight={() => setRightCollapsed(!rightCollapsed)}
-        rightCollapsed={rightCollapsed}
         onSearch={() => setSearchDialogOpen(true)}
+        onToggleAiDock={() => setAiDockOpen(!isAiDockOpen)}
+        aiDockOpen={isAiDockOpen}
       />
 
       {/* 搜索对话框 */}
@@ -901,7 +1020,7 @@ export function MarkdownEditor() {
           className="absolute inset-y-0 min-w-0"
           style={{
             left: leftPanelWidth,
-            right: rightCollapsed ? 0 : rightPanelWidth,
+            right: visibleAiDockWidth + visiblePreviewWidth,
             backgroundColor: safeThemeConfig.background,
             transition: 'left 0.3s ease, right 0.3s ease',
           }}
@@ -919,7 +1038,7 @@ export function MarkdownEditor() {
         </div>
 
         {/* 右侧面板 - 预览 */}
-        {isResizing && (
+        {(isResizing || isAiDockResizing) && (
           <div
             className="absolute inset-0 z-30"
             style={{ cursor: 'col-resize' }}
@@ -934,18 +1053,44 @@ export function MarkdownEditor() {
           />
         )}
 
-        <div
-          className={`absolute right-0 top-0 bottom-0 border-l transition-all duration-300 ${
-            rightCollapsed ? 'w-0 overflow-hidden opacity-0' : 'opacity-100'
-          }`}
-          style={{
-            width: rightCollapsed ? 0 : rightPanelWidth,
-            backgroundColor: safeThemeConfig.card,
-            borderColor: safeThemeConfig.border,
-          }}
-        >
-          {/* 右侧面板收起按钮 */}
-          {!rightCollapsed && (
+        {isAiDockOpen && (
+          <div
+            className="absolute right-0 top-0 bottom-0 border-l transition-all duration-300"
+            style={{
+              width: aiDockWidth,
+              backgroundColor: safeThemeConfig.card,
+              borderColor: safeThemeConfig.border,
+            }}
+          >
+            <div
+              className="absolute inset-y-0 left-0 z-20"
+              style={{
+                width: AI_DOCK_RESIZE_HIT_AREA,
+                transform: `translateX(-${AI_DOCK_RESIZE_HIT_AREA / 2}px)`,
+                cursor: 'col-resize',
+              }}
+              onPointerDown={startAiResize}
+              onMouseEnter={(event) => {
+                event.currentTarget.style.backgroundColor = `${safeThemeConfig.border}22`
+              }}
+              onMouseLeave={(event) => {
+                event.currentTarget.style.backgroundColor = 'transparent'
+              }}
+            />
+            <AiChatDock onClose={() => setAiDockOpen(false)} />
+          </div>
+        )}
+
+        {!rightCollapsed && (
+          <div
+            className="absolute right-0 top-0 bottom-0 border-l transition-all duration-300"
+            style={{
+              right: visibleAiDockWidth,
+              width: rightPanelWidth,
+              backgroundColor: safeThemeConfig.card,
+              borderColor: safeThemeConfig.border,
+            }}
+          >
             <div
               className="absolute inset-y-0 left-0 z-20"
               style={{
@@ -961,9 +1106,7 @@ export function MarkdownEditor() {
                 event.currentTarget.style.backgroundColor = 'transparent'
               }}
             />
-          )}
 
-          {!rightCollapsed && (
             <Button
               variant="ghost"
               size="icon"
@@ -977,15 +1120,12 @@ export function MarkdownEditor() {
             >
               <ChevronRight className="h-3 w-3" />
             </Button>
-          )}
 
-          {/* 右侧内容 - Markdown预览 */}
-          <div className="flex h-full flex-col">
-            <div className="flex-1 overflow-auto">
+            <div className="h-full min-w-0 overflow-auto">
               <MarkdownPreview />
             </div>
           </div>
-        </div>
+        )}
 
         {/* 右侧面板展开按钮 */}
         {rightCollapsed && (

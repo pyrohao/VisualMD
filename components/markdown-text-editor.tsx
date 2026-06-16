@@ -5,12 +5,16 @@ import { Textarea } from './ui/textarea'
 import { ScrollArea } from './ui/scroll-area'
 import { useDocumentStore } from '@/stores/documentStore'
 import { useTranslation } from '@/stores/languageStore'
+import { useAiChatStore } from '@/stores/aiChatStore'
 import { debounce } from '@/lib/utils'
 import { getMarkdownImagePasteResult, hasClipboardImage } from '@/lib/clipboard-image'
+import { deriveTextEdit } from '@/lib/ai-doc-chat'
+import { toast } from '@/hooks/use-toast'
 
 export function MarkdownTextEditor() {
   const { document, updateFromMarkdown } = useDocumentStore()
   const { t } = useTranslation()
+  const validateEditForPendingReplace = useAiChatStore((state) => state.validateEditForPendingReplace)
   const [localValue, setLocalValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
 
@@ -23,13 +27,40 @@ export function MarkdownTextEditor() {
 
   const debouncedUpdate = useMemo(
     () => debounce((value: string) => {
+      const currentMarkdown = useDocumentStore.getState().getCurrentMarkdown()
+      const edit = deriveTextEdit(currentMarkdown, value)
+      if (edit) {
+        const validation = useAiChatStore.getState().validateEditForPendingReplace(edit)
+        if (!validation.allowed) {
+          toast({
+            title: t('sidebar.ai'),
+            description: validation.reason,
+            variant: 'destructive',
+          })
+          setLocalValue(currentMarkdown)
+          return
+        }
+      }
+
       updateFromMarkdown(value)
     }, 500),
-    [updateFromMarkdown]
+    [t, updateFromMarkdown]
   )
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newValue = e.target.value
+    const edit = deriveTextEdit(localValue, newValue)
+    if (edit) {
+      const validation = validateEditForPendingReplace(edit)
+      if (!validation.allowed) {
+        toast({
+          title: t('sidebar.ai'),
+          description: validation.reason,
+          variant: 'destructive',
+        })
+        return
+      }
+    }
     setLocalValue(newValue)
     debouncedUpdate(newValue)
   }
@@ -49,6 +80,19 @@ export function MarkdownTextEditor() {
 
     if (!result) return
 
+    const edit = deriveTextEdit(localValue, result.nextValue)
+    if (edit) {
+      const validation = validateEditForPendingReplace(edit)
+      if (!validation.allowed) {
+        toast({
+          title: t('sidebar.ai'),
+          description: validation.reason,
+          variant: 'destructive',
+        })
+        return
+      }
+    }
+
     setLocalValue(result.nextValue)
     debouncedUpdate(result.nextValue)
 
@@ -58,7 +102,7 @@ export function MarkdownTextEditor() {
       textarea.focus()
       textarea.setSelectionRange(result.selectionStart, result.selectionEnd)
     })
-  }, [debouncedUpdate, localValue])
+  }, [debouncedUpdate, localValue, t, validateEditForPendingReplace])
 
   if (!document) {
     return (

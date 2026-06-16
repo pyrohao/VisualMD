@@ -23,6 +23,13 @@ export interface AIGenerateOptions {
   maxTokens?: number
 }
 
+export interface AIChatOptions {
+  prompt: string
+  systemPrompt?: string
+  temperature?: number
+  maxTokens?: number
+}
+
 /**
  * 生成结果
  */
@@ -128,6 +135,17 @@ export class AIService {
         error: error instanceof Error ? error.message : '未知错误',
       }
     }
+  }
+
+  async chatDocument(options: AIChatOptions): Promise<string> {
+    const { prompt, systemPrompt, temperature, maxTokens } = options
+
+    return this.callOpenAIAPI({
+      prompt,
+      systemPrompt: systemPrompt || 'Return concise and accurate answers.',
+      temperature: temperature ?? this.config.temperature,
+      maxTokens: maxTokens ?? this.config.maxTokens,
+    })
   }
 
   /**

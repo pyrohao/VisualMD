@@ -383,6 +383,7 @@ export function parseMarkdown(content: string, fileName?: string): DocumentState
     root: rootWithContent,
     metadata,
     originalContent: content,
+    version: 1,
     isModified: false,
     fileName,
   }

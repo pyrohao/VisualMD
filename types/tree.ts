@@ -63,6 +63,8 @@ export interface DocumentState {
   root: TreeNode
   /** 原始Markdown内容 */
   originalContent: string
+  /** 文档版本，任意可写变更后递增 */
+  version: number
   /** 是否已修改 */
   isModified: boolean
   /** 文件名 */
