@@ -30,6 +30,17 @@ export interface AIChatOptions {
   maxTokens?: number
 }
 
+export interface AIMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool'
+  content: string
+}
+
+export interface AIChatMessagesOptions {
+  messages: AIMessage[]
+  temperature?: number
+  maxTokens?: number
+}
+
 /**
  * 生成结果
  */
@@ -148,16 +159,27 @@ export class AIService {
     })
   }
 
+  async chatMessages(options: AIChatMessagesOptions): Promise<string> {
+    const { messages, temperature, maxTokens } = options
+
+    return this.callOpenAIAPI({
+      messages,
+      temperature: temperature ?? this.config.temperature,
+      maxTokens: maxTokens ?? this.config.maxTokens,
+    })
+  }
+
   /**
    * 调用OpenAI兼容API
    */
   private async callOpenAIAPI(options: {
-    prompt: string
-    systemPrompt: string
+    prompt?: string
+    systemPrompt?: string
+    messages?: AIMessage[]
     temperature: number
     maxTokens: number
   }): Promise<string> {
-    const { prompt, systemPrompt, temperature, maxTokens } = options
+    const { prompt, systemPrompt, messages, temperature, maxTokens } = options
 
     const url = `${this.config.baseUrl}/chat/completions`
     
@@ -169,9 +191,9 @@ export class AIService {
 
     const body = {
       model: this.config.model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: prompt },
+      messages: messages || [
+        { role: 'system', content: systemPrompt || '' },
+        { role: 'user', content: prompt || '' },
       ],
       temperature,
       max_tokens: maxTokens,

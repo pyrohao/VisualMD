@@ -41,8 +41,8 @@ describe('ai-doc-chat', () => {
   })
 
   it('creates block-range reference snapshot from editor selection', () => {
-    const start = SAMPLE_MARKDOWN.indexOf('Second paragraph.')
-    const end = start + 'Second paragraph.'.length
+    const start = SAMPLE_MARKDOWN.indexOf('Second')
+    const end = start + 'Second'.length
     const reference = createReferenceSnapshot({
       markdown: SAMPLE_MARKDOWN,
       selectionStart: start,
@@ -54,6 +54,7 @@ describe('ai-doc-chat', () => {
     expect(reference?.anchorPath).toEqual(['Intro'])
     expect(reference?.blockType).toBe('paragraph')
     expect(reference?.blockCount).toBe(1)
+    expect(reference?.expectedText).toBe('Second')
   })
 
   it('creates reference snapshot from preview block index', () => {
@@ -70,7 +71,7 @@ describe('ai-doc-chat', () => {
     expect(reference?.expectedText).toContain('Second paragraph.')
   })
 
-  it('resolves moved block range after preceding edits', () => {
+  it('resolves selected string after preceding edits', () => {
     const start = SAMPLE_MARKDOWN.indexOf('Second paragraph.')
     const end = start + 'Second paragraph.'.length
     const reference = createReferenceSnapshot({
@@ -86,7 +87,7 @@ describe('ai-doc-chat', () => {
     const resolved = resolveReferenceSnapshot(reference!, nextMarkdown, 2)
 
     expect(resolved).not.toBeNull()
-    expect(nextMarkdown.slice(resolved!.startOffset, resolved!.endOffset)).toContain('Second paragraph.')
+    expect(nextMarkdown.slice(resolved!.startOffset, resolved!.endOffset)).toBe('Second paragraph.')
   })
 
   it('detects stale reference when target content changed', () => {
@@ -113,7 +114,11 @@ describe('ai-doc-chat', () => {
       version: 1,
     })
 
-    const action = { action: 'replace', content: 'Updated paragraph.\n' } as const
+    const action = {
+      action: 'replace',
+      oldString: 'Second paragraph.',
+      newString: 'Updated paragraph.',
+    } as const
     expect(validateDocumentChatAction(action)).toBe(true)
 
     const updated = applyDocumentChatAction(SAMPLE_MARKDOWN, reference!, action, 1)
@@ -129,10 +134,11 @@ describe('ai-doc-chat', () => {
       expect(answerResult.action.answer).toBe('Done')
     }
 
-    const replaceResult = parseDocumentChatResponse('```json\n{"action":"replace","content":"New text"}\n```')
+    const replaceResult = parseDocumentChatResponse('```json\n{"action":"replace","oldString":"Old text","newString":"New text"}\n```')
     expect(replaceResult.action.action).toBe('replace')
     if (replaceResult.action.action === 'replace') {
-      expect(replaceResult.action.content).toBe('New text')
+      expect(replaceResult.action.oldString).toBe('Old text')
+      expect(replaceResult.action.newString).toBe('New text')
     }
   })
 

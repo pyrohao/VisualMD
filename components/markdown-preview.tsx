@@ -27,7 +27,7 @@ import rehypeStringify from 'rehype-stringify'
 import { BookOpen, Pencil, Plus, SplitSquareHorizontal, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getMarkdownImagePasteResult, hasClipboardImage } from '@/lib/clipboard-image'
-import { buildMarkdownBlockIndex, deriveTextEdit } from '@/lib/ai-doc-chat'
+import { buildMarkdownBlockIndex } from '@/lib/ai-doc-chat'
 import { getGitMarkdownImagePasteResult } from '@/lib/git-asset-paste'
 import {
   buildGitImageRuntimeConfig,
@@ -417,7 +417,6 @@ export function MarkdownPreview() {
   const currentConversationId = useAiChatStore((state) => state.currentConversationId)
   const referencesByConversation = useAiChatStore((state) => state.referencesByConversation)
   const selectedReferenceIds = useAiChatStore((state) => state.selectedReferenceIds)
-  const validateEditForPendingReplace = useAiChatStore((state) => state.validateEditForPendingReplace)
   const activeTabId = useTabsStore((state) => state.activeTabId)
   const activeTab = useTabsStore((state) => state.tabs.find((item) => item.id === state.activeTabId) || null)
   const activeGitMeta = useTabsStore((state) => {
@@ -462,10 +461,12 @@ export function MarkdownPreview() {
   const isEditingMode = mode === 'edit' || mode === 'live'
   const renderMarkdown = mode === 'live' ? editContent : markdown
   const documentKey = `${activeTabId || ''}\u0000${document?.fileId || ''}\u0000${document?.fileName || ''}`
-  const currentReferences = currentConversationId ? referencesByConversation[currentConversationId] || [] : []
   const selectedReferences = useMemo(
-    () => currentReferences.filter((reference) => selectedReferenceIds.includes(reference.id)),
-    [currentReferences, selectedReferenceIds]
+    () => {
+      const currentReferences = currentConversationId ? referencesByConversation[currentConversationId] || [] : []
+      return currentReferences.filter((reference) => selectedReferenceIds.includes(reference.id))
+    },
+    [currentConversationId, referencesByConversation, selectedReferenceIds]
   )
 
   // 当 markdown 变化时，更新编辑内容
@@ -562,22 +563,8 @@ export function MarkdownPreview() {
 
   // 处理编辑内容变化
   const handleEditChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const nextValue = e.target.value
-    const edit = deriveTextEdit(editContent, nextValue)
-    if (edit) {
-      const validation = validateEditForPendingReplace(edit)
-      if (!validation.allowed) {
-        toast({
-          title: currentLanguage === 'zh' ? '目标区块已锁定' : 'Target block is locked',
-          description: validation.reason,
-          variant: 'destructive',
-        })
-        return
-      }
-    }
-
-    setEditContent(nextValue)
-  }, [currentLanguage, editContent, validateEditForPendingReplace])
+    setEditContent(e.target.value)
+  }, [])
 
   const handleAddTextareaSelection = useCallback((textarea: HTMLTextAreaElement | null, sourceMarkdown: string) => {
     if (!textarea) return
@@ -590,8 +577,7 @@ export function MarkdownPreview() {
     void addEditorSelectionReference(
       selectionStart,
       selectionEnd,
-      sourceMarkdown,
-      useDocumentStore.getState().document?.version
+      sourceMarkdown
     )
   }, [addEditorSelectionReference, updateFromMarkdown])
 
@@ -639,19 +625,6 @@ export function MarkdownPreview() {
 
     if (!result) return
 
-    const edit = deriveTextEdit(sourceValue, result.nextValue)
-    if (edit) {
-      const validation = validateEditForPendingReplace(edit)
-      if (!validation.allowed) {
-        toast({
-          title: currentLanguage === 'zh' ? '目标区块已锁定' : 'Target block is locked',
-          description: validation.reason,
-          variant: 'destructive',
-        })
-        return
-      }
-    }
-
     setEditContent(result.nextValue)
     if (mode === 'live') {
       updateFromMarkdown(result.nextValue)
@@ -667,7 +640,7 @@ export function MarkdownPreview() {
       textarea.focus()
       textarea.setSelectionRange(result.selectionStart, result.selectionEnd)
     })
-  }, [currentLanguage, mode, persistGitDraftAfterPaste, updateFromMarkdown, validateEditForPendingReplace])
+  }, [mode, persistGitDraftAfterPaste, updateFromMarkdown])
 
   const liveLabels =
     currentLanguage === 'zh'
@@ -732,20 +705,6 @@ export function MarkdownPreview() {
 
     const timer = setTimeout(() => {
       if (editContent !== markdown) {
-        const edit = deriveTextEdit(markdown, editContent)
-        if (edit) {
-          const validation = validateEditForPendingReplace(edit)
-          if (!validation.allowed) {
-            toast({
-              title: currentLanguage === 'zh' ? '目标区块已锁定' : 'Target block is locked',
-              description: validation.reason,
-              variant: 'destructive',
-            })
-            setEditContent(markdown)
-            return
-          }
-        }
-
         updateFromMarkdown(editContent)
       }
     }, 180)
@@ -753,7 +712,7 @@ export function MarkdownPreview() {
     return () => {
       clearTimeout(timer)
     }
-  }, [currentLanguage, editContent, markdown, mode, updateFromMarkdown, validateEditForPendingReplace])
+  }, [editContent, markdown, mode, updateFromMarkdown])
 
   useEffect(() => {
     const rootNodes = [previewContainerRef.current, livePreviewRef.current]

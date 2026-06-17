@@ -10,7 +10,8 @@ export interface AiDocAnswerAction {
 
 export interface AiDocReplaceAction {
   action: 'replace'
-  content: string
+  oldString: string
+  newString: string
 }
 
 export interface AiDocBlock {
@@ -35,7 +36,6 @@ export interface AiDocReferenceSnapshot {
   endOffset: number
   expectedText: string
   excerpt: string
-  version: number
   locked: boolean
 }
 
@@ -307,7 +307,7 @@ function findBlocksForClick(blocks: AiDocBlock[], clickedText: string, tagName?:
   return match ? [match] : null
 }
 
-function createRangeSnapshot(blocks: AiDocBlock[], matchedBlocks: AiDocBlock[], version: number) {
+function createRangeSnapshot(blocks: AiDocBlock[], matchedBlocks: AiDocBlock[]) {
   const sorted = [...matchedBlocks].sort((left, right) => left.blockIndex - right.blockIndex)
   const first = sorted[0]
   const last = sorted[sorted.length - 1]
@@ -323,7 +323,42 @@ function createRangeSnapshot(blocks: AiDocBlock[], matchedBlocks: AiDocBlock[], 
     endOffset: last.endOffset,
     expectedText,
     excerpt: excerptOf(expectedText),
-    version,
+    locked: false,
+  } satisfies AiDocReferenceSnapshot
+}
+
+function findBlockForOffset(blocks: AiDocBlock[], offset: number) {
+  return blocks.find((block) => offset >= block.startOffset && offset <= block.endOffset) || null
+}
+
+function createExactSelectionSnapshot(
+  blocks: AiDocBlock[],
+  markdown: string,
+  selectionStart: number,
+  selectionEnd: number
+) {
+  const { start, end } = trimRange(markdown, Math.min(selectionStart, selectionEnd), Math.max(selectionStart, selectionEnd))
+  if (start === end) {
+    return null
+  }
+
+  const selectedText = markdown.slice(start, end)
+  const firstBlock = findBlockForOffset(blocks, start) || blocks.find((block) => end > block.startOffset && start < block.endOffset)
+  if (!firstBlock) {
+    return null
+  }
+
+  const overlapping = findBlocksForSelection(blocks, start, end) || [firstBlock]
+
+  return {
+    anchorPath: firstBlock.titlePath,
+    blockType: firstBlock.blockType,
+    startBlockIndex: overlapping[0]?.blockIndex ?? firstBlock.blockIndex,
+    blockCount: overlapping.length,
+    startOffset: start,
+    endOffset: end,
+    expectedText: selectedText,
+    excerpt: excerptOf(selectedText),
     locked: false,
   } satisfies AiDocReferenceSnapshot
 }
@@ -342,13 +377,13 @@ export function createReferenceSnapshot(options: {
   let matchedBlocks: AiDocBlock[] | null = null
 
   if (typeof selectionStart === 'number' && typeof selectionEnd === 'number' && selectionStart !== selectionEnd) {
-    matchedBlocks = findBlocksForSelection(blocks, selectionStart, selectionEnd)
+    return createExactSelectionSnapshot(blocks, markdown, selectionStart, selectionEnd)
   } else if (clickedText) {
     matchedBlocks = findBlocksForClick(blocks, clickedText, clickedTagName)
   }
 
   if (!matchedBlocks?.length) return null
-  return createRangeSnapshot(blocks, matchedBlocks, version)
+  return createRangeSnapshot(blocks, matchedBlocks)
 }
 
 export function createReferenceSnapshotFromBlockIndex(markdown: string, blockIndex: number, version: number) {
@@ -358,7 +393,7 @@ export function createReferenceSnapshotFromBlockIndex(markdown: string, blockInd
     return null
   }
 
-  return createRangeSnapshot(blocks, [matchedBlock], version)
+  return createRangeSnapshot(blocks, [matchedBlock])
 }
 
 function blockPathFor(block: AiDocBlock) {
@@ -367,85 +402,57 @@ function blockPathFor(block: AiDocBlock) {
 
 export function resolveReferenceSnapshot(reference: AiDocReferenceSnapshot, markdown: string, version: number) {
   const blocks = buildMarkdownBlockIndex(markdown, version)
-  const anchorBlocks = blocks.filter((block) => block.titlePath.length === reference.anchorPath.length && block.titlePath.every((title, index) => title === reference.anchorPath[index]))
-
-  if (!anchorBlocks.length) {
+  const startOffset = markdown.indexOf(reference.expectedText)
+  if (startOffset < 0) {
     return null
   }
 
-  const startBlock = blocks[reference.startBlockIndex]
-  if (startBlock && startBlock.titlePath.length === reference.anchorPath.length && startBlock.titlePath.every((title, index) => title === reference.anchorPath[index])) {
-    const candidateRange = blocks.slice(reference.startBlockIndex, reference.startBlockIndex + reference.blockCount)
-    const candidateText = candidateRange.map((block) => block.text).join('')
-    if (candidateRange.length === reference.blockCount && candidateText === reference.expectedText) {
-      const first = candidateRange[0]
-      const last = candidateRange[candidateRange.length - 1]
-      return {
-        startOffset: first.startOffset,
-        endOffset: last.endOffset,
-        expectedText: candidateText,
-        blocks: candidateRange,
-      }
-    }
+  const endOffset = startOffset + reference.expectedText.length
+  return {
+    startOffset,
+    endOffset,
+    expectedText: reference.expectedText,
+    blocks: blocks.filter((block) => endOffset > block.startOffset && startOffset < block.endOffset),
   }
-
-  for (let index = 0; index < blocks.length; index += 1) {
-    const candidateRange = blocks.slice(index, index + reference.blockCount)
-    if (candidateRange.length !== reference.blockCount) continue
-    const sameAnchor = candidateRange.every(
-      (block) =>
-        block.titlePath.length === reference.anchorPath.length &&
-        block.titlePath.every((title, pathIndex) => title === reference.anchorPath[pathIndex])
-    )
-    if (!sameAnchor) continue
-    const candidateText = candidateRange.map((block) => block.text).join('')
-    if (candidateText === reference.expectedText) {
-      const first = candidateRange[0]
-      const last = candidateRange[candidateRange.length - 1]
-      return {
-        startOffset: first.startOffset,
-        endOffset: last.endOffset,
-        expectedText: candidateText,
-        blocks: candidateRange,
-      }
-    }
-  }
-
-  return null
 }
 
 export function isReferenceStale(reference: AiDocReferenceSnapshot, markdown: string, version: number) {
-  if (reference.version === version) {
-    const currentText = markdown.slice(reference.startOffset, reference.endOffset)
-    return currentText !== reference.expectedText
-  }
-
   return resolveReferenceSnapshot(reference, markdown, version) === null
 }
 
-export function applyDocumentChatAction(markdown: string, reference: AiDocReferenceSnapshot, action: AiDocAction, version: number) {
+export function countExactMatches(markdown: string, oldString: string) {
+  if (!oldString) return 0
+
+  let count = 0
+  let index = markdown.indexOf(oldString)
+  while (index !== -1) {
+    count += 1
+    index = markdown.indexOf(oldString, index + oldString.length)
+  }
+
+  return count
+}
+
+export function applyDocumentChatAction(markdown: string, reference: AiDocReferenceSnapshot, action: AiDocAction, _version: number) {
   if (action.action === 'answer') {
     return markdown
   }
 
-  const resolved = resolveReferenceSnapshot(reference, markdown, version)
-  if (!resolved) {
+  if (action.oldString !== reference.expectedText) {
     return markdown
   }
 
-  const currentText = markdown.slice(resolved.startOffset, resolved.endOffset)
-  if (currentText !== resolved.expectedText) {
+  if (countExactMatches(markdown, action.oldString) !== 1) {
     return markdown
   }
 
-  const replacement = action.content ?? ''
-  return `${markdown.slice(0, resolved.startOffset)}${replacement}${markdown.slice(resolved.endOffset)}`
+  return markdown.replace(action.oldString, action.newString)
 }
 
 export function validateDocumentChatAction(action: unknown): action is AiDocAction {
   if (!action || typeof action !== 'object') return false
 
-  const candidate = action as { action?: unknown; answer?: unknown; content?: unknown }
+  const candidate = action as { action?: unknown; answer?: unknown; oldString?: unknown; newString?: unknown }
   if (candidate.action !== 'answer' && candidate.action !== 'replace') {
     return false
   }
@@ -454,7 +461,7 @@ export function validateDocumentChatAction(action: unknown): action is AiDocActi
     return typeof candidate.answer === 'string'
   }
 
-  return typeof candidate.content === 'string'
+  return typeof candidate.oldString === 'string' && typeof candidate.newString === 'string'
 }
 
 export function parseDocumentChatResponse(raw: string): AiDocChatResult {
@@ -566,7 +573,6 @@ export function recalculateReferenceOffsets(reference: AiDocReferenceSnapshot, m
     startOffset: resolved.startOffset,
     endOffset: resolved.endOffset,
     expectedText: resolved.expectedText,
-    version,
   } satisfies AiDocReferenceSnapshot
 }
 

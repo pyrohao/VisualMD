@@ -297,11 +297,31 @@ description: 简要描述
 `
 
 const LEFT_ICON_BAR_WIDTH = 48
-const RIGHT_PANEL_MIN_WIDTH = 780
-const CENTER_PANEL_MIN_WIDTH = 120
+const RIGHT_PANEL_INITIAL_WIDTH_RATIO = 0.42
+const RIGHT_PANEL_MIN_WIDTH_RATIO = 0.28
+const RIGHT_PANEL_MIN_WIDTH_FALLBACK = 360
+const CENTER_PANEL_MIN_WIDTH_RATIO = 0.24
+const CENTER_PANEL_MIN_WIDTH_FALLBACK = 260
 const RESIZE_HANDLE_HIT_AREA = 14
 const AI_DOCK_RESIZE_HIT_AREA = 16
 const AI_DOCK_DEFAULT_WIDTH_RATIO = 0.5
+
+const getRatioWidth = (containerWidth: number, ratio: number, fallback: number) => {
+  if (containerWidth <= 0) {
+    return fallback
+  }
+
+  return Math.round(containerWidth * ratio)
+}
+
+const getRightPanelMinWidth = (containerWidth: number) =>
+  getRatioWidth(containerWidth, RIGHT_PANEL_MIN_WIDTH_RATIO, RIGHT_PANEL_MIN_WIDTH_FALLBACK)
+
+const getCenterPanelMinWidth = (containerWidth: number) =>
+  getRatioWidth(containerWidth, CENTER_PANEL_MIN_WIDTH_RATIO, CENTER_PANEL_MIN_WIDTH_FALLBACK)
+
+const getInitialRightPanelWidth = (containerWidth: number) =>
+  getRatioWidth(containerWidth, RIGHT_PANEL_INITIAL_WIDTH_RATIO, RIGHT_PANEL_MIN_WIDTH_FALLBACK)
 
 function BinaryGitCanvasPlaceholder({
   fileName,
@@ -341,7 +361,7 @@ function BinaryGitCanvasPlaceholder({
 export function MarkdownEditor() {
   // 面板收起状态
   const [rightCollapsed, setRightCollapsed] = useState(false)
-  const [rightPanelWidth, setRightPanelWidth] = useState(RIGHT_PANEL_MIN_WIDTH)
+  const [rightPanelWidth, setRightPanelWidth] = useState(RIGHT_PANEL_MIN_WIDTH_FALLBACK)
   const [isResizing, setIsResizing] = useState(false)
   const [isAiDockResizing, setIsAiDockResizing] = useState(false)
   // 客户端挂载状态，用于避免 hydration 不匹配
@@ -357,7 +377,6 @@ export function MarkdownEditor() {
   const [searchDialogOpen, setSearchDialogOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
   const leftPanelMinWidthRef = useRef(LEFT_ICON_BAR_WIDTH + SIDEBAR_PANEL_MIN_WIDTH)
-  const rightPanelMinWidthRef = useRef(RIGHT_PANEL_MIN_WIDTH)
   const resizeHandleRef = useRef<HTMLDivElement | null>(null)
   const aiResizeHandleRef = useRef<HTMLDivElement | null>(null)
   const dragStateRef = useRef<{
@@ -754,24 +773,36 @@ export function MarkdownEditor() {
 
   const getMaxSidebarWidths = useCallback(() => {
     const containerWidth = containerRef.current?.clientWidth ?? 0
-    const availableWidth = Math.max(0, containerWidth - CENTER_PANEL_MIN_WIDTH)
+    const centerPanelMinWidth = getCenterPanelMinWidth(containerWidth)
+    const rightPanelMinWidth = getRightPanelMinWidth(containerWidth)
+    const availableWidth = Math.max(0, containerWidth - centerPanelMinWidth)
 
     return {
       left: Math.max(leftPanelMinWidthRef.current, availableWidth - rightSidebarOccupiedWidth),
-      right: Math.max(rightPanelMinWidthRef.current, availableWidth - leftPanelWidth - visibleAiDockWidth),
+      right: Math.max(rightPanelMinWidth, availableWidth - leftPanelWidth - visibleAiDockWidth),
       ai: Math.max(MIN_AI_DOCK_WIDTH, availableWidth - leftPanelWidth - visiblePreviewWidth),
     }
   }, [leftPanelWidth, rightSidebarOccupiedWidth, visibleAiDockWidth, visiblePreviewWidth])
 
   const getInitialAiDockWidth = useCallback(() => {
     const containerWidth = containerRef.current?.clientWidth ?? 0
+    const centerPanelMinWidth = getCenterPanelMinWidth(containerWidth)
     const availableWidth = Math.max(
       MIN_AI_DOCK_WIDTH,
-      containerWidth - leftPanelWidth - visiblePreviewWidth - CENTER_PANEL_MIN_WIDTH
+      containerWidth - leftPanelWidth - visiblePreviewWidth - centerPanelMinWidth
     )
 
     return Math.max(MIN_AI_DOCK_WIDTH, Math.round(availableWidth * AI_DOCK_DEFAULT_WIDTH_RATIO))
   }, [leftPanelWidth, visiblePreviewWidth])
+
+  useEffect(() => {
+    if (!mounted) {
+      return
+    }
+
+    const containerWidth = containerRef.current?.clientWidth ?? 0
+    setRightPanelWidth((currentWidth) => Math.max(currentWidth, getInitialRightPanelWidth(containerWidth)))
+  }, [mounted])
 
   useEffect(() => {
     const { left, right, ai } = getMaxSidebarWidths()
@@ -781,7 +812,7 @@ export function MarkdownEditor() {
     }
 
     if (rightPanelWidth > right) {
-      setRightPanelWidth(Math.max(rightPanelMinWidthRef.current, right))
+      setRightPanelWidth(right)
     }
 
     if (isAiDockOpen && aiDockWidth > ai) {
@@ -844,12 +875,14 @@ export function MarkdownEditor() {
       if (!dragState || !container) return
 
       const totalWidth = container.getBoundingClientRect().width
+      const centerPanelMinWidth = getCenterPanelMinWidth(totalWidth)
+      const rightPanelMinWidth = getRightPanelMinWidth(totalWidth)
 
       if (dragState.side === 'left') {
         const nextLeftWidth = dragState.startLeftWidth + (event.clientX - dragState.startX)
         const maxLeftWidth = Math.max(
           leftPanelMinWidthRef.current,
-          totalWidth - dragState.startRightWidth - CENTER_PANEL_MIN_WIDTH
+          totalWidth - dragState.startRightWidth - centerPanelMinWidth
         )
         const clampedLeftWidth = Math.min(Math.max(leftPanelMinWidthRef.current, nextLeftWidth), maxLeftWidth)
         setPanelWidth(clampedLeftWidth - LEFT_ICON_BAR_WIDTH)
@@ -858,10 +891,10 @@ export function MarkdownEditor() {
 
       const nextRightWidth = dragState.startRightWidth + (dragState.startX - event.clientX)
       const maxRightWidth = Math.max(
-        rightPanelMinWidthRef.current,
-        totalWidth - dragState.startLeftWidth - CENTER_PANEL_MIN_WIDTH
+        rightPanelMinWidth,
+        totalWidth - dragState.startLeftWidth - centerPanelMinWidth
       )
-      const clampedRightWidth = Math.min(Math.max(rightPanelMinWidthRef.current, nextRightWidth), maxRightWidth)
+      const clampedRightWidth = Math.min(Math.max(rightPanelMinWidth, nextRightWidth), maxRightWidth)
       setRightPanelWidth(clampedRightWidth)
     }
 
@@ -871,9 +904,10 @@ export function MarkdownEditor() {
       if (!dragState || !container) return
 
       const totalWidth = container.getBoundingClientRect().width
+      const centerPanelMinWidth = getCenterPanelMinWidth(totalWidth)
       const maxWidth = Math.max(
         MIN_AI_DOCK_WIDTH,
-        totalWidth - leftPanelWidth - visiblePreviewWidth - CENTER_PANEL_MIN_WIDTH
+        totalWidth - leftPanelWidth - visiblePreviewWidth - centerPanelMinWidth
       )
       const nextWidth = dragState.startWidth + (dragState.startX - event.clientX)
       const clampedWidth = Math.min(Math.max(MIN_AI_DOCK_WIDTH, nextWidth), maxWidth)

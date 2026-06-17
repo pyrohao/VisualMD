@@ -4,7 +4,6 @@ import { useEffect, useMemo } from 'react'
 import {
   AlertCircle,
   ArrowUp,
-  Check,
   ChevronLeft,
   MoreHorizontal,
   PencilLine,
@@ -68,12 +67,11 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
   const {
     conversations,
     currentConversationId,
-    messagesByConversation,
+    visibleMessagesByConversation,
     referencesByConversation,
     applyMode,
     draftInput,
     selectedReferenceIds,
-    pendingReplace,
     isLoading,
     isSending,
     error,
@@ -88,8 +86,6 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
     removeReference,
     clearSelectionHint,
     sendMessage,
-    applyPendingReplace,
-    discardPendingReplace,
     refreshReferenceStaleState,
   } = useAiChatStore()
   const documentVersion = useDocumentStore((state) => state.document?.version || 0)
@@ -115,12 +111,14 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
   }, [clearSelectionHint, selectionHint])
 
   const view: DockView = currentConversationId ? 'conversation' : 'history'
-  const currentMessages = currentConversationId ? messagesByConversation[currentConversationId] || [] : []
-  const currentReferences = currentConversationId ? referencesByConversation[currentConversationId] || [] : []
+  const currentMessages = currentConversationId ? visibleMessagesByConversation[currentConversationId] || [] : []
   const currentConversation = conversations.find((conversation) => conversation.id === currentConversationId) || null
   const selectedReferences = useMemo(
-    () => currentReferences.filter((reference) => selectedReferenceIds.includes(reference.id)),
-    [currentReferences, selectedReferenceIds]
+    () => {
+      const currentReferences = currentConversationId ? referencesByConversation[currentConversationId] || [] : []
+      return currentReferences.filter((reference) => selectedReferenceIds.includes(reference.id))
+    },
+    [currentConversationId, referencesByConversation, selectedReferenceIds]
   )
   const currentApplyMode = APPLY_MODE_OPTIONS.find((option) => option.value === applyMode) || APPLY_MODE_OPTIONS[0]
 
@@ -308,35 +306,21 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
 
             <div className="space-y-3">
               {currentMessages.map((message) => {
-                const isUser = message.role === 'user'
-                const isReplaceMessage = message.role === 'assistant' && message.action?.action === 'replace'
                 return (
                   <div
                     key={message.id}
                     className="flex"
-                    style={{ justifyContent: isUser ? 'flex-end' : 'flex-start' }}
+                    style={{ justifyContent: 'flex-start' }}
                   >
                     <div
                       className="max-w-[88%] rounded-2xl px-4 py-3 text-sm leading-6"
                       style={{
-                        backgroundColor: isUser ? `${themeConfig.primary}10` : themeConfig.card,
-                        border: `1px solid ${isUser ? `${themeConfig.primary}22` : themeConfig.border}`,
+                        backgroundColor: themeConfig.card,
+                        border: `1px solid ${themeConfig.border}`,
                         color: themeConfig.text,
                       }}
                     >
-                      {message.content ||
-                        (message.state === 'pending'
-                          ? currentLanguage === 'zh'
-                            ? '正在生成...'
-                            : 'Generating...'
-                          : '')}
-                      {isReplaceMessage && (
-                        <div className="mt-3">
-                          <Badge variant="outline" style={{ borderColor: themeConfig.primary, color: themeConfig.primary }}>
-                            {currentLanguage === 'zh' ? '建议替换' : 'Replace suggestion'}
-                          </Badge>
-                        </div>
-                      )}
+                      {message.message}
                       {!!message.error && (
                         <div className="mt-2 text-xs" style={{ color: themeConfig.error }}>
                           {message.error}
@@ -347,39 +331,6 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
                 )
               })}
             </div>
-
-            {pendingReplace && (
-              <div
-                className="mt-4 rounded-2xl border p-4"
-                style={{ borderColor: themeConfig.border, backgroundColor: themeConfig.card }}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-sm font-medium" style={{ color: themeConfig.heading }}>
-                    {currentLanguage === 'zh' ? '待确认替换' : 'Pending replace'}
-                  </div>
-                  <Badge variant="outline">replace</Badge>
-                </div>
-                <div
-                  className="mt-3 max-h-44 overflow-auto rounded-xl border p-3 text-xs leading-5"
-                  style={{
-                    borderColor: themeConfig.border,
-                    color: themeConfig.textMuted,
-                    backgroundColor: themeConfig.background,
-                  }}
-                >
-                  <pre className="whitespace-pre-wrap break-words">{pendingReplace.previewMarkdown}</pre>
-                </div>
-                <div className="mt-3 flex items-center justify-end gap-2">
-                  <Button type="button" variant="ghost" onClick={discardPendingReplace}>
-                    {currentLanguage === 'zh' ? '取消' : 'Cancel'}
-                  </Button>
-                  <Button type="button" onClick={() => void applyPendingReplace()}>
-                    <Check className="mr-2 h-4 w-4" />
-                    {currentLanguage === 'zh' ? '确认应用' : 'Apply'}
-                  </Button>
-                </div>
-              </div>
-            )}
           </div>
         )}
       </ScrollArea>

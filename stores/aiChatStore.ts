@@ -3,72 +3,79 @@
 import { create } from 'zustand'
 import { nanoid } from 'nanoid'
 import {
-  applyDocumentChatAction,
-  buildTrackedRangeFromReference,
+  createAgentConversationId,
+  createDefaultAgentTools,
+  deleteAgentConversation,
+  deleteAgentReference,
+  getAgentDraft,
+  getAgentUiState,
+  listAgentConversations,
+  listAgentMessages,
+  listAgentReferences,
+  runAgentReActLoop,
+  saveAgentConversation,
+  saveAgentDraft,
+  saveAgentMessage,
+  saveAgentMessages,
+  saveAgentReference,
+  saveAgentUiState,
+  type AgentConversation,
+  type AgentDraft,
+  type AgentMessage,
+} from '@/lib/agent'
+import {
   collectReferencePreview,
   createReferenceSnapshot,
   createReferenceSnapshotFromBlockIndex,
   deriveConversationTitle,
-  isReferenceStale,
-  parseDocumentChatResponse,
   recalculateReferenceOffsets,
-  updateTrackedRangeForEdit,
-  type AiDocAction,
   type AiDocReferenceSnapshot,
   type AiDocTaskType,
-  type AiDocTextEdit,
-  type AiDocTrackedRange,
 } from '@/lib/ai-doc-chat'
-import {
-  deleteAiConversationCascade,
-  deleteAiReference,
-  getAiDraft,
-  getAiUiState,
-  listAiConversations,
-  listAiMessages,
-  listAiReferences,
-  saveAiConversation,
-  saveAiDraft,
-  saveAiMessage,
-  saveAiReference,
-  saveAiUiState,
-  type AiConversationRecord,
-  type AiDraftRecord,
-  type AiMessageRecord,
-  type AiReferenceRecord,
-} from '@/lib/ai-chat-storage'
+import { useAiDockStore } from './aiDockStore'
 import { useDocumentStore } from './documentStore'
+import { useFileSystemStore } from './fileSystemStore'
+import { useGitStore } from './gitStore'
+import { useHistoryStore } from './historyStore'
+import { useLanguageStore } from './languageStore'
 import { useSettingsStore } from './settingsStore'
 import { useTabsStore } from './tabsStore'
-import { createAIService } from '@/lib/ai-service'
-import { useGitStore } from './gitStore'
-import { useFileSystemStore } from './fileSystemStore'
-import { useHistoryStore } from './historyStore'
-import { useAiDockStore } from './aiDockStore'
-import { useLanguageStore } from './languageStore'
-
-interface PendingReplaceState {
-  messageId: string
-  action: Extract<AiDocAction, { action: 'replace' }>
-  referenceId: string | null
-  previewMarkdown: string
-}
 
 export type AiReplaceApplyMode = 'manual' | 'auto'
 
+export type AiReferenceRecord = AiDocReferenceSnapshot & {
+  id: string
+  conversationId: string
+  documentId: string | null
+  tabId: string | null
+  stale: boolean
+  createdAt: number
+}
+
+type UiConversationRecord = AgentConversation & {
+  documentId: string | null
+  tabId: string | null
+  sourceType: 'local' | 'git' | 'unknown'
+  taskType: AiDocTaskType
+  status: 'active'
+  providerId: string
+  model: string
+  lastMessageAt: number
+}
+
 interface AiChatStore {
-  conversations: AiConversationRecord[]
+  conversations: UiConversationRecord[]
   currentConversationId: string | null
-  messagesByConversation: Record<string, AiMessageRecord[]>
+  messagesByConversation: Record<string, AgentMessage[]>
+  visibleMessagesByConversation: Record<string, AgentMessage[]>
   referencesByConversation: Record<string, AiReferenceRecord[]>
-  draftsByConversation: Record<string, AiDraftRecord>
+  draftsByConversation: Record<string, AgentDraft>
   taskType: AiDocTaskType
   applyMode: AiReplaceApplyMode
   selectionCandidate: AiDocReferenceSnapshot | null
   draftInput: string
   selectedReferenceIds: string[]
   selectionHint: string | null
-  pendingReplace: PendingReplaceState | null
   isLoading: boolean
   isSending: boolean
   error: string | null
@@ -91,12 +98,8 @@ interface AiChatStore {
   clearSelectionCandidate: () => void
   removeReference: (referenceId: string) => Promise<void>
   sendMessage: () => Promise<void>
-  applyPendingReplace: () => Promise<boolean>
-  discardPendingReplace: () => void
   clearSelectionHint: () => void
   refreshReferenceStaleState: () => Promise<void>
-  getPendingTrackedRange: () => AiDocTrackedRange | null
-  validateEditForPendingReplace: (edit: AiDocTextEdit) => { allowed: boolean; reason?: string }
 }
 
 function getCurrentDocumentIdentity() {
@@ -106,6 +109,34 @@ function getCurrentDocumentIdentity() {
     documentId: activeTab?.fileId || null,
     sourceType: activeTab?.sourceType || 'unknown',
   } as const
+}
+
+function toUiConversation(conversation: AgentConversation): UiConversationRecord {
+  const settings = useSettingsStore.getState()
+  const providerConfig = settings.getActiveProviderConfig()
+  return {
+    ...conversation,
+    documentId: null,
+    tabId: null,
+    sourceType: 'unknown',
+    taskType: 'ask',
+    status: 'active',
+    providerId: providerConfig.id,
+    model: providerConfig.model,
+    lastMessageAt: conversation.updatedAt,
+  }
+}
+
+function isVisibleAssistantMessage(message: AgentMessage) {
+  return message.role === 'assistant' &&
+    !message.toolName &&
+    message.state === 'done' &&
+    Boolean(message.message.trim()) &&
+    !message.message.trim().startsWith('{')
+}
+
+function getVisibleMessages(messages: AgentMessage[]) {
+  return messages.filter(isVisibleAssistantMessage)
 }
 
 function buildDraftRecord(
@@ -125,11 +156,7 @@ function buildDraftRecord(
     providerId: providerConfig.id,
     model: providerConfig.model,
     updatedAt: Date.now(),
-  } satisfies AiDraftRecord
-}
-
-function normalizeApplyMode(value: string | null): AiReplaceApplyMode {
-  return value === 'auto' ? 'auto' : 'manual'
+  } satisfies AgentDraft
 }
 
 function getReferenceFingerprint(reference: Pick<AiDocReferenceSnapshot, 'anchorPath' | 'startBlockIndex' | 'blockCount' | 'expectedText'>) {
@@ -146,16 +173,6 @@ function hasDuplicateReference(reference: AiDocReferenceSnapshot, references: Ai
   return references.some((item) => getReferenceFingerprint(item) === fingerprint)
 }
 
-function syncCurrentDraft(store: Pick<AiChatStore, 'currentConversationId' | 'draftInput' | 'taskType' | 'selectedReferenceIds'>) {
-  if (!store.currentConversationId) return Promise.resolve()
-  return saveAiDraft(buildDraftRecord(store.currentConversationId, store.taskType, store.draftInput, store.selectedReferenceIds))
-}
-
-function updateOpenConversationUiState(conversationId: string | null) {
-  if (!conversationId) return Promise.resolve()
-  return saveAiUiState('last_open_conversation_id', conversationId)
-}
-
 function buildReferenceRecord(snapshot: AiDocReferenceSnapshot, conversationId: string): AiReferenceRecord {
   const identity = getCurrentDocumentIdentity()
   return {
@@ -167,40 +184,6 @@ function buildReferenceRecord(snapshot: AiDocReferenceSnapshot, conversationId: 
     stale: false,
     createdAt: Date.now(),
   }
-}
-
-function buildConversationRecord(title: string, taskType: AiDocTaskType): AiConversationRecord {
-  const identity = getCurrentDocumentIdentity()
-  const settings = useSettingsStore.getState()
-  const providerConfig = settings.getActiveProviderConfig()
-  const now = Date.now()
-
-  return {
-    id: nanoid(),
-    title,
-    documentId: identity.documentId,
-    tabId: identity.tabId,
-    sourceType: identity.sourceType === 'git' || identity.sourceType === 'local' ? identity.sourceType : 'unknown',
-    taskType,
-    status: 'active',
-    providerId: providerConfig.id,
-    model: providerConfig.model,
-    createdAt: now,
-    updatedAt: now,
-    lastMessageAt: now,
-    messageCount: 0,
-  }
-}
-
-function formatSelectionHint(snapshot: AiDocReferenceSnapshot) {
-  const language = useLanguageStore.getState().currentLanguage
-  const preview = collectReferencePreview(snapshot)
-  const targetLabel =
-    preview.titlePath[preview.titlePath.length - 1] ||
-    preview.excerpt.slice(0, 24) ||
-    (language === 'zh' ? '当前块' : 'Current block')
-
-  return language === 'zh' ? `已加入对话：${targetLabel}` : `Added to chat: ${targetLabel}`
 }
 
 function formatAddedSelectionHint(snapshot: AiDocReferenceSnapshot) {
@@ -233,10 +216,10 @@ function formatDuplicateHint() {
     : 'This block is already in the current chat'
 }
 
-function buildPrompt(args: {
+function buildUserAgentMessage(args: {
+  conversationId: string
   taskType: AiDocTaskType
   input: string
-  markdown: string
   references: AiReferenceRecord[]
 }) {
   const referenceText = args.references
@@ -245,65 +228,33 @@ function buildPrompt(args: {
         `Reference ${index + 1}`,
         `anchorPath: ${reference.anchorPath.join(' > ') || 'root'}`,
         `blockType: ${reference.blockType}`,
-        `blockCount: ${reference.blockCount}`,
-        'excerpt:',
-        reference.excerpt,
+        '<selected_text>',
+        reference.expectedText,
+        '</selected_text>',
       ].join('\n')
     })
     .join('\n\n')
 
-  return [
-    `Task type: ${args.taskType}`,
-    'User request:',
-    args.input,
-    '',
-    'Document excerpt references:',
-    referenceText || 'None',
-    '',
-    'Current markdown:',
-    args.markdown,
-  ].join('\n')
-}
-
-function buildSystemPrompt() {
-  return [
-    'You are an AI document editing assistant for Markdown.',
-    'Return JSON only.',
-    'Schema:',
-    '{"action":"answer|replace","answer?":"string","content?":"string"}',
-    'Rules:',
-    '- Use action="answer" for pure Q&A, explanation, analysis, review comments, or any request that should not modify the document.',
-    '- Use action="replace" only when the user clearly wants to modify the selected content.',
-    '- For action="replace", return the full replacement content for the selected target range.',
-    '- Do not return diff, patch metadata, line numbers, or offsets.',
-  ].join('\n')
-}
-
-function syncLockedReferenceState(
-  referencesByConversation: Record<string, AiReferenceRecord[]>,
-  conversationId: string,
-  lockedReferenceId: string | null
-) {
-  const currentReferences = referencesByConversation[conversationId] || []
-  const nextReferences = currentReferences.map((reference) => {
-    const nextLocked = lockedReferenceId ? reference.id === lockedReferenceId : false
-    if (reference.locked === nextLocked) {
-      return reference
-    }
-
-    return {
-      ...reference,
-      locked: nextLocked,
-    }
-  })
-
   return {
-    nextReferencesByConversation: {
-      ...referencesByConversation,
-      [conversationId]: nextReferences,
-    },
-    changedReferences: nextReferences.filter((reference, index) => reference !== currentReferences[index]),
-  }
+    id: nanoid(),
+    conversationId: args.conversationId,
+    role: 'user',
+    message: [
+      `Task type: ${args.taskType}`,
+      'User request:',
+      args.input,
+      '',
+      'Selected document text:',
+      referenceText || 'None',
+    ].join('\n'),
+    createdAt: Date.now(),
+    state: 'done',
+  } satisfies AgentMessage
+}
+
+async function syncCurrentDraft(store: Pick<AiChatStore, 'currentConversationId' | 'draftInput' | 'taskType' | 'selectedReferenceIds'>) {
+  if (!store.currentConversationId) return
+  await saveAgentDraft(buildDraftRecord(store.currentConversationId, store.taskType, store.draftInput, store.selectedReferenceIds))
 }
 
 async function syncMarkdownToActiveSource(nextMarkdown: string, nextFileName?: string) {
@@ -331,15 +282,15 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
   conversations: [],
   currentConversationId: null,
   messagesByConversation: {},
+  visibleMessagesByConversation: {},
   referencesByConversation: {},
   draftsByConversation: {},
   taskType: 'ask',
-  applyMode: 'manual',
+  applyMode: 'auto',
   selectionCandidate: null,
   draftInput: '',
   selectedReferenceIds: [],
   selectionHint: null,
-  pendingReplace: null,
   isLoading: false,
   isSending: false,
   error: null,
@@ -347,72 +298,67 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
   initialize: async () => {
     set({ isLoading: true, error: null })
     try {
-      const [conversations, lastOpenConversationId] = await Promise.all([
-        listAiConversations(),
-        getAiUiState('last_open_conversation_id'),
+      const [agentConversations, lastOpenConversationId, applyModeValue] = await Promise.all([
+        listAgentConversations(),
+        getAgentUiState('last_open_conversation_id'),
+        getAgentUiState('replace_apply_mode'),
       ])
-      const applyMode = normalizeApplyMode(await getAiUiState('replace_apply_mode'))
-
+      const conversations = agentConversations.map(toUiConversation)
       const currentConversationId =
-        lastOpenConversationId === ''
-          ? null
-          : lastOpenConversationId && conversations.some((item) => item.id === lastOpenConversationId)
-            ? lastOpenConversationId
-            : null
+        lastOpenConversationId && conversations.some((item) => item.id === lastOpenConversationId)
+          ? lastOpenConversationId
+          : conversations[0]?.id || null
 
-      const messagesByConversation: Record<string, AiMessageRecord[]> = {}
+      const messagesByConversation: Record<string, AgentMessage[]> = {}
+      const visibleMessagesByConversation: Record<string, AgentMessage[]> = {}
       const referencesByConversation: Record<string, AiReferenceRecord[]> = {}
-      const draftsByConversation: Record<string, AiDraftRecord> = {}
-
+      const draftsByConversation: Record<string, AgentDraft> = {}
       if (currentConversationId) {
-        messagesByConversation[currentConversationId] = await listAiMessages(currentConversationId)
-        referencesByConversation[currentConversationId] = await listAiReferences(currentConversationId)
-        const draft = await getAiDraft(currentConversationId)
+        const messages = await listAgentMessages(currentConversationId)
+        messagesByConversation[currentConversationId] = messages
+        visibleMessagesByConversation[currentConversationId] = getVisibleMessages(messages)
+        referencesByConversation[currentConversationId] = (await listAgentReferences(currentConversationId)) as AiReferenceRecord[]
+        const draft = await getAgentDraft(currentConversationId)
         if (draft) {
           draftsByConversation[currentConversationId] = draft
         }
       }
 
       const currentDraft = currentConversationId ? draftsByConversation[currentConversationId] : undefined
-
       set({
         conversations,
         currentConversationId,
         messagesByConversation,
-        referencesByConversation,
+        visibleMessagesByConversation,
         draftsByConversation,
-        taskType: currentDraft?.taskType || 'ask',
-        applyMode,
-        selectionCandidate: null,
+        referencesByConversation,
+        taskType: (currentDraft?.taskType as AiDocTaskType) || 'ask',
+        applyMode: applyModeValue === 'manual' ? 'manual' : 'auto',
         draftInput: currentDraft?.inputText || '',
         selectedReferenceIds: currentDraft?.selectedReferenceIds || [],
-        selectionHint: null,
         isLoading: false,
       })
     } catch (error) {
       set({
         isLoading: false,
-        error: error instanceof Error ? error.message : 'Failed to initialize AI chat',
+        error: error instanceof Error ? error.message : 'Failed to initialize AI agent',
       })
     }
   },
 
   openConversation: async (conversationId) => {
-    const existingMessages = get().messagesByConversation[conversationId]
-    const existingReferences = get().referencesByConversation[conversationId]
-    const existingDraft = get().draftsByConversation[conversationId]
-
-    const [messages, references, draft] = await Promise.all([
-      existingMessages ? Promise.resolve(existingMessages) : listAiMessages(conversationId),
-      existingReferences ? Promise.resolve(existingReferences) : listAiReferences(conversationId),
-      existingDraft ? Promise.resolve(existingDraft) : getAiDraft(conversationId),
-    ])
-
+    const messages = await listAgentMessages(conversationId)
+    const references = (await listAgentReferences(conversationId)) as AiReferenceRecord[]
+    const draft = await getAgentDraft(conversationId)
     set((state) => ({
       currentConversationId: conversationId,
       messagesByConversation: {
         ...state.messagesByConversation,
         [conversationId]: messages,
+      },
+      visibleMessagesByConversation: {
+        ...state.visibleMessagesByConversation,
+        [conversationId]: getVisibleMessages(messages),
       },
       referencesByConversation: {
         ...state.referencesByConversation,
@@ -424,80 +370,75 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
             [conversationId]: draft,
           }
         : state.draftsByConversation,
-      taskType: draft?.taskType || 'ask',
       draftInput: draft?.inputText || '',
-      selectedReferenceIds: draft?.selectedReferenceIds || references.map((reference) => reference.id),
+      selectedReferenceIds: draft?.selectedReferenceIds || [],
+      taskType: (draft?.taskType as AiDocTaskType) || 'ask',
       selectionCandidate: null,
-      pendingReplace: null,
       error: null,
     }))
-
-    await updateOpenConversationUiState(conversationId)
+    await saveAgentUiState('last_open_conversation_id', conversationId)
   },
 
   leaveConversation: async () => {
-    set({
-      currentConversationId: null,
-      selectionCandidate: null,
-      pendingReplace: null,
-    })
-    await saveAiUiState('last_open_conversation_id', '')
+    set({ currentConversationId: null, selectionCandidate: null })
+    await saveAgentUiState('last_open_conversation_id', '')
   },
 
   createConversation: async () => {
+    const id = createAgentConversationId()
     const title = deriveConversationTitle(get().draftInput, 'New chat')
-    const conversation = buildConversationRecord(title, get().taskType)
+    const now = Date.now()
+    const conversation: AgentConversation = {
+      id,
+      title,
+      createdAt: now,
+      updatedAt: now,
+      messageCount: 0,
+    }
+    const draft = buildDraftRecord(id, get().taskType, get().draftInput, [])
 
-    await saveAiConversation(conversation)
-    const draft = buildDraftRecord(conversation.id, get().taskType, get().draftInput, [])
-    await saveAiDraft(draft)
+    await Promise.all([
+      saveAgentConversation(conversation),
+      saveAgentDraft(draft),
+      saveAgentUiState('last_open_conversation_id', id),
+    ])
 
     set((state) => ({
-      conversations: [conversation, ...state.conversations],
-      currentConversationId: conversation.id,
-      messagesByConversation: {
-        ...state.messagesByConversation,
-        [conversation.id]: [],
-      },
-      referencesByConversation: {
-        ...state.referencesByConversation,
-        [conversation.id]: [],
-      },
-      draftsByConversation: {
-        ...state.draftsByConversation,
-        [conversation.id]: draft,
-      },
+      conversations: [toUiConversation(conversation), ...state.conversations],
+      currentConversationId: id,
+      messagesByConversation: { ...state.messagesByConversation, [id]: [] },
+      visibleMessagesByConversation: { ...state.visibleMessagesByConversation, [id]: [] },
+      referencesByConversation: { ...state.referencesByConversation, [id]: [] },
+      draftsByConversation: { ...state.draftsByConversation, [id]: draft },
       selectedReferenceIds: [],
       selectionCandidate: null,
     }))
 
-    await updateOpenConversationUiState(conversation.id)
-    return conversation.id
+    return id
   },
 
   removeConversation: async (conversationId) => {
-    await deleteAiConversationCascade(conversationId)
+    await deleteAgentConversation(conversationId)
     set((state) => {
       const nextMessages = { ...state.messagesByConversation }
       delete nextMessages[conversationId]
+      const nextVisibleMessages = { ...state.visibleMessagesByConversation }
+      delete nextVisibleMessages[conversationId]
       const nextReferences = { ...state.referencesByConversation }
       delete nextReferences[conversationId]
       const nextDrafts = { ...state.draftsByConversation }
       delete nextDrafts[conversationId]
-      const nextConversations = state.conversations.filter((item) => item.id !== conversationId)
-      const nextCurrentConversationId =
-        state.currentConversationId === conversationId ? nextConversations[0]?.id || null : state.currentConversationId
-
+      const conversations = state.conversations.filter((item) => item.id !== conversationId)
+      const currentConversationId = state.currentConversationId === conversationId ? conversations[0]?.id || null : state.currentConversationId
       return {
-        conversations: nextConversations,
-        currentConversationId: nextCurrentConversationId,
+        conversations,
+        currentConversationId,
         messagesByConversation: nextMessages,
+        visibleMessagesByConversation: nextVisibleMessages,
         referencesByConversation: nextReferences,
         draftsByConversation: nextDrafts,
-        draftInput: nextCurrentConversationId ? nextDrafts[nextCurrentConversationId]?.inputText || '' : '',
-        selectedReferenceIds: nextCurrentConversationId ? nextDrafts[nextCurrentConversationId]?.selectedReferenceIds || [] : [],
-        selectionCandidate: null,
-        pendingReplace: null,
+        draftInput: currentConversationId ? nextDrafts[currentConversationId]?.inputText || '' : '',
+        selectedReferenceIds: currentConversationId ? nextDrafts[currentConversationId]?.selectedReferenceIds || [] : [],
       }
     })
   },
@@ -514,7 +455,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
 
   setApplyMode: async (applyMode) => {
     set({ applyMode })
-    await saveAiUiState('replace_apply_mode', applyMode)
+    await saveAgentUiState('replace_apply_mode', applyMode)
   },
 
   addEditorSelectionReference: async (selectionStart, selectionEnd, markdownOverride, versionOverride) => {
@@ -568,58 +509,29 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
           })
     if (!snapshot) return
 
-    set((state) => {
-      const currentConversationId = state.currentConversationId
-      const currentReferences = currentConversationId ? state.referencesByConversation[currentConversationId] || [] : []
-      const currentFingerprint = state.selectionCandidate ? getReferenceFingerprint(state.selectionCandidate) : null
-      const nextFingerprint = getReferenceFingerprint(snapshot)
-
-      if (currentFingerprint === nextFingerprint || hasDuplicateReference(snapshot, currentReferences)) {
-        return {
-          selectionCandidate: snapshot,
-          selectionHint: hasDuplicateReference(snapshot, currentReferences)
-            ? formatDuplicateHint()
-            : formatCandidateHint(snapshot),
-        }
-      }
-
-      return {
-        selectionCandidate: snapshot,
-        selectionHint: formatCandidateHint(snapshot),
-      }
-    })
+    set({ selectionCandidate: snapshot, selectionHint: formatCandidateHint(snapshot) })
   },
 
   commitSelectionCandidate: async () => {
     const snapshot = get().selectionCandidate
-    if (!snapshot) {
-      return false
-    }
+    if (!snapshot) return false
 
     const conversationId = get().currentConversationId || (await get().createConversation())
-    if (!conversationId) {
-      return false
-    }
+    if (!conversationId) return false
 
     const currentReferences = get().referencesByConversation[conversationId] || []
     if (hasDuplicateReference(snapshot, currentReferences)) {
-      set({
-        currentConversationId: conversationId,
-        selectionCandidate: null,
-        selectionHint: formatDuplicateHint(),
-      })
+      set({ selectionCandidate: null, selectionHint: formatDuplicateHint() })
       useAiDockStore.getState().open()
       return false
     }
 
     const record = buildReferenceRecord(snapshot, conversationId)
-    await saveAiReference(record)
-
+    await saveAgentReference(record)
     set((state) => {
       const references = [...(state.referencesByConversation[conversationId] || []), record]
       const selectedReferenceIds = Array.from(new Set([...state.selectedReferenceIds, record.id]))
       return {
-        currentConversationId: conversationId,
         referencesByConversation: {
           ...state.referencesByConversation,
           [conversationId]: references,
@@ -642,9 +554,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
   removeReference: async (referenceId) => {
     const { currentConversationId } = get()
     if (!currentConversationId) return
-
-    await deleteAiReference(referenceId)
-
+    await deleteAgentReference(referenceId)
     set((state) => ({
       referencesByConversation: {
         ...state.referencesByConversation,
@@ -652,7 +562,6 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       },
       selectedReferenceIds: state.selectedReferenceIds.filter((id) => id !== referenceId),
     }))
-
     await syncCurrentDraft(get())
   },
 
@@ -670,7 +579,6 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
     const settings = useSettingsStore.getState()
     const providerConfig = settings.getActiveProviderConfig()
     const apiKey = settings.getActiveProviderApiKey()
-
     if (!apiKey || !providerConfig.baseUrl || !providerConfig.model) {
       set({ error: 'AI provider is not configured' })
       return
@@ -679,264 +587,118 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
     const conversationId = get().currentConversationId || (await get().createConversation())
     if (!conversationId) return
 
-    const unlockedBeforeSend = syncLockedReferenceState(get().referencesByConversation, conversationId, null)
-    if (unlockedBeforeSend.changedReferences.length > 0) {
-      await Promise.all(unlockedBeforeSend.changedReferences.map((reference) => saveAiReference(reference)))
-      set({
-        referencesByConversation: unlockedBeforeSend.nextReferencesByConversation,
-        pendingReplace: null,
-      })
-    }
-
     const references = (get().referencesByConversation[conversationId] || []).filter((reference) =>
       get().selectedReferenceIds.includes(reference.id)
     )
-
-    const userMessage: AiMessageRecord = {
-      id: nanoid(),
+    const userMessage = buildUserAgentMessage({
       conversationId,
-      role: 'user',
-      content: input,
-      createdAt: Date.now(),
-      state: 'done',
-      action: null,
-      referenceIds: references.map((reference) => reference.id),
-    }
-
-    const assistantMessage: AiMessageRecord = {
-      id: nanoid(),
-      conversationId,
-      role: 'assistant',
-      content: '',
-      createdAt: Date.now() + 1,
-      state: 'pending',
-      action: null,
-      referenceIds: references.map((reference) => reference.id),
-    }
-
-    const nextConversation = {
-      ...(get().conversations.find((item) => item.id === conversationId) || buildConversationRecord(deriveConversationTitle(input), get().taskType)),
-      id: conversationId,
-      title: deriveConversationTitle(input),
-      updatedAt: Date.now(),
-      lastMessageAt: Date.now(),
-      messageCount: (get().messagesByConversation[conversationId] || []).length + 2,
       taskType: get().taskType,
-    } satisfies AiConversationRecord
+      input,
+      references,
+    })
 
-    await Promise.all([
-      saveAiMessage(userMessage),
-      saveAiMessage(assistantMessage),
-      saveAiConversation(nextConversation),
-    ])
+    const existingMessages = get().messagesByConversation[conversationId] || []
+    const messages = [...existingMessages, userMessage]
+
+    await saveAgentMessage(userMessage)
+    await saveAgentDraft(buildDraftRecord(conversationId, get().taskType, '', get().selectedReferenceIds))
 
     set((state) => ({
-      conversations: [nextConversation, ...state.conversations.filter((item) => item.id !== conversationId)],
-      currentConversationId: conversationId,
-      messagesByConversation: {
-        ...state.messagesByConversation,
-        [conversationId]: [...(state.messagesByConversation[conversationId] || []), userMessage, assistantMessage],
-      },
+      draftInput: '',
       isSending: true,
       error: null,
-      pendingReplace: null,
+      messagesByConversation: {
+        ...state.messagesByConversation,
+        [conversationId]: messages,
+      },
+      visibleMessagesByConversation: {
+        ...state.visibleMessagesByConversation,
+        [conversationId]: getVisibleMessages(messages),
+      },
     }))
 
-    await saveAiDraft(buildDraftRecord(conversationId, get().taskType, '', get().selectedReferenceIds))
-    set({ draftInput: '' })
-
     try {
-      const service = createAIService({
-        ...providerConfig,
+      const result = await runAgentReActLoop({
+        providerConfig: {
+          ...providerConfig,
+          apiKey,
+        },
         apiKey,
+        messages,
+        tools: createDefaultAgentTools(),
+        markdown: documentStore.getCurrentMarkdown(),
+        maxTurns: 5,
       })
 
-      const response = await service.chatDocument({
-        prompt: buildPrompt({
-          taskType: get().taskType,
-          input,
-          markdown: documentStore.getCurrentMarkdown(),
-          references,
-        }),
-        systemPrompt: buildSystemPrompt(),
-      })
+      const newMessages = result.messages.slice(messages.length)
+      await saveAgentMessages(newMessages)
 
-      const parsed = parseDocumentChatResponse(response)
-      const appliedReference = references[0] || null
-      let previewMarkdown = documentStore.getCurrentMarkdown()
-
-      if (appliedReference && parsed.action.action === 'replace' && !isReferenceStale(appliedReference, previewMarkdown, document.version)) {
-        previewMarkdown = applyDocumentChatAction(previewMarkdown, appliedReference, parsed.action, document.version)
+      if (result.appliedMarkdown !== documentStore.getCurrentMarkdown()) {
+        useHistoryStore.getState().addHistory({
+          type: 'batch',
+          description: 'AI agent apply_tool',
+        })
+        documentStore.applyExternalMarkdown(result.appliedMarkdown)
+        const nextDocument = useDocumentStore.getState().document
+        await syncMarkdownToActiveSource(result.appliedMarkdown, nextDocument?.fileName)
       }
 
-      const finalAssistantMessage: AiMessageRecord = {
-        ...assistantMessage,
-        content: parsed.action.action === 'answer' ? parsed.action.answer || '' : parsed.action.content || '',
-        state: 'done',
-        action: parsed.action,
-      }
-
-      await saveAiMessage(finalAssistantMessage)
-
-      let nextReferencesByConversation = get().referencesByConversation
-      if (parsed.action.action === 'replace' && appliedReference) {
-        const lockedState = syncLockedReferenceState(nextReferencesByConversation, conversationId, appliedReference.id)
-        nextReferencesByConversation = lockedState.nextReferencesByConversation
-        if (lockedState.changedReferences.length > 0) {
-          await Promise.all(lockedState.changedReferences.map((reference) => saveAiReference(reference)))
+      const now = Date.now()
+      const conversation = get().conversations.find((item) => item.id === conversationId)
+      if (conversation) {
+        const nextConversation: AgentConversation = {
+          id: conversation.id,
+          title: deriveConversationTitle(input, conversation.title),
+          createdAt: conversation.createdAt,
+          updatedAt: now,
+          messageCount: result.messages.length,
         }
+        await saveAgentConversation(nextConversation)
+        set((state) => ({
+          conversations: [toUiConversation(nextConversation), ...state.conversations.filter((item) => item.id !== conversationId)],
+        }))
       }
 
       set((state) => ({
         isSending: false,
-        referencesByConversation: nextReferencesByConversation,
         messagesByConversation: {
           ...state.messagesByConversation,
-          [conversationId]: (state.messagesByConversation[conversationId] || []).map((message) =>
-            message.id === assistantMessage.id ? finalAssistantMessage : message
-          ),
+          [conversationId]: result.messages,
         },
-        pendingReplace:
-          parsed.action.action === 'replace' && appliedReference
-            ? {
-                messageId: finalAssistantMessage.id,
-                action: parsed.action,
-                referenceId: appliedReference.id,
-                previewMarkdown,
-              }
-            : null,
+        visibleMessagesByConversation: {
+          ...state.visibleMessagesByConversation,
+          [conversationId]: getVisibleMessages(result.messages),
+        },
       }))
-
-      if (parsed.action.action === 'replace' && appliedReference && get().applyMode === 'auto') {
-        await get().applyPendingReplace()
-      }
     } catch (error) {
-      const failedAssistantMessage: AiMessageRecord = {
-        ...assistantMessage,
+      const failedMessage: AgentMessage = {
+        id: nanoid(),
+        conversationId,
+        role: 'assistant',
+        message: '',
+        createdAt: Date.now(),
         state: 'failed',
         error: error instanceof Error ? error.message : 'AI request failed',
       }
-
-      await saveAiMessage(failedAssistantMessage)
-
+      await saveAgentMessage(failedMessage)
+      const nextMessages = [...messages, failedMessage]
       set((state) => ({
         isSending: false,
-        error: failedAssistantMessage.error || 'AI request failed',
+        error: failedMessage.error || 'AI request failed',
         messagesByConversation: {
           ...state.messagesByConversation,
-          [conversationId]: (state.messagesByConversation[conversationId] || []).map((message) =>
-            message.id === assistantMessage.id ? failedAssistantMessage : message
-          ),
+          [conversationId]: nextMessages,
+        },
+        visibleMessagesByConversation: {
+          ...state.visibleMessagesByConversation,
+          [conversationId]: getVisibleMessages(nextMessages),
         },
       }))
     }
-  },
-
-  applyPendingReplace: async () => {
-    const pendingReplace = get().pendingReplace
-    const conversationId = get().currentConversationId
-    const documentStore = useDocumentStore.getState()
-    const document = documentStore.document
-    if (!pendingReplace || !conversationId || !document) {
-      return false
-    }
-
-    const reference = (get().referencesByConversation[conversationId] || []).find((item) => item.id === pendingReplace.referenceId)
-    if (!reference) {
-      set({ error: 'Reference not found for apply' })
-      return false
-    }
-
-    const latestMarkdown = documentStore.getCurrentMarkdown()
-    const latestVersion = document.version
-    if (isReferenceStale(reference, latestMarkdown, latestVersion)) {
-      set({ error: 'Reference is stale and cannot be applied' })
-      return false
-    }
-
-    const nextMarkdown = applyDocumentChatAction(latestMarkdown, reference, pendingReplace.action, latestVersion)
-    if (nextMarkdown === latestMarkdown) {
-      set({ error: 'Replace action could not be applied' })
-      return false
-    }
-
-    useHistoryStore.getState().addHistory({
-      type: 'batch',
-      description: 'AI replace apply',
-    })
-    documentStore.applyExternalMarkdown(nextMarkdown)
-
-    const nextDocument = useDocumentStore.getState().document
-    await syncMarkdownToActiveSource(nextMarkdown, nextDocument?.fileName)
-
-    const unlockedAfterApply = syncLockedReferenceState(get().referencesByConversation, conversationId, null)
-    if (unlockedAfterApply.changedReferences.length > 0) {
-      await Promise.all(unlockedAfterApply.changedReferences.map((item) => saveAiReference(item)))
-    }
-
-    set({
-      pendingReplace: null,
-      error: null,
-      referencesByConversation: unlockedAfterApply.nextReferencesByConversation,
-    })
-    await get().refreshReferenceStaleState()
-    return true
-  },
-
-  discardPendingReplace: () => {
-    const conversationId = get().currentConversationId
-    if (!conversationId) {
-      set({ pendingReplace: null })
-      return
-    }
-
-    const unlocked = syncLockedReferenceState(get().referencesByConversation, conversationId, null)
-    void Promise.all(unlocked.changedReferences.map((reference) => saveAiReference(reference)))
-
-    set({
-      pendingReplace: null,
-      referencesByConversation: unlocked.nextReferencesByConversation,
-    })
   },
 
   clearSelectionHint: () => {
     set({ selectionHint: null })
-  },
-
-  getPendingTrackedRange: () => {
-    const pendingReplace = get().pendingReplace
-    const conversationId = get().currentConversationId
-    if (!pendingReplace || !conversationId || !pendingReplace.referenceId) {
-      return null
-    }
-
-    const reference = (get().referencesByConversation[conversationId] || []).find(
-      (item) => item.id === pendingReplace.referenceId
-    )
-    if (!reference || reference.stale) {
-      return null
-    }
-
-    return buildTrackedRangeFromReference(reference)
-  },
-
-  validateEditForPendingReplace: (edit) => {
-    const trackedRange = get().getPendingTrackedRange()
-    if (!trackedRange) {
-      return { allowed: true }
-    }
-
-    const nextRange = updateTrackedRangeForEdit(trackedRange, edit)
-    if (nextRange.blocked) {
-      return {
-        allowed: false,
-        reason: useLanguageStore.getState().currentLanguage === 'zh'
-          ? 'AI 待应用区块已锁定，请先应用或取消本次替换。'
-          : 'The pending AI replace target is locked. Apply or discard it first.',
-      }
-    }
-
-    return { allowed: true }
   },
 
   refreshReferenceStaleState: async () => {
@@ -947,40 +709,19 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
     const markdown = documentStore.getCurrentMarkdown()
     const version = document.version
 
-    const updates: Array<Promise<unknown>> = []
-
     set((state) => {
       const nextReferencesByConversation = { ...state.referencesByConversation }
-
       Object.entries(nextReferencesByConversation).forEach(([conversationId, references]) => {
         nextReferencesByConversation[conversationId] = references.map((reference) => {
           const refreshedReference = recalculateReferenceOffsets(reference, markdown, version)
-          const stale = refreshedReference ? false : true
-          const nextReference: AiReferenceRecord = {
+          return {
             ...reference,
             ...(refreshedReference || {}),
-            stale,
+            stale: !refreshedReference,
           }
-          const changed =
-            stale !== reference.stale ||
-            nextReference.startOffset !== reference.startOffset ||
-            nextReference.endOffset !== reference.endOffset ||
-            nextReference.expectedText !== reference.expectedText ||
-            nextReference.version !== reference.version
-
-          if (changed) {
-            updates.push(saveAiReference(nextReference))
-          }
-
-          return nextReference
         })
       })
-
-      return {
-        referencesByConversation: nextReferencesByConversation,
-      }
+      return { referencesByConversation: nextReferencesByConversation }
     })
-
-    await Promise.all(updates)
   },
 }))
