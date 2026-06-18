@@ -19,6 +19,7 @@ import {
   saveAgentMessages,
   saveAgentReference,
   saveAgentUiState,
+  splitAssistantThinking,
   type AgentConversation,
   type AgentDraft,
   type AgentMessage,
@@ -41,8 +42,6 @@ import { useLanguageStore } from './languageStore'
 import { useSettingsStore } from './settingsStore'
 import { useTabsStore } from './tabsStore'
 
-export type AiReplaceApplyMode = 'manual' | 'auto'
-
 export type AiReferenceRecord = AiDocReferenceSnapshot & {
   id: string
   conversationId: string
@@ -63,19 +62,33 @@ type UiConversationRecord = AgentConversation & {
   lastMessageAt: number
 }
 
+type VisibleAgentMessage = AgentMessage & {
+  displayMessage?: string
+  thinking?: string
+  action?: {
+    type: 'tool_apply'
+    status: 'pending' | 'confirmed' | 'undone'
+    previousMarkdown: string
+    appliedMarkdown: string
+  }
+}
+
 interface AiChatStore {
   conversations: UiConversationRecord[]
   currentConversationId: string | null
   messagesByConversation: Record<string, AgentMessage[]>
-  visibleMessagesByConversation: Record<string, AgentMessage[]>
+  visibleMessagesByConversation: Record<string, VisibleAgentMessage[]>
   referencesByConversation: Record<string, AiReferenceRecord[]>
   draftsByConversation: Record<string, AgentDraft>
   taskType: AiDocTaskType
-  applyMode: AiReplaceApplyMode
   selectionCandidate: AiDocReferenceSnapshot | null
   draftInput: string
   selectedReferenceIds: string[]
   selectionHint: string | null
+  sendingStatus: string | null
+  chatTemperature: number
+  chatMaxTokens: number
+  chatHistoryRounds: number
   isLoading: boolean
   isSending: boolean
   error: string | null
@@ -84,9 +97,9 @@ interface AiChatStore {
   leaveConversation: () => Promise<void>
   createConversation: () => Promise<string | null>
   removeConversation: (conversationId: string) => Promise<void>
+  renameConversation: (conversationId: string, title: string) => Promise<void>
   setDraftInput: (value: string) => Promise<void>
   setTaskType: (taskType: AiDocTaskType) => Promise<void>
-  setApplyMode: (mode: AiReplaceApplyMode) => Promise<void>
   addEditorSelectionReference: (
     selectionStart: number,
     selectionEnd: number,
@@ -98,9 +111,17 @@ interface AiChatStore {
   clearSelectionCandidate: () => void
   removeReference: (referenceId: string) => Promise<void>
   sendMessage: () => Promise<void>
+  stopSending: () => void
+  setChatTemperature: (value: number) => Promise<void>
+  setChatMaxTokens: (value: number) => Promise<void>
+  setChatHistoryRounds: (value: number) => Promise<void>
+  confirmToolApply: (messageId: string) => Promise<void>
+  undoToolApply: (messageId: string) => Promise<boolean>
   clearSelectionHint: () => void
   refreshReferenceStaleState: () => Promise<void>
 }
+
+let activeAbortController: AbortController | null = null
 
 function getCurrentDocumentIdentity() {
   const activeTab = useTabsStore.getState().getActiveTab()
@@ -127,16 +148,88 @@ function toUiConversation(conversation: AgentConversation): UiConversationRecord
   }
 }
 
-function isVisibleAssistantMessage(message: AgentMessage) {
-  return message.role === 'assistant' &&
-    !message.toolName &&
-    message.state === 'done' &&
-    Boolean(message.message.trim()) &&
-    !message.message.trim().startsWith('{')
+function getDisplayMessage(message: AgentMessage) {
+  const visibleMessage = message as VisibleAgentMessage
+  if (typeof visibleMessage.displayMessage === 'string') {
+    return visibleMessage.displayMessage
+  }
+
+  if (message.role === 'user') {
+    const match = message.message.match(/User request:\n([\s\S]*?)\n\nSelected document text:/)
+    return match?.[1]?.trim() || message.message
+  }
+
+  return message.message
 }
 
-function getVisibleMessages(messages: AgentMessage[]) {
-  return messages.filter(isVisibleAssistantMessage)
+function isVisibleMessage(message: AgentMessage) {
+  if (message.role === 'user') {
+    return Boolean(getDisplayMessage(message).trim())
+  }
+
+  return message.role === 'assistant' &&
+    !message.toolName &&
+    (message.state === 'done' || message.state === 'pending') &&
+    (message.state === 'pending' || Boolean(getDisplayMessage(message).trim())) &&
+    !getDisplayMessage(message).trim().startsWith('{')
+}
+
+function getVisibleMessages(messages: AgentMessage[]): VisibleAgentMessage[] {
+  return messages.filter(isVisibleMessage).map((message) => ({
+    ...message,
+    displayMessage: splitAssistantThinking(getDisplayMessage(message)).text || getDisplayMessage(message),
+    thinking: message.role === 'assistant' ? splitAssistantThinking(getDisplayMessage(message)).thinking : undefined,
+  }))
+}
+
+function createToolApplyVisibleMessage(args: {
+  conversationId: string
+  toolCallId: string
+  previousMarkdown: string
+  appliedMarkdown: string
+}) {
+  return {
+    id: `tool-apply-${args.toolCallId}`,
+    conversationId: args.conversationId,
+    role: 'assistant',
+    message: '工具已应用到文档',
+    displayMessage: '工具已应用到文档',
+    createdAt: Date.now(),
+    state: 'done',
+    action: {
+      type: 'tool_apply',
+      status: 'pending',
+      previousMarkdown: args.previousMarkdown,
+      appliedMarkdown: args.appliedMarkdown,
+    },
+  } satisfies VisibleAgentMessage
+}
+
+function formatAgentError(error: unknown) {
+  const message = error instanceof Error ? error.message : 'AI request failed'
+  const lower = message.toLowerCase()
+
+  if (lower.includes('429') || lower.includes('rate limit') || lower.includes('too many requests')) {
+    return '请求被限流，请稍后重试。'
+  }
+
+  if (lower.includes('503')) {
+    return 'AI 服务暂时不可用（503），请稍后重试。'
+  }
+
+  if (lower.includes('500')) {
+    return 'AI 服务内部错误（500），请稍后重试。'
+  }
+
+  if (lower.includes('network') || lower.includes('failed to fetch') || lower.includes('terminated') || lower.includes('aborted')) {
+    return '连接中断，请检查网络或稍后重试。'
+  }
+
+  if (lower.includes('api返回内容为空') || lower.includes('empty')) {
+    return 'AI 返回内容为空，请重试。'
+  }
+
+  return message
 }
 
 function buildDraftRecord(
@@ -206,8 +299,8 @@ function formatCandidateHint(snapshot: AiDocReferenceSnapshot) {
     'Current block'
 
   return language === 'zh'
-    ? `已选择段落：${targetLabel}，点击加入对话或按 Ctrl+K`
-    : `Selected block: ${targetLabel}. Add to chat or press Ctrl+K`
+    ? `已选择段落：${targetLabel}，点击加入对话或按 Ctrl+L`
+    : `Selected block: ${targetLabel}. Add to chat or press Ctrl+L`
 }
 
 function formatDuplicateHint() {
@@ -286,11 +379,14 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
   referencesByConversation: {},
   draftsByConversation: {},
   taskType: 'ask',
-  applyMode: 'auto',
   selectionCandidate: null,
   draftInput: '',
   selectedReferenceIds: [],
   selectionHint: null,
+  sendingStatus: null,
+  chatTemperature: 0.7,
+  chatMaxTokens: 4096,
+  chatHistoryRounds: 10,
   isLoading: false,
   isSending: false,
   error: null,
@@ -298,10 +394,12 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
   initialize: async () => {
     set({ isLoading: true, error: null })
     try {
-      const [agentConversations, lastOpenConversationId, applyModeValue] = await Promise.all([
+      const [agentConversations, lastOpenConversationId, chatTemperature, chatMaxTokens, chatHistoryRounds] = await Promise.all([
         listAgentConversations(),
         getAgentUiState('last_open_conversation_id'),
-        getAgentUiState('replace_apply_mode'),
+        getAgentUiState('chat_temperature'),
+        getAgentUiState('chat_max_tokens'),
+        getAgentUiState('chat_history_rounds'),
       ])
       const conversations = agentConversations.map(toUiConversation)
       const currentConversationId =
@@ -310,7 +408,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
           : conversations[0]?.id || null
 
       const messagesByConversation: Record<string, AgentMessage[]> = {}
-      const visibleMessagesByConversation: Record<string, AgentMessage[]> = {}
+      const visibleMessagesByConversation: Record<string, VisibleAgentMessage[]> = {}
       const referencesByConversation: Record<string, AiReferenceRecord[]> = {}
       const draftsByConversation: Record<string, AgentDraft> = {}
       if (currentConversationId) {
@@ -333,9 +431,11 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         draftsByConversation,
         referencesByConversation,
         taskType: (currentDraft?.taskType as AiDocTaskType) || 'ask',
-        applyMode: applyModeValue === 'manual' ? 'manual' : 'auto',
         draftInput: currentDraft?.inputText || '',
         selectedReferenceIds: currentDraft?.selectedReferenceIds || [],
+        chatTemperature: chatTemperature ? Number(chatTemperature) : 0.7,
+        chatMaxTokens: chatMaxTokens ? Number(chatMaxTokens) : 4096,
+        chatHistoryRounds: chatHistoryRounds ? Number(chatHistoryRounds) : 10,
         isLoading: false,
       })
     } catch (error) {
@@ -443,6 +543,28 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
     })
   },
 
+  renameConversation: async (conversationId, title) => {
+    const nextTitle = title.trim()
+    if (!nextTitle) return
+
+    const current = get().conversations.find((conversation) => conversation.id === conversationId)
+    if (!current) return
+
+    const nextConversation: AgentConversation = {
+      id: current.id,
+      title: nextTitle,
+      createdAt: current.createdAt,
+      updatedAt: Date.now(),
+      messageCount: current.messageCount,
+    }
+    await saveAgentConversation(nextConversation)
+    set((state) => ({
+      conversations: state.conversations.map((conversation) =>
+        conversation.id === conversationId ? toUiConversation(nextConversation) : conversation
+      ),
+    }))
+  },
+
   setDraftInput: async (value) => {
     set({ draftInput: value })
     await syncCurrentDraft(get())
@@ -453,9 +575,22 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
     await syncCurrentDraft(get())
   },
 
-  setApplyMode: async (applyMode) => {
-    set({ applyMode })
-    await saveAgentUiState('replace_apply_mode', applyMode)
+  setChatTemperature: async (value) => {
+    const nextValue = Math.max(0, Math.min(2, value))
+    set({ chatTemperature: nextValue })
+    await saveAgentUiState('chat_temperature', String(nextValue))
+  },
+
+  setChatMaxTokens: async (value) => {
+    const nextValue = Math.max(256, Math.min(200000, Math.round(value)))
+    set({ chatMaxTokens: nextValue })
+    await saveAgentUiState('chat_max_tokens', String(nextValue))
+  },
+
+  setChatHistoryRounds: async (value) => {
+    const nextValue = Math.max(1, Math.min(100, Math.round(value)))
+    set({ chatHistoryRounds: nextValue })
+    await saveAgentUiState('chat_history_rounds', String(nextValue))
   },
 
   addEditorSelectionReference: async (selectionStart, selectionEnd, markdownOverride, versionOverride) => {
@@ -598,7 +733,24 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
     })
 
     const existingMessages = get().messagesByConversation[conversationId] || []
+    const userMessageIds = existingMessages
+      .filter((message) => message.role === 'user')
+      .slice(-Math.max(0, get().chatHistoryRounds - 1))
+      .map((message) => message.id)
+    const firstKeptUserIndex = existingMessages.findIndex((message) => userMessageIds.includes(message.id))
+    const historyMessages = firstKeptUserIndex >= 0 ? existingMessages.slice(firstKeptUserIndex) : existingMessages
+    const pendingAssistantMessage: VisibleAgentMessage = {
+      id: nanoid(),
+      conversationId,
+      role: 'assistant',
+      message: '',
+      displayMessage: '',
+      createdAt: Date.now() + 1,
+      state: 'pending',
+    }
+    const runtimeMessages = [...historyMessages, userMessage]
     const messages = [...existingMessages, userMessage]
+    const displayMessages = [...messages, pendingAssistantMessage]
 
     await saveAgentMessage(userMessage)
     await saveAgentDraft(buildDraftRecord(conversationId, get().taskType, '', get().selectedReferenceIds))
@@ -606,6 +758,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
     set((state) => ({
       draftInput: '',
       isSending: true,
+      sendingStatus: '正在连接 AI...',
       error: null,
       messagesByConversation: {
         ...state.messagesByConversation,
@@ -613,27 +766,58 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       },
       visibleMessagesByConversation: {
         ...state.visibleMessagesByConversation,
-        [conversationId]: getVisibleMessages(messages),
+        [conversationId]: getVisibleMessages(displayMessages),
       },
     }))
 
     try {
+      activeAbortController = new AbortController()
       const result = await runAgentReActLoop({
         providerConfig: {
           ...providerConfig,
           apiKey,
+          temperature: get().chatTemperature,
+          maxTokens: get().chatMaxTokens,
         },
         apiKey,
-        messages,
+        messages: runtimeMessages,
         tools: createDefaultAgentTools(),
         markdown: documentStore.getCurrentMarkdown(),
         maxTurns: 5,
+        signal: activeAbortController.signal,
+        onAssistantTextDelta: (text) => {
+          set((state) => ({
+            sendingStatus: 'AI 正在回复...',
+            visibleMessagesByConversation: {
+              ...state.visibleMessagesByConversation,
+              [conversationId]: getVisibleMessages([
+                ...(state.messagesByConversation[conversationId] || messages),
+                {
+                  ...pendingAssistantMessage,
+                  message: text,
+                  displayMessage: text,
+                },
+              ]),
+            },
+          }))
+        },
       })
 
-      const newMessages = result.messages.slice(messages.length)
+      const newMessages = result.messages.slice(runtimeMessages.length)
       await saveAgentMessages(newMessages)
+      const nextMessages = [...messages, ...newMessages]
+
+      const toolApplyMessages = result.appliedToolCallIds.map((toolCallId) =>
+        createToolApplyVisibleMessage({
+          conversationId,
+          toolCallId,
+          previousMarkdown: result.previousMarkdown,
+          appliedMarkdown: result.appliedMarkdown,
+        })
+      )
 
       if (result.appliedMarkdown !== documentStore.getCurrentMarkdown()) {
+        set({ sendingStatus: '正在应用工具结果...' })
         useHistoryStore.getState().addHistory({
           type: 'batch',
           description: 'AI agent apply_tool',
@@ -642,6 +826,10 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         const nextDocument = useDocumentStore.getState().document
         await syncMarkdownToActiveSource(result.appliedMarkdown, nextDocument?.fileName)
       }
+
+      result.generatedFiles.forEach((file) => {
+        useFileSystemStore.getState().importFile(file.fileName, file.content, null)
+      })
 
       const now = Date.now()
       const conversation = get().conversations.find((item) => item.id === conversationId)
@@ -661,15 +849,17 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
 
       set((state) => ({
         isSending: false,
+        sendingStatus: null,
         messagesByConversation: {
           ...state.messagesByConversation,
-          [conversationId]: result.messages,
+          [conversationId]: nextMessages,
         },
         visibleMessagesByConversation: {
           ...state.visibleMessagesByConversation,
-          [conversationId]: getVisibleMessages(result.messages),
+          [conversationId]: [...getVisibleMessages(nextMessages), ...toolApplyMessages],
         },
       }))
+      activeAbortController = null
     } catch (error) {
       const failedMessage: AgentMessage = {
         id: nanoid(),
@@ -678,12 +868,13 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         message: '',
         createdAt: Date.now(),
         state: 'failed',
-        error: error instanceof Error ? error.message : 'AI request failed',
+        error: formatAgentError(error),
       }
       await saveAgentMessage(failedMessage)
       const nextMessages = [...messages, failedMessage]
       set((state) => ({
         isSending: false,
+        sendingStatus: null,
         error: failedMessage.error || 'AI request failed',
         messagesByConversation: {
           ...state.messagesByConversation,
@@ -694,7 +885,74 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
           [conversationId]: getVisibleMessages(nextMessages),
         },
       }))
+      activeAbortController = null
     }
+  },
+
+  stopSending: () => {
+    activeAbortController?.abort()
+    activeAbortController = null
+    set({ isSending: false, sendingStatus: null, error: '已中断 AI 请求。' })
+  },
+
+  confirmToolApply: async (messageId) => {
+    const conversationId = get().currentConversationId
+    if (!conversationId) return
+    const target = (get().visibleMessagesByConversation[conversationId] || []).find((message) => message.id === messageId)
+    if (target?.action?.type === 'tool_apply') {
+      const nextDocument = useDocumentStore.getState().document
+      await syncMarkdownToActiveSource(target.action.appliedMarkdown, nextDocument?.fileName)
+    }
+
+    set((state) => ({
+      visibleMessagesByConversation: {
+        ...state.visibleMessagesByConversation,
+        [conversationId]: (state.visibleMessagesByConversation[conversationId] || []).map((message) =>
+          message.id === messageId && message.action?.type === 'tool_apply'
+            ? {
+                ...message,
+                displayMessage: '工具应用已确认',
+                action: { ...message.action, status: 'confirmed' },
+              }
+            : message
+        ),
+      },
+    }))
+  },
+
+  undoToolApply: async (messageId) => {
+    const conversationId = get().currentConversationId
+    if (!conversationId) return false
+
+    const target = (get().visibleMessagesByConversation[conversationId] || []).find((message) => message.id === messageId)
+    if (!target?.action || target.action.type !== 'tool_apply' || target.action.status !== 'pending') {
+      return false
+    }
+
+    useHistoryStore.getState().addHistory({
+      type: 'batch',
+      description: 'Undo AI agent apply_tool',
+    })
+    useDocumentStore.getState().applyExternalMarkdown(target.action.previousMarkdown)
+    const nextDocument = useDocumentStore.getState().document
+    await syncMarkdownToActiveSource(target.action.previousMarkdown, nextDocument?.fileName)
+
+    set((state) => ({
+      visibleMessagesByConversation: {
+        ...state.visibleMessagesByConversation,
+        [conversationId]: (state.visibleMessagesByConversation[conversationId] || []).map((message) =>
+          message.id === messageId && message.action?.type === 'tool_apply'
+            ? {
+                ...message,
+                displayMessage: '工具应用已撤销',
+                action: { ...message.action, status: 'undone' },
+              }
+            : message
+        ),
+      },
+    }))
+
+    return true
   },
 
   clearSelectionHint: () => {

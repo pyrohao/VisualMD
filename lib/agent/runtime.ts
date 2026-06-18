@@ -12,11 +12,16 @@ export interface AgentRuntimeTurnOptions {
   tools: AgentToolDefinition[]
   markdown: string
   maxTurns?: number
+  onAssistantTextDelta?: (text: string) => void
+  signal?: AbortSignal
 }
 
 export interface AgentRuntimeTurnResult {
   messages: AgentMessage[]
   appliedMarkdown: string
+  previousMarkdown: string
+  appliedToolCallIds: string[]
+  generatedFiles: Array<{ toolCallId: string; fileName: string; content: string }>
   stoppedBecause: 'assistant-text' | 'tool-limit' | 'invalid-tool'
 }
 
@@ -82,6 +87,11 @@ function serializeToolResultForModel(result: AgentToolResult) {
   })
 }
 
+function shouldStreamToUser(fullText: string) {
+  const trimmed = fullText.trimStart()
+  return Boolean(trimmed) && !trimmed.startsWith('{') && !trimmed.startsWith('[') && !trimmed.startsWith('```')
+}
+
 export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promise<AgentRuntimeTurnResult> {
   const conversationId = options.messages[0]?.conversationId || ''
   const service = createAIService(options.providerConfig)
@@ -89,17 +99,40 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
   const maxTurns = options.maxTurns ?? 5
   const messages: AgentMessage[] = [...options.messages]
   const modelMessages: AgentMessage[] = [...options.messages]
+  const previousMarkdown = options.markdown
+  const appliedToolCallIds: string[] = []
+  const generatedFiles: AgentRuntimeTurnResult['generatedFiles'] = []
   let markdown = options.markdown
   let stopReason: AgentRuntimeTurnResult['stoppedBecause'] = 'tool-limit'
   let lastFailedContext: string | null = null
 
   for (let turn = 0; turn < maxTurns; turn += 1) {
-    const response = await service.chatMessages({
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: buildAgentTranscript(modelMessages) },
-      ],
-    })
+    if (options.signal?.aborted) {
+      throw new Error('AI request aborted')
+    }
+    let streamedText = ''
+    const requestMessages = [
+      { role: 'system' as const, content: systemPrompt },
+      { role: 'user' as const, content: buildAgentTranscript(modelMessages) },
+    ]
+    const response = typeof service.chatMessagesStream === 'function'
+      ? await service.chatMessagesStream({
+          messages: requestMessages,
+          onDelta: (_delta, fullText) => {
+            if (!options.onAssistantTextDelta || !shouldStreamToUser(fullText)) {
+              return
+            }
+
+            const nextText = fullText.trimStart()
+            if (nextText.length <= streamedText.length) return
+            streamedText = nextText
+            options.onAssistantTextDelta(streamedText)
+          },
+          signal: options.signal,
+        })
+      : await service.chatMessages({
+          messages: requestMessages,
+        })
 
     const parsed = parseAgentModelResponse(response)
 
@@ -117,7 +150,7 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
         }
         messages.push(failedMessage)
         modelMessages.push(failedMessage)
-        return { messages, appliedMarkdown: markdown, stoppedBecause: 'invalid-tool' }
+        return { messages, appliedMarkdown: markdown, previousMarkdown, appliedToolCallIds, generatedFiles, stoppedBecause: 'invalid-tool' }
       }
 
       const assistantMessage: AgentMessage = {
@@ -131,7 +164,7 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
       messages.push(assistantMessage)
       modelMessages.push(assistantMessage)
       stopReason = 'assistant-text'
-      return { messages, appliedMarkdown: markdown, stoppedBecause: stopReason }
+      return { messages, appliedMarkdown: markdown, previousMarkdown, appliedToolCallIds, generatedFiles, stoppedBecause: stopReason }
     }
 
     const toolCall = {
@@ -160,6 +193,7 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
     const toolResult = await runTool(tool, toolCall.arguments, {
       markdown,
       lastFailedContext,
+      providerConfig: options.providerConfig,
     })
 
     if (!toolResult.ok && toolCall.name === 'apply_tool') {
@@ -172,6 +206,14 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
 
     if (toolResult.ok && toolResult.nextMarkdown) {
       markdown = toolResult.nextMarkdown
+      appliedToolCallIds.push(toolCall.id)
+    }
+
+    if (toolResult.ok && toolResult.generatedFile) {
+      generatedFiles.push({
+        toolCallId: toolCall.id,
+        ...toolResult.generatedFile,
+      })
     }
 
     const toolHistoryMessage: AgentMessage = {
@@ -193,7 +235,7 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
     modelMessages.push(toolModelMessage)
 
     if (!tool) {
-      return { messages, appliedMarkdown: markdown, stoppedBecause: 'invalid-tool' }
+      return { messages, appliedMarkdown: markdown, previousMarkdown, appliedToolCallIds, generatedFiles, stoppedBecause: 'invalid-tool' }
     }
 
     if (!toolResult.ok && toolCall.name !== 'semantic_tool') {
@@ -213,5 +255,5 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
   messages.push(limitMessage)
   modelMessages.push(limitMessage)
 
-  return { messages, appliedMarkdown: markdown, stoppedBecause: stopReason }
+  return { messages, appliedMarkdown: markdown, previousMarkdown, appliedToolCallIds, generatedFiles, stoppedBecause: stopReason }
 }

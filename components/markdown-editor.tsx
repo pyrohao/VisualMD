@@ -675,7 +675,7 @@ export function MarkdownEditor() {
         e.preventDefault()
         handleSave()
       }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'l') {
         const aiChatStore = useAiChatStore.getState()
         if (aiChatStore.selectionCandidate) {
           e.preventDefault()

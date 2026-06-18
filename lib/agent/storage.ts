@@ -4,7 +4,7 @@ import type { AgentConversation, AgentDraft, AgentMessage, AgentReferenceRecord,
 
 const DB_NAME = 'visualmd-agent'
 const conversationsStore = createIdbStore<AgentConversation>(DB_NAME, 'conversations')
-const messagesStore = createIdbStore<AgentMessage>(DB_NAME, 'messages')
+const messagesStore = createIdbStore<AgentMessage[]>(DB_NAME, 'messages')
 const referencesStore = createIdbStore<AgentReferenceRecord>(DB_NAME, 'references')
 const draftsStore = createIdbStore<AgentDraft>(DB_NAME, 'drafts')
 const uiStateStore = createIdbStore<AgentUiState>(DB_NAME, 'ui_state')
@@ -20,9 +20,7 @@ export async function listAgentConversations() {
 }
 
 export async function listAgentMessages(conversationId: string) {
-  return (await messagesStore.getAll())
-    .map((entry) => entry.value)
-    .filter((message) => message.conversationId === conversationId)
+  return ((await messagesStore.get(conversationId)) || [])
     .sort((left, right) => left.createdAt - right.createdAt)
 }
 
@@ -31,11 +29,32 @@ export async function saveAgentConversation(record: AgentConversation) {
 }
 
 export async function saveAgentMessage(record: AgentMessage) {
-  return messagesStore.set(record.id, record)
+  const messages = await listAgentMessages(record.conversationId)
+  const nextMessages = [
+    ...messages.filter((message) => message.id !== record.id),
+    record,
+  ].sort((left, right) => left.createdAt - right.createdAt)
+  return messagesStore.set(record.conversationId, nextMessages)
 }
 
 export async function saveAgentMessages(records: AgentMessage[]) {
-  await Promise.all(records.map((record) => saveAgentMessage(record)))
+  const recordsByConversation = new Map<string, AgentMessage[]>()
+  records.forEach((record) => {
+    recordsByConversation.set(record.conversationId, [
+      ...(recordsByConversation.get(record.conversationId) || []),
+      record,
+    ])
+  })
+
+  await Promise.all(Array.from(recordsByConversation.entries()).map(async ([conversationId, conversationRecords]) => {
+    const messages = await listAgentMessages(conversationId)
+    const nextById = new Map(messages.map((message) => [message.id, message]))
+    conversationRecords.forEach((message) => nextById.set(message.id, message))
+    await messagesStore.set(
+      conversationId,
+      Array.from(nextById.values()).sort((left, right) => left.createdAt - right.createdAt)
+    )
+  }))
 }
 
 export async function listAgentReferences(conversationId: string) {
@@ -66,16 +85,10 @@ export async function listAgentDrafts() {
 }
 
 export async function deleteAgentConversation(conversationId: string) {
-  const messages = await messagesStore.getAll()
   const references = await referencesStore.getAll()
   await conversationsStore.remove(conversationId)
   await draftsStore.remove(conversationId)
-  await Promise.all(
-    messages
-      .map((entry) => entry.value)
-      .filter((message) => message.conversationId === conversationId)
-      .map((message) => messagesStore.remove(message.id))
-  )
+  await messagesStore.remove(conversationId)
   await Promise.all(
     references
       .map((entry) => entry.value)

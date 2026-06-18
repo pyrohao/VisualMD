@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
-import { executeApplyTool, executeSemanticTool } from '@/lib/agent'
+import { describe, expect, it, vi } from 'vitest'
+import { AIService } from '@/lib/ai-service'
+import { executeApplyTool, executeGenerateDocumentTool, executeSemanticTool } from '@/lib/agent'
 
 describe('agent tools', () => {
   it('applies exact single-match replacements', async () => {
@@ -40,5 +41,33 @@ describe('agent tools', () => {
     )
 
     expect(result.ok).toBe(false)
+  })
+
+  it('generates markdown documents as a tool result', async () => {
+    vi.spyOn(AIService.prototype, 'generateMarkdown').mockResolvedValueOnce({
+      success: true,
+      content: '# Generated',
+      fileName: 'Generated.md',
+    })
+
+    const result = await executeGenerateDocumentTool(
+      { prompt: 'make a doc' },
+      {
+        markdown: '',
+        providerConfig: {
+          id: 'custom',
+          name: 'Custom',
+          baseUrl: 'https://example.test/v1',
+          apiKey: 'test',
+          model: 'test',
+          temperature: 0,
+          maxTokens: 1000,
+          isTested: true,
+        },
+      }
+    )
+
+    expect(result.ok).toBe(true)
+    expect(result.generatedFile?.fileName).toBe('Generated.md')
   })
 })

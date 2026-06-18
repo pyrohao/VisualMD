@@ -41,6 +41,11 @@ export interface AIChatMessagesOptions {
   maxTokens?: number
 }
 
+export interface AIChatMessagesStreamOptions extends AIChatMessagesOptions {
+  onDelta?: (delta: string, fullText: string) => void
+  signal?: AbortSignal
+}
+
 /**
  * 生成结果
  */
@@ -53,6 +58,21 @@ export interface AIGenerateResult {
   success: boolean
   /** 错误信息 */
   error?: string
+}
+
+async function createApiError(response: Response) {
+  const errorData = await response.json().catch(() => ({}))
+  const message = errorData.error?.message || response.statusText
+
+  if (response.status === 429) {
+    return new Error(`Rate limit exceeded: ${message}`)
+  }
+
+  if (response.status === 500 || response.status === 503) {
+    return new Error(`AI service unavailable (${response.status}): ${message}`)
+  }
+
+  return new Error(message || `请求失败: ${response.status} ${response.statusText}`)
 }
 
 /**
@@ -169,6 +189,18 @@ export class AIService {
     })
   }
 
+  async chatMessagesStream(options: AIChatMessagesStreamOptions): Promise<string> {
+    const { messages, temperature, maxTokens, onDelta, signal } = options
+
+    return this.callOpenAIAPIStream({
+      messages,
+      temperature: temperature ?? this.config.temperature,
+      maxTokens: maxTokens ?? this.config.maxTokens,
+      onDelta,
+      signal,
+    })
+  }
+
   /**
    * 调用OpenAI兼容API
    */
@@ -206,10 +238,7 @@ export class AIService {
     })
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}))
-      throw new Error(
-        errorData.error?.message || `请求失败: ${response.status} ${response.statusText}`
-      )
+      throw await createApiError(response)
     }
 
     const data = await response.json()
@@ -225,6 +254,89 @@ export class AIService {
     }
 
     return content
+  }
+
+  private async callOpenAIAPIStream(options: {
+    messages: AIMessage[]
+    temperature: number
+    maxTokens: number
+    onDelta?: (delta: string, fullText: string) => void
+    signal?: AbortSignal
+  }): Promise<string> {
+    const { messages, temperature, maxTokens, onDelta, signal } = options
+    const url = `${this.config.baseUrl}/chat/completions`
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${this.config.apiKey}`,
+      ...this.config.customHeaders,
+    }
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      signal,
+      body: JSON.stringify({
+        model: this.config.model,
+        messages,
+        temperature,
+        max_tokens: maxTokens,
+        stream: true,
+      }),
+    })
+
+    if (!response.ok) {
+      throw await createApiError(response)
+    }
+
+    if (!response.body) {
+      return this.chatMessages({ messages, temperature, maxTokens })
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let fullText = ''
+
+    while (true) {
+      let chunk: ReadableStreamReadResult<Uint8Array>
+      try {
+        chunk = await reader.read()
+      } catch (error) {
+        throw new Error(`Stream connection interrupted: ${error instanceof Error ? error.message : 'unknown error'}`)
+      }
+      const { value, done } = chunk
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split(/\r?\n/)
+      buffer = lines.pop() || ''
+
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed || !trimmed.startsWith('data:')) continue
+        const payload = trimmed.slice(5).trim()
+        if (payload === '[DONE]') {
+          return fullText
+        }
+
+        try {
+          const data = JSON.parse(payload)
+          const delta = data.choices?.[0]?.delta?.content || data.choices?.[0]?.delta?.reasoning_content || ''
+          if (delta) {
+            fullText += delta
+            onDelta?.(delta, fullText)
+          }
+        } catch {
+          continue
+        }
+      }
+    }
+
+    if (!fullText) {
+      throw new Error('API返回内容为空')
+    }
+
+    return fullText
   }
 
   /**

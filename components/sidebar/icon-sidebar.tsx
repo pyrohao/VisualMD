@@ -7,7 +7,7 @@
  * 设计参考 Obsidian 的左侧边栏
  */
 
-import { FolderOpen, LayoutTemplate, Sparkles, Settings, ListTree, HelpCircle, GitBranch } from 'lucide-react'
+import { Bot, FolderOpen, LayoutTemplate, Settings, ListTree, HelpCircle, GitBranch } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useSidebarStore, type SidebarPanel } from '@/stores/sidebarStore'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
@@ -27,7 +27,7 @@ const getIcons = (t: (key: string) => string): IconItem[] => [
   { id: 'files', icon: FolderOpen, label: t('sidebar.files'), shortcut: 'Ctrl+1' },
   { id: 'outline', icon: ListTree, label: t('sidebar.outline'), shortcut: 'Ctrl+2' },
   { id: 'templates', icon: LayoutTemplate, label: t('sidebar.templates'), shortcut: 'Ctrl+3' },
-  { id: 'ai', icon: Sparkles, label: t('sidebar.aiGenerate'), shortcut: 'Ctrl+4' },
+  { id: 'ai', icon: Bot, label: 'AI 配置', shortcut: 'Ctrl+4' },
   { id: 'git', icon: GitBranch, label: t('sidebar.git'), shortcut: 'Ctrl+5' },
 ]
 
@@ -92,6 +92,15 @@ export function IconSidebar() {
                     }}
                   >
                     <Icon className="w-5 h-5" />
+                    {item.id === 'ai' && (
+                      <Settings
+                        className="absolute bottom-1 right-1 h-2.5 w-2.5"
+                        style={{
+                          color: isActive ? themeConfig.primary : themeConfig.textMuted,
+                          backgroundColor: themeConfig.sidebar,
+                        }}
+                      />
+                    )}
 
                     {/* 左侧激活指示条 */}
                     {isActive && (

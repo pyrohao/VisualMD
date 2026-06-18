@@ -1,10 +1,12 @@
 'use client'
 
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   AlertCircle,
   ArrowUp,
+  Check,
   ChevronLeft,
+  Loader2,
   MoreHorizontal,
   PencilLine,
   RotateCcw,
@@ -15,24 +17,18 @@ import {
 import { useThemeStore } from '@/stores/themeStore'
 import { useTranslation } from '@/stores/languageStore'
 import { useSidebarStore } from '@/stores/sidebarStore'
-import { useAiChatStore, type AiReplaceApplyMode } from '@/stores/aiChatStore'
+import { useAiChatStore } from '@/stores/aiChatStore'
 import { useDocumentStore } from '@/stores/documentStore'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 type DockView = 'history' | 'conversation'
 
 interface AiChatDockProps {
   onClose?: () => void
 }
-
-const APPLY_MODE_OPTIONS: Array<{ value: AiReplaceApplyMode; label: string }> = [
-  { value: 'manual', label: 'manual' },
-  { value: 'auto', label: 'auto' },
-]
 
 function ActionIcon({
   icon,
@@ -61,6 +57,9 @@ function ActionIcon({
 }
 
 export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
+  const [editingConversationId, setEditingConversationId] = useState<string | null>(null)
+  const [editingTitle, setEditingTitle] = useState('')
+  const [showChatSettings, setShowChatSettings] = useState(false)
   const { getThemeConfig } = useThemeStore()
   const { currentLanguage } = useTranslation()
   const setActivePanel = useSidebarStore((state) => state.setActivePanel)
@@ -69,23 +68,31 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
     currentConversationId,
     visibleMessagesByConversation,
     referencesByConversation,
-    applyMode,
     draftInput,
     selectedReferenceIds,
     isLoading,
     isSending,
     error,
+    chatTemperature,
+    chatMaxTokens,
+    chatHistoryRounds,
     selectionHint,
     initialize,
     openConversation,
     leaveConversation,
     createConversation,
     removeConversation,
+    renameConversation,
     setDraftInput,
-    setApplyMode,
     removeReference,
     clearSelectionHint,
     sendMessage,
+    stopSending,
+    setChatTemperature,
+    setChatMaxTokens,
+    setChatHistoryRounds,
+    confirmToolApply,
+    undoToolApply,
     refreshReferenceStaleState,
   } = useAiChatStore()
   const documentVersion = useDocumentStore((state) => state.document?.version || 0)
@@ -120,7 +127,15 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
     },
     [currentConversationId, referencesByConversation, selectedReferenceIds]
   )
-  const currentApplyMode = APPLY_MODE_OPTIONS.find((option) => option.value === applyMode) || APPLY_MODE_OPTIONS[0]
+  const submitMessage = () => {
+    if (!draftInput.trim() || isSending || isLoading) return
+    void sendMessage()
+  }
+  const submitRename = (conversationId: string) => {
+    void renameConversation(conversationId, editingTitle)
+    setEditingConversationId(null)
+    setEditingTitle('')
+  }
 
   return (
     <div
@@ -182,7 +197,10 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
                 <button
                   key={conversation.id}
                   type="button"
-                  onClick={() => void openConversation(conversation.id)}
+                  onClick={() => {
+                    if (editingConversationId === conversation.id) return
+                    void openConversation(conversation.id)
+                  }}
                   className="flex w-full items-center justify-between rounded-xl px-2 py-2 text-left transition-colors"
                   style={{
                     backgroundColor:
@@ -190,9 +208,35 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
                   }}
                 >
                   <div className="min-w-0">
-                    <div className="truncate text-[15px]" style={{ color: themeConfig.text }}>
-                      {conversation.title}
-                    </div>
+                    {editingConversationId === conversation.id ? (
+                      <input
+                        value={editingTitle}
+                        onChange={(event) => setEditingTitle(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault()
+                            submitRename(conversation.id)
+                          }
+                          if (event.key === 'Escape') {
+                            event.preventDefault()
+                            setEditingConversationId(null)
+                            setEditingTitle('')
+                          }
+                        }}
+                        onClick={(event) => event.stopPropagation()}
+                        className="w-full rounded-md border px-2 py-1 text-[15px] outline-none"
+                        style={{
+                          color: themeConfig.text,
+                          borderColor: themeConfig.border,
+                          backgroundColor: themeConfig.background,
+                        }}
+                        autoFocus
+                      />
+                    ) : (
+                      <div className="truncate text-[15px]" style={{ color: themeConfig.text }}>
+                        {conversation.title}
+                      </div>
+                    )}
                     <div className="mt-1 text-xs" style={{ color: themeConfig.textMuted }}>
                       {conversation.model}
                     </div>
@@ -201,6 +245,36 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
                     <div className="flex-shrink-0 text-xs" style={{ color: themeConfig.textMuted }}>
                       {conversation.messageCount}
                     </div>
+                    {editingConversationId === conversation.id ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 rounded-md hover:bg-transparent focus-visible:ring-0"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          submitRename(conversation.id)
+                        }}
+                        style={{ color: themeConfig.primary, backgroundColor: 'transparent' }}
+                      >
+                        <Check className="h-4 w-4" />
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 rounded-md hover:bg-transparent focus-visible:ring-0"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          setEditingConversationId(conversation.id)
+                          setEditingTitle(conversation.title)
+                        }}
+                        style={{ color: themeConfig.textMuted, backgroundColor: 'transparent' }}
+                      >
+                        <PencilLine className="h-4 w-4" />
+                      </Button>
+                    )}
                     <Button
                       type="button"
                       variant="ghost"
@@ -306,24 +380,70 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
 
             <div className="space-y-3">
               {currentMessages.map((message) => {
+                const isUser = message.role === 'user'
                 return (
                   <div
                     key={message.id}
                     className="flex"
-                    style={{ justifyContent: 'flex-start' }}
+                    style={{ justifyContent: isUser ? 'flex-end' : 'flex-start' }}
                   >
                     <div
                       className="max-w-[88%] rounded-2xl px-4 py-3 text-sm leading-6"
                       style={{
-                        backgroundColor: themeConfig.card,
-                        border: `1px solid ${themeConfig.border}`,
+                        backgroundColor: isUser ? `${themeConfig.primary}10` : themeConfig.card,
+                        border: `1px solid ${isUser ? `${themeConfig.primary}22` : themeConfig.border}`,
                         color: themeConfig.text,
                       }}
                     >
-                      {message.message}
+                      {message.thinking && (
+                        <div
+                          className="mb-2 border-b pb-2 text-xs leading-5"
+                          style={{ color: themeConfig.textMuted, borderColor: themeConfig.border }}
+                        >
+                          <div className="mb-1 font-medium" style={{ color: themeConfig.heading }}>
+                            {currentLanguage === 'zh' ? '思考' : 'Thinking'}
+                          </div>
+                          {message.thinking}
+                        </div>
+                      )}
+                      <div className="flex items-start gap-2">
+                        {message.state === 'pending' && !isUser && (
+                          <Loader2 className="mt-1 h-4 w-4 shrink-0 animate-spin" style={{ color: themeConfig.primary }} />
+                        )}
+                        {(message.displayMessage || message.message) && (
+                          <span>{message.displayMessage || message.message}</span>
+                        )}
+                      </div>
                       {!!message.error && (
                         <div className="mt-2 text-xs" style={{ color: themeConfig.error }}>
                           {message.error}
+                        </div>
+                      )}
+                      {message.action?.type === 'tool_apply' && message.action.status === 'pending' && (
+                        <div className="mt-3 flex items-center gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="h-8 rounded-md px-3"
+                            onClick={() => void confirmToolApply(message.id)}
+                            style={{ backgroundColor: themeConfig.primary, color: themeConfig.buttonText }}
+                          >
+                            {currentLanguage === 'zh' ? '确认' : 'Confirm'}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-8 rounded-md px-3"
+                            onClick={() => void undoToolApply(message.id)}
+                            style={{
+                              backgroundColor: themeConfig.buttonSecondaryBg,
+                              borderColor: themeConfig.border,
+                              color: themeConfig.text,
+                            }}
+                          >
+                            Undo
+                          </Button>
                         </div>
                       )}
                     </div>
@@ -346,6 +466,11 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
           <Textarea
             value={draftInput}
             onChange={(event) => void setDraftInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
+              event.preventDefault()
+              submitMessage()
+            }}
             placeholder={
               currentLanguage === 'zh'
                 ? '围绕引用内容提问，或要求修改当前块'
@@ -356,40 +481,74 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
           />
 
           <div className="mt-3 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <Select value={applyMode} onValueChange={(value) => void setApplyMode(value as AiReplaceApplyMode)}>
-                <SelectTrigger
-                  size="sm"
-                  className="h-8 min-w-[112px] rounded-full border-0 px-4 text-xs font-medium shadow-none outline-none ring-0 focus:ring-0 focus-visible:ring-0 data-[state=open]:ring-0"
-                  style={{
-                    color: themeConfig.primary,
-                    backgroundColor: `${themeConfig.primary}10`,
-                  }}
-                >
-                  <SelectValue placeholder={currentApplyMode.label}>
-                    {currentApplyMode.label}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent
+            <div className="relative">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 rounded-md hover:bg-transparent focus-visible:ring-0"
+                onClick={() => setShowChatSettings((value) => !value)}
+                style={{ color: themeConfig.textMuted, backgroundColor: 'transparent' }}
+              >
+                <Settings className="h-4 w-4" />
+              </Button>
+              {showChatSettings && (
+                <div
+                  className="absolute bottom-11 left-0 z-20 w-64 rounded-lg border p-3 shadow-lg"
                   style={{
                     backgroundColor: themeConfig.card,
                     borderColor: themeConfig.border,
-                    ['--dock-select-hover' as any]: themeConfig.hover,
-                    ['--dock-select-text' as any]: themeConfig.text,
+                    color: themeConfig.text,
                   }}
                 >
-                  {APPLY_MODE_OPTIONS.map((option) => (
-                    <SelectItem
-                      key={option.value}
-                      value={option.value}
-                      className="data-[highlighted]:bg-[var(--dock-select-hover)] data-[highlighted]:text-[var(--dock-select-text)] focus:bg-[var(--dock-select-hover)] focus:text-[var(--dock-select-text)]"
-                      style={{ color: themeConfig.text }}
-                    >
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                  <div className="space-y-3">
+                    <div>
+                      <label className="text-xs" style={{ color: themeConfig.textMuted }}>
+                        Temperature
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="2"
+                        step="0.1"
+                        value={chatTemperature}
+                        onChange={(event) => void setChatTemperature(Number(event.target.value))}
+                        className="mt-1 h-8 w-full rounded-md border px-2 text-sm outline-none"
+                        style={{ backgroundColor: themeConfig.input, borderColor: themeConfig.border, color: themeConfig.text }}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs" style={{ color: themeConfig.textMuted }}>
+                        Max tokens
+                      </label>
+                      <input
+                        type="number"
+                        min="256"
+                        max="200000"
+                        step="1024"
+                        value={chatMaxTokens}
+                        onChange={(event) => void setChatMaxTokens(Number(event.target.value))}
+                        className="mt-1 h-8 w-full rounded-md border px-2 text-sm outline-none"
+                        style={{ backgroundColor: themeConfig.input, borderColor: themeConfig.border, color: themeConfig.text }}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs" style={{ color: themeConfig.textMuted }}>
+                        {currentLanguage === 'zh' ? '历史轮数' : 'History rounds'}
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="100"
+                        value={chatHistoryRounds}
+                        onChange={(event) => void setChatHistoryRounds(Number(event.target.value))}
+                        className="mt-1 h-8 w-full rounded-md border px-2 text-sm outline-none"
+                        style={{ backgroundColor: themeConfig.input, borderColor: themeConfig.border, color: themeConfig.text }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="flex items-center gap-2">
@@ -402,14 +561,14 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
               <Button
                 type="button"
                 className="h-10 w-10 rounded-full p-0"
-                disabled={!draftInput.trim() || isSending || isLoading}
-                onClick={() => void sendMessage()}
+                disabled={(!draftInput.trim() && !isSending) || isLoading}
+                onClick={isSending ? stopSending : submitMessage}
                 style={{
-                  backgroundColor: draftInput.trim() ? themeConfig.muted : themeConfig.border,
+                  backgroundColor: isSending ? themeConfig.danger : draftInput.trim() ? themeConfig.primary : themeConfig.border,
                   color: themeConfig.buttonText,
                 }}
               >
-                <ArrowUp className="h-4 w-4" />
+                {isSending ? <X className="h-4 w-4" /> : <ArrowUp className="h-4 w-4" />}
               </Button>
             </div>
           </div>

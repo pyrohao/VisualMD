@@ -1,4 +1,5 @@
 import type { AgentToolContext, AgentToolResult } from './types'
+import { AIService } from '@/lib/ai-service'
 
 export interface AgentToolDefinition {
   name: string
@@ -108,6 +109,38 @@ export async function executeSemanticTool(args: Record<string, unknown>, context
   }
 }
 
+export async function executeGenerateDocumentTool(args: Record<string, unknown>, context: AgentToolContext): Promise<AgentToolResult> {
+  const prompt = typeof args.prompt === 'string' ? args.prompt.trim() : ''
+  const fileName = typeof args.fileName === 'string' ? args.fileName.trim() : ''
+
+  if (!prompt) {
+    return { ok: false, message: 'prompt is required' }
+  }
+
+  if (!context.providerConfig) {
+    return { ok: false, message: 'providerConfig is required' }
+  }
+
+  const service = new AIService(context.providerConfig)
+  const result = await service.generateMarkdown({ prompt })
+  if (!result.success) {
+    return { ok: false, message: result.error || 'generate_document failed' }
+  }
+
+  return {
+    ok: true,
+    message: 'generate_document succeeded',
+    generatedFile: {
+      fileName: fileName || result.fileName,
+      content: result.content,
+    },
+    metadata: {
+      fileName: fileName || result.fileName,
+      contentLength: result.content.length,
+    },
+  }
+}
+
 export function createDefaultAgentTools() {
   const tools: AgentToolDefinition[] = [
     {
@@ -121,6 +154,12 @@ export function createDefaultAgentTools() {
       description: 'Find a nearby semantic paragraph candidate for a failed replacement.',
       parameters: '{"query":"string","nearText?":"string"}',
       execute: executeSemanticTool,
+    },
+    {
+      name: 'generate_document_tool',
+      description: 'Create and save a NEW Markdown file only when the user explicitly asks to create/generate/save a new document or new file. Never use for normal chat, Q&A, summaries, explanations, or edits to the current document.',
+      parameters: '{"prompt":"string","fileName?":"string"}',
+      execute: executeGenerateDocumentTool,
     },
   ]
 

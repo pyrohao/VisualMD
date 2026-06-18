@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildAgentTranscript, parseAgentModelResponse, type AgentMessage } from '@/lib/agent'
+import { buildAgentSystemPrompt, buildAgentTranscript, parseAgentModelResponse, splitAssistantThinking, type AgentMessage } from '@/lib/agent'
 
 describe('agent model', () => {
   it('renders messages as role XML in order', () => {
@@ -28,5 +28,33 @@ describe('agent model', () => {
 
     expect(parseAgentModelResponse('{not json')).toEqual({ kind: 'text', text: '{not json' })
     expect(parseAgentModelResponse('```json\n{"tool":"apply_tool","arguments":{}}\n```').kind).toBe('text')
+  })
+
+  it('splits deepseek think blocks from assistant text', () => {
+    expect(splitAssistantThinking('<think>reasoning</think>\nAnswer')).toEqual({
+      thinking: 'reasoning',
+      text: 'Answer',
+    })
+  })
+
+  it('limits new document generation tool usage to explicit new file requests', () => {
+    const prompt = buildAgentSystemPrompt([
+      'generate_document_tool: Create and save a NEW Markdown file only when explicitly requested.',
+    ], {
+      operatingSystem: 'Windows',
+      browser: 'Chrome',
+      timezone: 'Asia/Shanghai',
+      language: 'zh-CN',
+      today: '2026-06-18',
+    })
+
+    expect(prompt).toContain('Operating system: Windows')
+    expect(prompt).toContain('Browser: Chrome')
+    expect(prompt).toContain('Timezone: Asia/Shanghai')
+    expect(prompt).toContain('Language: zh-CN')
+    expect(prompt).toContain('Today: 2026-06-18')
+    expect(prompt).toContain('For normal chat')
+    expect(prompt).toContain('Only call generate_document_tool')
+    expect(prompt).toContain('NEW Markdown document/file')
   })
 })

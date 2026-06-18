@@ -64,12 +64,17 @@ export interface AgentToolResult {
   ok: boolean
   message: string
   nextMarkdown?: string
+  generatedFile?: {
+    fileName: string
+    content: string
+  }
   metadata?: Record<string, unknown>
 }
 
 export interface AgentToolContext {
   markdown: string
   lastFailedContext?: string | null
+  providerConfig?: import('@/stores/settingsStore').ProviderConfig
 }
 
 export interface AgentReferenceContext {

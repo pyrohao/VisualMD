@@ -8,6 +8,7 @@ const storage = vi.hoisted(() => ({
   drafts: new Map<string, AgentDraft>(),
   references: new Map<string, any[]>(),
   ui: new Map<string, string>(),
+  importFile: vi.fn(),
 }))
 
 const providerConfig: ProviderConfig = {
@@ -44,8 +45,14 @@ vi.mock('@/lib/agent', async (importOriginal) => {
       return true
     }),
     saveAgentMessages: vi.fn(async (messages: AgentMessage[]) => {
+      const grouped = new Map<string, AgentMessage[]>()
       messages.forEach((message) => {
-        storage.messages.set(message.conversationId, [...(storage.messages.get(message.conversationId) || []), message])
+        grouped.set(message.conversationId, [...(grouped.get(message.conversationId) || []), message])
+      })
+      grouped.forEach((records, conversationId) => {
+        const nextById = new Map((storage.messages.get(conversationId) || []).map((message) => [message.id, message]))
+        records.forEach((message) => nextById.set(message.id, message))
+        storage.messages.set(conversationId, Array.from(nextById.values()).sort((left, right) => left.createdAt - right.createdAt))
       })
     }),
     saveAgentReference: vi.fn(async (reference: any) => {
@@ -67,41 +74,52 @@ vi.mock('@/lib/agent', async (importOriginal) => {
       storage.ui.set(key, value)
       return true
     }),
-    runAgentReActLoop: vi.fn(async (options: { messages: AgentMessage[]; markdown: string }) => ({
-      messages: [
-        ...options.messages,
-        {
-          id: 'assistant-tool-1',
-          conversationId: options.messages[0]?.conversationId || 'conversation-1',
-          role: 'assistant',
-          message: '{"tool":"apply_tool","callId":"tool-call-1","argumentKeys":["oldString","newString"]}',
-          createdAt: 2,
-          toolCallId: 'tool-call-1',
-          toolName: 'apply_tool',
-          state: 'done',
-        } satisfies AgentMessage,
-        {
-          id: 'tool-1',
-          conversationId: options.messages[0]?.conversationId || 'conversation-1',
-          role: 'tool',
-          message: '{"ok":true,"message":"apply_tool succeeded","metadata":{"matchCount":1}}',
-          createdAt: 3,
-          toolCallId: 'tool-call-1',
-          toolName: 'apply_tool',
-          state: 'done',
-        } satisfies AgentMessage,
-        {
-          id: 'assistant-1',
-          conversationId: options.messages[0]?.conversationId || 'conversation-1',
-          role: 'assistant',
-          message: 'Done',
-          createdAt: 4,
-          state: 'done',
-        } satisfies AgentMessage,
-      ],
-      appliedMarkdown: options.markdown,
-      stoppedBecause: 'assistant-text',
-    })),
+    runAgentReActLoop: vi.fn(async (options: {
+      messages: AgentMessage[]
+      markdown: string
+      onAssistantTextDelta?: (text: string) => void
+    }) => {
+      options.onAssistantTextDelta?.('Do')
+      options.onAssistantTextDelta?.('Done')
+      return {
+        messages: [
+          ...options.messages,
+          {
+            id: 'assistant-tool-1',
+            conversationId: options.messages[0]?.conversationId || 'conversation-1',
+            role: 'assistant',
+            message: '{"tool":"apply_tool","callId":"tool-call-1","argumentKeys":["oldString","newString"]}',
+            createdAt: 2,
+            toolCallId: 'tool-call-1',
+            toolName: 'apply_tool',
+            state: 'done',
+          } satisfies AgentMessage,
+          {
+            id: 'tool-1',
+            conversationId: options.messages[0]?.conversationId || 'conversation-1',
+            role: 'tool',
+            message: '{"ok":true,"message":"apply_tool succeeded","metadata":{"matchCount":1}}',
+            createdAt: 3,
+            toolCallId: 'tool-call-1',
+            toolName: 'apply_tool',
+            state: 'done',
+          } satisfies AgentMessage,
+          {
+            id: 'assistant-1',
+            conversationId: options.messages[0]?.conversationId || 'conversation-1',
+            role: 'assistant',
+            message: 'Done',
+            createdAt: 4,
+            state: 'done',
+          } satisfies AgentMessage,
+        ],
+        appliedMarkdown: '# Doc\n\nChanged text.',
+        previousMarkdown: options.markdown,
+        appliedToolCallIds: ['tool-call-1'],
+        generatedFiles: [],
+        stoppedBecause: 'assistant-text',
+      }
+    }),
   }
 })
 
@@ -139,6 +157,7 @@ vi.mock('@/stores/fileSystemStore', () => ({
     getState: () => ({
       saveFile: vi.fn(),
       renameFile: vi.fn(),
+      importFile: storage.importFile,
     }),
   },
 }))
@@ -180,6 +199,7 @@ describe('ai chat store hook adapter', () => {
     storage.drafts.clear()
     storage.references.clear()
     storage.ui.clear()
+    storage.importFile.mockClear()
     vi.resetModules()
   })
 
@@ -216,9 +236,61 @@ describe('ai chat store hook adapter', () => {
     const visibleMessages = useAiChatStore.getState().visibleMessagesByConversation['conversation-1']
     expect(messages.some((message) => message.role === 'user')).toBe(true)
     expect(messages.some((message) => message.role === 'tool' || message.toolName)).toBe(true)
-    expect(visibleMessages.every((message) => message.role === 'assistant')).toBe(true)
+    expect(visibleMessages.map((message) => message.role)).toEqual(['user', 'assistant', 'assistant'])
+    expect(visibleMessages[0]?.displayMessage).toBe('润色')
     expect(messages.at(-1)?.message).toBe('Done')
-    expect(visibleMessages.at(-1)?.message).toBe('Done')
+    expect(visibleMessages[1]?.message).toBe('Done')
+    expect(visibleMessages.at(-1)?.action?.type).toBe('tool_apply')
+    expect(Array.from(storage.messages.keys())).toEqual(['conversation-1'])
+    expect(storage.messages.get('conversation-1')).toHaveLength(messages.length)
+    expect(new Set(storage.messages.get('conversation-1')?.map((message) => message.id))).toEqual(
+      new Set(messages.map((message) => message.id))
+    )
     expect(useAiChatStore.getState().isSending).toBe(false)
+  })
+
+  it('renames conversations', async () => {
+    const { useAiChatStore } = await import('@/stores/aiChatStore')
+    await useAiChatStore.getState().createConversation()
+    await useAiChatStore.getState().renameConversation('conversation-1', '新标题')
+
+    expect(useAiChatStore.getState().conversations[0]?.title).toBe('新标题')
+    expect(storage.conversations[0]?.title).toBe('新标题')
+  })
+
+  it('imports files generated by agent tools', async () => {
+    const agent = await import('@/lib/agent')
+    vi.mocked(agent.runAgentReActLoop).mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'user-1',
+          conversationId: 'conversation-1',
+          role: 'user',
+          message: 'Task type: ask\nUser request:\n生成文档\n\nSelected document text:\nNone',
+          createdAt: 1,
+          state: 'done',
+        },
+        {
+          id: 'assistant-1',
+          conversationId: 'conversation-1',
+          role: 'assistant',
+          message: '已生成',
+          createdAt: 2,
+          state: 'done',
+        },
+      ],
+      appliedMarkdown: '# Doc\n\nSelected text.',
+      previousMarkdown: '# Doc\n\nSelected text.',
+      appliedToolCallIds: [],
+      generatedFiles: [{ toolCallId: 'tool-call-generate', fileName: 'Generated.md', content: '# Generated' }],
+      stoppedBecause: 'assistant-text',
+    })
+
+    const { useAiChatStore } = await import('@/stores/aiChatStore')
+    await useAiChatStore.getState().createConversation()
+    await useAiChatStore.getState().setDraftInput('生成文档')
+    await useAiChatStore.getState().sendMessage()
+
+    expect(storage.importFile).toHaveBeenCalledWith('Generated.md', '# Generated', null)
   })
 })

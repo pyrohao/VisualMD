@@ -1,280 +1,222 @@
 'use client'
 
-/**
- * AI生成面板组件
- *
- * 提供AI文档生成功能
- * - 用户输入描述
- * - 发送到AI生成Markdown
- * - 自动保存到文件系统
- * - 显示当前厂商配置状态
- */
-
-import { useState, useEffect } from 'react'
-import { Sparkles, Send, Loader2, AlertCircle, CheckCircle, Settings } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { CheckCircle, Cpu, Eye, EyeOff, Key, Settings, TestTube, XCircle } from 'lucide-react'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
-import { useSettingsStore } from '@/stores/settingsStore'
-import { useFileSystemStore } from '@/stores/fileSystemStore'
-import { useTranslation } from '@/stores/languageStore'
+import { PRESET_PROVIDERS, useSettingsStore, type AIProvider } from '@/stores/settingsStore'
 import { createAIService } from '@/lib/ai-service'
 import { Button } from '@/components/ui/button'
-import { Textarea } from '@/components/ui/textarea'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { toast } from '@/hooks/use-toast'
 
 export function AIPanel() {
-  const [prompt, setPrompt] = useState('')
   const [mounted, setMounted] = useState(false)
-  
+  const [showApiKey, setShowApiKey] = useState(false)
+  const [isTesting, setIsTesting] = useState(false)
   const { getThemeConfig } = useThemeStore()
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
-  const { t } = useTranslation()
+  const {
+    activeProvider,
+    providerConfigs,
+    setActiveProvider,
+    updateProviderConfig,
+    getDecryptedApiKey,
+    setProviderTestStatus,
+    applyPresetProvider,
+  } = useSettingsStore()
+  const currentConfig = providerConfigs[activeProvider]
 
   useEffect(() => {
     setMounted(true)
   }, [])
 
-  // 获取翻译后的提供商名称
-  const getProviderDisplayName = (providerId: string, defaultName: string) => {
-    const names: Record<string, string> = {
-      'openai': 'OpenAI',
-      'volcengine': t('settings.volcengine') || '火山引擎',
-      'siliconflow': t('settings.siliconflow') || '硅基流动',
-      'zhipu': t('settings.zhipu') || '智谱AI',
-      'qianwen': t('settings.qianwen') || '通义千问',
-      'openrouter': 'OpenRouter',
-      'custom': t('settings.custom') || '自定义',
-    }
-    return names[providerId] || defaultName
+  const updateConfig = (key: keyof typeof currentConfig, value: unknown) => {
+    updateProviderConfig(activeProvider, { [key]: value })
   }
 
-  const {
-    activeProvider,
-    providerConfigs,
-    getActiveProviderApiKey,
-    validateActiveProvider,
-    isGenerating,
-    generatingPrompt,
-    setIsGenerating,
-    setActiveProvider: setStoreActiveProvider,
-  } = useSettingsStore()
-  
-  const { importFile } = useFileSystemStore()
-  
-  // 获取当前厂商配置
-  const currentConfig = providerConfigs[activeProvider]
-  const isConfigValid = validateActiveProvider()
-  
-  // 同步全局生成状态到本地输入框
-  useEffect(() => {
-    if (generatingPrompt) {
-      setPrompt(generatingPrompt)
-    }
-  }, [generatingPrompt])
-  
-  /**
-   * 处理生成请求
-   */
-  const handleGenerate = async () => {
-    if (!prompt.trim()) {
-      toast({
-        title: t('common.enterDescription'),
-        description: t('common.describeContent'),
-        variant: 'destructive',
-      })
+  const testConnection = async () => {
+    const apiKey = getDecryptedApiKey(activeProvider)
+    if (!currentConfig.baseUrl || !currentConfig.model || !apiKey) {
+      toast({ title: 'AI 配置不完整', variant: 'destructive' })
       return
     }
-    
-    if (!isConfigValid) {
-      toast({
-        title: t('common.aiConfigInvalid'),
-        description: t('common.configureApiFirst'),
-        variant: 'destructive',
-      })
-      return
-    }
-    
-    setIsGenerating(true, prompt.trim())
-    
+
+    setIsTesting(true)
     try {
-      // 创建AI服务实例
-      const service = createAIService({
-        ...currentConfig,
-        apiKey: getActiveProviderApiKey(),
-      })
-      
-      // 调用AI生成
-      const result = await service.generateMarkdown({
-        prompt: prompt.trim(),
-      })
-      
-      if (!result.success) {
-        throw new Error(result.error || t('toast.generateFailed'))
-      }
-      
-      // 保存到文件系统
-      importFile(result.fileName, result.content, null)
-      
-      // 清空输入
-      setPrompt('')
-      
-      // 提示成功
-      toast({
-        title: t('toast.generateSuccess'),
-        description: `已保存为: ${result.fileName}`,
-      })
-    } catch (error) {
-      toast({
-        title: t('toast.generateFailed'),
-        description: error instanceof Error ? error.message : '未知错误',
-        variant: 'destructive',
-      })
+      const service = createAIService({ ...currentConfig, apiKey })
+      const result = await service.testConnection()
+      setProviderTestStatus(activeProvider, result.success, result.message)
+      toast({ title: result.success ? '连接成功' : '连接失败', description: result.message, variant: result.success ? undefined : 'destructive' })
     } finally {
-      setIsGenerating(false, '')
+      setIsTesting(false)
     }
   }
-  
-  /**
-   * 处理快捷键
-   */
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault()
-      handleGenerate()
-    }
-  }
-  
-  /**
-   * 跳转到设置面板
-   */
-  const handleGoToSettings = () => {
-    // 使用 sidebar store 切换到设置面板
-    const { useSidebarStore } = require('@/stores/sidebarStore')
-    useSidebarStore.getState().setActivePanel('settings')
-  }
-  
+
   return (
     <div className="flex h-full flex-col" style={{ backgroundColor: themeConfig.sidebar }}>
-      {/* 头部 */}
       <div className="flex h-14 items-center border-b px-4" style={{ borderColor: themeConfig.border }}>
-        <Sparkles className="mr-2 h-5 w-5" style={{ color: themeConfig.primary }} />
+        <Settings className="mr-2 h-5 w-5" style={{ color: themeConfig.primary }} />
         <h2 className="text-sm font-semibold" style={{ color: themeConfig.heading }}>
-          {t('sidebar.aiGenerate')}
+          AI 配置
         </h2>
       </div>
-      
-      {/* 内容区域 */}
-      <div className="flex flex-1 flex-col gap-4 p-4 overflow-hidden">
-        {/* 当前厂商配置状态 */}
-        <div 
-          className="rounded-lg border p-3 flex-shrink-0"
-          style={{ 
-            backgroundColor: isConfigValid ? `${themeConfig.success}10` : `${themeConfig.error}10`,
-            borderColor: isConfigValid ? `${themeConfig.success}30` : `${themeConfig.error}30`,
-          }}
-        >
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              {isConfigValid ? (
-                <CheckCircle className="h-4 w-4" style={{ color: themeConfig.success }} />
-              ) : (
-                <AlertCircle className="h-4 w-4" style={{ color: themeConfig.error }} />
-              )}
-              <span
-                className="text-xs font-medium"
-                style={{ color: isConfigValid ? themeConfig.success : themeConfig.error }}
-              >
-                {mounted ? getProviderDisplayName(activeProvider, currentConfig.name) : currentConfig.name}
-              </span>
-            </div>
-            <button
-              onClick={handleGoToSettings}
-              className="flex items-center gap-1 rounded px-2 py-1 text-xs transition-colors hover:opacity-80"
-              style={{ 
-                backgroundColor: themeConfig.card,
-                color: themeConfig.textMuted,
-              }}
-            >
-              <Settings className="h-3 w-3" />
-              {t('sidebar.config')}
-            </button>
+
+      <div className="flex-1 overflow-y-auto p-4">
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-2">
+            {PRESET_PROVIDERS.map((provider) => {
+              const config = providerConfigs[provider.id]
+              const active = activeProvider === provider.id
+              return (
+                <button
+                  key={provider.id}
+                  type="button"
+                  onClick={() => setActiveProvider(provider.id)}
+                  className="rounded-lg border px-3 py-2 text-left text-xs transition-colors"
+                  style={{
+                    backgroundColor: active ? `${themeConfig.primary}14` : themeConfig.card,
+                    borderColor: active ? themeConfig.primary : themeConfig.border,
+                    color: active ? themeConfig.primary : themeConfig.text,
+                  }}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate">{provider.name}</span>
+                    {config.isTested ? (
+                      <CheckCircle className="h-3.5 w-3.5" style={{ color: themeConfig.success }} />
+                    ) : (
+                      <XCircle className="h-3.5 w-3.5" style={{ color: themeConfig.textMuted }} />
+                    )}
+                  </div>
+                </button>
+              )
+            })}
           </div>
-          <p 
-            className="mt-1.5 text-xs"
-            style={{ color: isConfigValid ? themeConfig.success : themeConfig.error }}
-          >
-            {isConfigValid 
-              ? `${t('sidebar.configured')} · ${t('common.model')}: ${currentConfig.model}` 
-              : t('sidebar.notConfigured')
-            }
-          </p>
-        </div>
-        
-        {/* 输入区域 - 使用绝对定位确保不挤压其他元素 */}
-        <div className="flex-1 flex flex-col gap-2 min-h-0 relative">
-          <label 
-            className="text-xs font-medium flex-shrink-0"
-            style={{ color: themeConfig.textMuted }}
-          >
-            {t('sidebar.enterDescription')}
-          </label>
-          <div className="flex-1 relative min-h-0">
-            <Textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={mounted ? t('sidebar.aiPlaceholder') : '例如：生成一份关于React Hooks的技术文档，包含useState、useEffect和useContext的使用说明和示例代码...'}
-              disabled={isGenerating}
-              className="resize-none border text-sm overflow-y-auto absolute inset-0"
-              style={{ 
-                backgroundColor: themeConfig.input,
-                borderColor: themeConfig.border,
-                color: themeConfig.text,
-              }}
-            />
-          </div>
-          <p className="text-xs flex-shrink-0" style={{ color: themeConfig.textMuted }}>
-            {t('sidebar.quickSend')}
-          </p>
-        </div>
-        
-        {/* 发送按钮 */}
-        <Button
-          onClick={handleGenerate}
-          disabled={isGenerating || !prompt.trim() || !isConfigValid}
-          className="w-full transition-all"
-          style={{ 
-            backgroundColor: isGenerating || !isConfigValid ? themeConfig.border : themeConfig.primary,
-            color: '#fff',
-            opacity: isGenerating || !isConfigValid ? 0.7 : 1,
-          }}
-        >
-          {isGenerating ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              {t('sidebar.generating')}
-            </>
-          ) : (
-            <>
-              <Send className="mr-2 h-4 w-4" />
-              {t('common.generate')}
-            </>
-          )}
-        </Button>
-        
-        {/* 生成中提示 */}
-        {isGenerating && (
-          <div 
-            className="rounded-md border p-3 text-center text-xs"
-            style={{ 
-              backgroundColor: themeConfig.card,
-              borderColor: themeConfig.border,
-              color: themeConfig.textMuted,
+
+          <div
+            className="rounded-lg border p-3 text-xs"
+            style={{
+              borderColor: currentConfig.isTested ? `${themeConfig.success}55` : themeConfig.border,
+              backgroundColor: currentConfig.isTested ? `${themeConfig.success}10` : themeConfig.card,
+              color: currentConfig.isTested ? themeConfig.success : themeConfig.textMuted,
             }}
           >
-            <p>{t('common.generatingDoc')}</p>
-            <p className="mt-1">{t('common.switchPanel')}</p>
+            {currentConfig.isTested ? '当前渠道已测试通过' : '当前渠道尚未测试通过'}
           </div>
-        )}
+
+          <div className="space-y-3 rounded-lg border p-4" style={{ borderColor: themeConfig.border, backgroundColor: themeConfig.card }}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm font-medium" style={{ color: themeConfig.heading }}>
+                <Cpu className="h-4 w-4" />
+                {currentConfig.name}
+              </div>
+              <button
+                type="button"
+                onClick={() => applyPresetProvider(activeProvider)}
+                className="text-xs"
+                style={{ color: themeConfig.primary }}
+              >
+                恢复默认
+              </button>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs" style={{ color: themeConfig.textMuted }}>API Base URL</Label>
+              <Input
+                value={currentConfig.baseUrl}
+                onChange={(event) => updateConfig('baseUrl', event.target.value)}
+                className="h-9 text-xs"
+                style={{ backgroundColor: themeConfig.input, borderColor: themeConfig.border, color: themeConfig.text }}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs" style={{ color: themeConfig.textMuted }}>API Key</Label>
+              <div className="relative">
+                <Input
+                  type={showApiKey ? 'text' : 'password'}
+                  value={getDecryptedApiKey(activeProvider)}
+                  onChange={(event) => updateConfig('apiKey', event.target.value)}
+                  className="h-9 pr-10 text-xs"
+                  style={{ backgroundColor: themeConfig.input, borderColor: themeConfig.border, color: themeConfig.text }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowApiKey((value) => !value)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2"
+                  style={{ color: themeConfig.textMuted }}
+                >
+                  {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs" style={{ color: themeConfig.textMuted }}>Model</Label>
+              <Input
+                list="ai-provider-models"
+                value={currentConfig.model}
+                onChange={(event) => updateConfig('model', event.target.value)}
+                className="h-9 text-xs"
+                style={{ backgroundColor: themeConfig.input, borderColor: themeConfig.border, color: themeConfig.text }}
+              />
+              <datalist id="ai-provider-models">
+                {(PRESET_PROVIDERS.find((provider) => provider.id === activeProvider as AIProvider)?.models || []).map((model) => (
+                  <option key={model} value={model} />
+                ))}
+              </datalist>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs" style={{ color: themeConfig.textMuted }}>Temperature</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  max="2"
+                  step="0.1"
+                  value={currentConfig.temperature}
+                  onChange={(event) => updateConfig('temperature', Number(event.target.value))}
+                  className="h-9 text-xs"
+                  style={{ backgroundColor: themeConfig.input, borderColor: themeConfig.border, color: themeConfig.text }}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs" style={{ color: themeConfig.textMuted }}>Max Tokens</Label>
+                <Input
+                  type="number"
+                  min="256"
+                  max="200000"
+                  step="1024"
+                  value={currentConfig.maxTokens}
+                  onChange={(event) => updateConfig('maxTokens', Number(event.target.value))}
+                  className="h-9 text-xs"
+                  style={{ backgroundColor: themeConfig.input, borderColor: themeConfig.border, color: themeConfig.text }}
+                />
+              </div>
+            </div>
+
+            <Button
+              type="button"
+              onClick={testConnection}
+              disabled={isTesting}
+              className="w-full"
+              style={{ backgroundColor: isTesting ? themeConfig.border : themeConfig.primary, color: themeConfig.buttonText }}
+            >
+              {isTesting ? (
+                <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+              ) : (
+                <TestTube className="mr-2 h-4 w-4" />
+              )}
+              测试连接
+            </Button>
+
+            <div className="flex items-center gap-2 text-xs" style={{ color: themeConfig.textMuted }}>
+              <Key className="h-3.5 w-3.5" />
+              密钥仅加密保存在本地浏览器。
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   )
