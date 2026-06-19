@@ -60,6 +60,14 @@ export interface AIGenerateResult {
   error?: string
 }
 
+export interface AIModelInfo {
+  id: string
+  name?: string
+  contextLength?: number
+}
+
+export type ResolvedAIEndpoint = 'chat-completions' | 'responses' | 'anthropic-messages'
+
 async function createApiError(response: Response) {
   const errorData = await response.json().catch(() => ({}))
   const message = errorData.error?.message || response.statusText
@@ -73,6 +81,65 @@ async function createApiError(response: Response) {
   }
 
   return new Error(message || `请求失败: ${response.status} ${response.statusText}`)
+}
+
+function createNetworkFetchError(error: unknown, url: string) {
+  const message = error instanceof Error ? error.message : String(error)
+  const lower = message.toLowerCase()
+
+  if (lower.includes('failed to fetch') || lower.includes('load failed') || lower.includes('networkerror')) {
+    return new Error(
+      `浏览器无法访问 AI 服务。可能是 CORS 跨域限制、网络阻断或 API Base URL 不正确。` +
+      `请确认服务端允许当前站点跨域访问，并允许 Authorization、Content-Type、POST、OPTIONS。请求地址：${url}`
+    )
+  }
+
+  return error instanceof Error ? error : new Error(message)
+}
+
+async function fetchAI(url: string, init: RequestInit) {
+  try {
+    return await fetch(url, init)
+  } catch (error) {
+    throw createNetworkFetchError(error, url)
+  }
+}
+
+function joinApiUrl(baseUrl: string, path: string) {
+  return `${baseUrl.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`
+}
+
+function extractOpenAIContent(data: any) {
+  const message = data.choices?.[0]?.message
+  return message?.content || message?.reasoning_content || ''
+}
+
+function extractOpenAIResponsesContent(data: any) {
+  if (typeof data.output_text === 'string') return data.output_text
+  if (Array.isArray(data.output)) {
+    return data.output
+      .flatMap((item: any) => Array.isArray(item?.content) ? item.content : [])
+      .map((item: any) => typeof item?.text === 'string' ? item.text : '')
+      .join('')
+  }
+  return ''
+}
+
+function extractAnthropicContent(data: any) {
+  if (typeof data.content === 'string') return data.content
+  if (Array.isArray(data.content)) {
+    return data.content
+      .map((item) => typeof item?.text === 'string' ? item.text : '')
+      .join('')
+  }
+  return ''
+}
+
+function toResponseInput(messages: AIMessage[]) {
+  return messages.map((message) => ({
+    role: message.role === 'system' ? 'developer' : message.role === 'tool' ? 'user' : message.role,
+    content: message.role === 'tool' ? `<tool>${message.content}</tool>` : message.content,
+  }))
 }
 
 /**
@@ -211,15 +278,37 @@ export class AIService {
     temperature: number
     maxTokens: number
   }): Promise<string> {
+    if (this.config.protocol === 'anthropic-compatible') {
+      return this.callAnthropicAPI(options)
+    }
+
+    if (this.config.openAIEndpoint === 'responses') {
+      return this.callOpenAIResponsesAPI(options)
+    }
+
+    if (this.config.openAIEndpoint === 'auto') {
+      try {
+        return await this.callOpenAIChatCompletionsAPI(options)
+      } catch (error) {
+        return this.callOpenAIResponsesAPI(options)
+      }
+    }
+
+    return this.callOpenAIChatCompletionsAPI(options)
+  }
+
+  private async callOpenAIChatCompletionsAPI(options: {
+    prompt?: string
+    systemPrompt?: string
+    messages?: AIMessage[]
+    temperature: number
+    maxTokens: number
+  }): Promise<string> {
     const { prompt, systemPrompt, messages, temperature, maxTokens } = options
 
-    const url = `${this.config.baseUrl}/chat/completions`
+    const url = joinApiUrl(this.config.baseUrl, '/chat/completions')
     
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${this.config.apiKey}`,
-      ...this.config.customHeaders,
-    }
+    const headers = this.createHeaders()
 
     const body = {
       model: this.config.model,
@@ -231,7 +320,7 @@ export class AIService {
       max_tokens: maxTokens,
     }
 
-    const response = await fetch(url, {
+    const response = await fetchAI(url, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
@@ -242,17 +331,127 @@ export class AIService {
     }
 
     const data = await response.json()
-    const message = data.choices?.[0]?.message
-    
-    // 兼容不同厂商的响应格式
-    // 1. 标准OpenAI格式: message.content
-    // 2. 智谱AI等: message.reasoning_content
-    const content = message?.content || message?.reasoning_content
+    const content = extractOpenAIContent(data)
 
     if (!content) {
       throw new Error('API返回内容为空')
     }
 
+    return content
+  }
+
+  private async callOpenAIResponsesAPI(options: {
+    prompt?: string
+    systemPrompt?: string
+    messages?: AIMessage[]
+    temperature: number
+    maxTokens: number
+  }): Promise<string> {
+    const { prompt, systemPrompt, messages, temperature, maxTokens } = options
+    const input = toResponseInput(messages || [
+      { role: 'system', content: systemPrompt || '' },
+      { role: 'user', content: prompt || '' },
+    ])
+
+    const url = joinApiUrl(this.config.baseUrl, '/responses')
+    const response = await fetchAI(url, {
+      method: 'POST',
+      headers: this.createHeaders(),
+      body: JSON.stringify({
+        model: this.config.model,
+        input,
+        temperature,
+        max_output_tokens: maxTokens,
+      }),
+    })
+
+    if (!response.ok) {
+      throw await createApiError(response)
+    }
+
+    const data = await response.json()
+    const content = extractOpenAIResponsesContent(data)
+    if (!content) {
+      throw new Error('API返回内容为空')
+    }
+    return content
+  }
+
+  private createHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...this.config.customHeaders,
+    }
+
+    if (this.config.authType === 'x-api-key' || this.config.protocol === 'anthropic-compatible') {
+      headers['x-api-key'] = this.config.apiKey
+      headers['anthropic-version'] = this.config.customHeaders?.['anthropic-version'] || '2023-06-01'
+      return headers
+    }
+
+    headers.Authorization = `Bearer ${this.config.apiKey}`
+    return headers
+  }
+
+  private toAnthropicMessages(messages: AIMessage[]) {
+    let system = ''
+    const converted: { role: 'user' | 'assistant'; content: string }[] = []
+
+    messages.forEach((message) => {
+      if (message.role === 'system') {
+        system = system ? `${system}\n\n${message.content}` : message.content
+        return
+      }
+
+      if (message.role === 'tool') {
+        converted.push({ role: 'user', content: `<tool>${message.content}</tool>` })
+        return
+      }
+
+      converted.push({
+        role: message.role === 'assistant' ? 'assistant' : 'user',
+        content: message.content,
+      })
+    })
+
+    return { system, messages: converted }
+  }
+
+  private async callAnthropicAPI(options: {
+    prompt?: string
+    systemPrompt?: string
+    messages?: AIMessage[]
+    temperature: number
+    maxTokens: number
+  }): Promise<string> {
+    const { prompt, systemPrompt, messages, temperature, maxTokens } = options
+    const anthropicMessages = this.toAnthropicMessages(messages || [
+      { role: 'system', content: systemPrompt || '' },
+      { role: 'user', content: prompt || '' },
+    ])
+
+    const url = joinApiUrl(this.config.baseUrl, '/messages')
+    const response = await fetchAI(url, {
+      method: 'POST',
+      headers: this.createHeaders(),
+      body: JSON.stringify({
+        model: this.config.model,
+        system: anthropicMessages.system || undefined,
+        messages: anthropicMessages.messages,
+        temperature,
+        max_tokens: maxTokens,
+      }),
+    })
+
+    if (!response.ok) {
+      throw await createApiError(response)
+    }
+
+    const data = await response.json()
+    const content = extractAnthropicContent(data)
+    if (!content) {
+      throw new Error('API返回内容为空')
+    }
     return content
   }
 
@@ -263,15 +462,37 @@ export class AIService {
     onDelta?: (delta: string, fullText: string) => void
     signal?: AbortSignal
   }): Promise<string> {
-    const { messages, temperature, maxTokens, onDelta, signal } = options
-    const url = `${this.config.baseUrl}/chat/completions`
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${this.config.apiKey}`,
-      ...this.config.customHeaders,
+    if (this.config.protocol === 'anthropic-compatible') {
+      return this.callAnthropicAPIStream(options)
     }
 
-    const response = await fetch(url, {
+    if (this.config.openAIEndpoint === 'responses') {
+      return this.callOpenAIResponsesAPIStream(options)
+    }
+
+    if (this.config.openAIEndpoint === 'auto') {
+      try {
+        return await this.callOpenAIChatCompletionsAPIStream(options)
+      } catch (error) {
+        return this.callOpenAIResponsesAPIStream(options)
+      }
+    }
+
+    return this.callOpenAIChatCompletionsAPIStream(options)
+  }
+
+  private async callOpenAIChatCompletionsAPIStream(options: {
+    messages: AIMessage[]
+    temperature: number
+    maxTokens: number
+    onDelta?: (delta: string, fullText: string) => void
+    signal?: AbortSignal
+  }): Promise<string> {
+    const { messages, temperature, maxTokens, onDelta, signal } = options
+    const url = joinApiUrl(this.config.baseUrl, '/chat/completions')
+    const headers = this.createHeaders()
+
+    const response = await fetchAI(url, {
       method: 'POST',
       headers,
       signal,
@@ -339,6 +560,205 @@ export class AIService {
     return fullText
   }
 
+  private async callOpenAIResponsesAPIStream(options: {
+    messages: AIMessage[]
+    temperature: number
+    maxTokens: number
+    onDelta?: (delta: string, fullText: string) => void
+    signal?: AbortSignal
+  }): Promise<string> {
+    const { messages, temperature, maxTokens, onDelta, signal } = options
+    const url = joinApiUrl(this.config.baseUrl, '/responses')
+    const response = await fetchAI(url, {
+      method: 'POST',
+      headers: this.createHeaders(),
+      signal,
+      body: JSON.stringify({
+        model: this.config.model,
+        input: toResponseInput(messages),
+        temperature,
+        max_output_tokens: maxTokens,
+        stream: true,
+      }),
+    })
+
+    if (!response.ok) {
+      throw await createApiError(response)
+    }
+
+    if (!response.body) {
+      return this.chatMessages({ messages, temperature, maxTokens })
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let fullText = ''
+
+    while (true) {
+      let chunk: ReadableStreamReadResult<Uint8Array>
+      try {
+        chunk = await reader.read()
+      } catch (error) {
+        throw new Error(`Stream connection interrupted: ${error instanceof Error ? error.message : 'unknown error'}`)
+      }
+      const { value, done } = chunk
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const events = buffer.split(/\r?\n\r?\n/)
+      buffer = events.pop() || ''
+
+      for (const eventBlock of events) {
+        const dataLine = eventBlock
+          .split(/\r?\n/)
+          .find((line) => line.trim().startsWith('data:'))
+        if (!dataLine) continue
+        const payload = dataLine.trim().slice(5).trim()
+        if (!payload || payload === '[DONE]') continue
+
+        try {
+          const data = JSON.parse(payload)
+          const delta = data.delta || data.text || data.output_text || ''
+          if (typeof delta === 'string' && delta) {
+            fullText += delta
+            onDelta?.(delta, fullText)
+          }
+        } catch {
+          continue
+        }
+      }
+    }
+
+    if (!fullText) {
+      throw new Error('API返回内容为空')
+    }
+
+    return fullText
+  }
+
+  private async callAnthropicAPIStream(options: {
+    messages: AIMessage[]
+    temperature: number
+    maxTokens: number
+    onDelta?: (delta: string, fullText: string) => void
+    signal?: AbortSignal
+  }): Promise<string> {
+    const { messages, temperature, maxTokens, onDelta, signal } = options
+    const anthropicMessages = this.toAnthropicMessages(messages)
+    const url = joinApiUrl(this.config.baseUrl, '/messages')
+    const response = await fetchAI(url, {
+      method: 'POST',
+      headers: this.createHeaders(),
+      signal,
+      body: JSON.stringify({
+        model: this.config.model,
+        system: anthropicMessages.system || undefined,
+        messages: anthropicMessages.messages,
+        temperature,
+        max_tokens: maxTokens,
+        stream: true,
+      }),
+    })
+
+    if (!response.ok) {
+      throw await createApiError(response)
+    }
+
+    if (!response.body) {
+      return this.chatMessages({ messages, temperature, maxTokens })
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let fullText = ''
+
+    while (true) {
+      let chunk: ReadableStreamReadResult<Uint8Array>
+      try {
+        chunk = await reader.read()
+      } catch (error) {
+        throw new Error(`Stream connection interrupted: ${error instanceof Error ? error.message : 'unknown error'}`)
+      }
+
+      const { value, done } = chunk
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const events = buffer.split(/\r?\n\r?\n/)
+      buffer = events.pop() || ''
+
+      for (const eventBlock of events) {
+        const dataLine = eventBlock
+          .split(/\r?\n/)
+          .find((line) => line.trim().startsWith('data:'))
+        if (!dataLine) continue
+
+        const payload = dataLine.trim().slice(5).trim()
+        if (!payload || payload === '[DONE]') continue
+
+        try {
+          const data = JSON.parse(payload)
+          const delta = data.delta?.text || ''
+          if (delta) {
+            fullText += delta
+            onDelta?.(delta, fullText)
+          }
+        } catch {
+          continue
+        }
+      }
+    }
+
+    if (!fullText) {
+      throw new Error('API返回内容为空')
+    }
+
+    return fullText
+  }
+
+  async listModels(): Promise<AIModelInfo[]> {
+    if (this.config.modelDiscovery.type === 'none') {
+      return []
+    }
+
+    const url = joinApiUrl(this.config.baseUrl, this.config.modelDiscovery.path || '/models')
+    const response = await fetchAI(url, {
+      method: 'GET',
+      headers: this.createHeaders(),
+    })
+
+    if (!response.ok) {
+      throw await createApiError(response)
+    }
+
+    const data = await response.json()
+    const records = Array.isArray(data.data)
+      ? data.data
+      : Array.isArray(data.models)
+        ? data.models
+        : Array.isArray(data)
+          ? data
+          : []
+
+    return records
+      .map((item: any) => {
+        const id = typeof item === 'string' ? item : item?.id || item?.name
+        if (!id || typeof id !== 'string') return null
+        return {
+          id,
+          name: typeof item?.display_name === 'string' ? item.display_name : typeof item?.name === 'string' ? item.name : id,
+          contextLength: typeof item?.context_length === 'number'
+            ? item.context_length
+            : typeof item?.context_window === 'number'
+              ? item.context_window
+              : undefined,
+        } satisfies AIModelInfo
+      })
+      .filter((item: AIModelInfo | null): item is AIModelInfo => Boolean(item))
+  }
+
   /**
    * 从生成的内容中提取文件名
    * 优先从 Metadata 的 title 字段提取
@@ -379,19 +799,62 @@ export class AIService {
   /**
    * 测试连接
    */
-  async testConnection(): Promise<{ success: boolean; message: string }> {
-    try {
-      const response = await this.callOpenAIAPI({
-        prompt: 'Hello',
-        systemPrompt: 'Reply with "OK" only.',
-        temperature: 0,
-        maxTokens: 10,
-      })
+  private async testOpenAIEndpoint(endpoint: 'chat-completions' | 'responses') {
+    const options = {
+      prompt: 'Hello',
+      systemPrompt: 'Reply with "OK" only.',
+      temperature: 0,
+      maxTokens: 10,
+    }
 
-      return {
-        success: true,
-        message: '连接成功',
+    if (endpoint === 'responses') {
+      return this.callOpenAIResponsesAPI(options)
+    }
+    return this.callOpenAIChatCompletionsAPI(options)
+  }
+
+  async testConnection(): Promise<{ success: boolean; message: string; endpoint?: ResolvedAIEndpoint }> {
+    try {
+      if (this.config.protocol === 'anthropic-compatible') {
+        await this.callAnthropicAPI({
+          prompt: 'Hello',
+          systemPrompt: 'Reply with "OK" only.',
+          temperature: 0,
+          maxTokens: 10,
+        })
+
+        return {
+          success: true,
+          message: '连接成功',
+          endpoint: 'anthropic-messages',
+        }
       }
+
+      if (this.config.openAIEndpoint === 'responses') {
+        await this.testOpenAIEndpoint('responses')
+        return {
+          success: true,
+          message: '连接成功（Responses）',
+          endpoint: 'responses',
+        }
+      }
+
+      try {
+        await this.testOpenAIEndpoint('chat-completions')
+        return {
+          success: true,
+          message: '连接成功（Chat Completions）',
+          endpoint: 'chat-completions',
+        }
+      } catch {
+        await this.testOpenAIEndpoint('responses')
+        return {
+          success: true,
+          message: '连接成功（Responses）',
+          endpoint: 'responses',
+        }
+      }
+
     } catch (error) {
       return {
         success: false,

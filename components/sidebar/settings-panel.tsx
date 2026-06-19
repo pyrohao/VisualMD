@@ -12,7 +12,7 @@
 import { useState, useEffect } from 'react'
 import { Settings, Key, Globe, Cpu, TestTube, AlertCircle, CheckCircle, Eye, EyeOff, GitBranch, FolderGit2 } from 'lucide-react'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
-import { useSettingsStore, PRESET_PROVIDERS, type AIProvider } from '@/stores/settingsStore'
+import { useSettingsStore, PROVIDER_TEMPLATES, type AIProviderProtocol } from '@/stores/settingsStore'
 import { useTranslation } from '@/stores/languageStore'
 import { useGitStore } from '@/stores/gitStore'
 import { useSidebarStore } from '@/stores/sidebarStore'
@@ -35,28 +35,16 @@ export function SettingsPanel() {
   }, [])
 
   // 获取翻译后的提供商名称
-  const getProviderDisplayName = (presetId: string, presetName: string) => {
-    if (!mounted) return presetName
-    const names: Record<string, string> = {
-      'openai': 'OpenAI',
-      'volcengine': t('settings.volcengine') || '火山引擎',
-      'siliconflow': t('settings.siliconflow') || '硅基流动',
-      'zhipu': t('settings.zhipu') || '智谱AI',
-      'qianwen': t('settings.qianwen') || '通义千问',
-      'openrouter': 'OpenRouter',
-      'custom': t('settings.custom') || '自定义',
-    }
-    return names[presetId] || presetName
-  }
-  
   const { 
-    activeProvider,
-    providerConfigs,
+    activeProviderId,
+    providers,
     setActiveProvider,
+    addCustomProvider,
     updateProviderConfig, 
     getDecryptedApiKey,
     setProviderTestStatus,
     applyPresetProvider,
+    updateProviderModels,
   } = useSettingsStore()
   
   const [showApiKey, setShowApiKey] = useState(false)
@@ -75,12 +63,12 @@ export function SettingsPanel() {
   } = useGitStore()
   
   // 获取当前厂商配置
-  const currentConfig = providerConfigs[activeProvider]
+  const currentConfig = providers.find((provider) => provider.id === activeProviderId) || providers[0]
   
   /**
    * 处理厂商选择
    */
-  const handleProviderSelect = (providerId: AIProvider) => {
+  const handleProviderSelect = (providerId: string) => {
     setActiveProvider(providerId)
   }
   
@@ -88,21 +76,21 @@ export function SettingsPanel() {
    * 处理配置更新
    */
   const handleConfigChange = (key: keyof typeof currentConfig, value: any) => {
-    updateProviderConfig(activeProvider, { [key]: value })
+    updateProviderConfig(currentConfig.id, { [key]: value })
   }
   
   /**
    * 处理API Key更新
    */
   const handleApiKeyChange = (value: string) => {
-    updateProviderConfig(activeProvider, { apiKey: value })
+    updateProviderConfig(currentConfig.id, { apiKey: value })
   }
   
   /**
    * 测试连接
    */
   const handleTestConnection = async () => {
-    const apiKey = getDecryptedApiKey(activeProvider)
+    const apiKey = getDecryptedApiKey(currentConfig.id)
     
     if (!currentConfig.baseUrl || !apiKey) {
       toast({
@@ -124,7 +112,7 @@ export function SettingsPanel() {
       const result = await service.testConnection()
       
       // 设置测试状态
-      setProviderTestStatus(activeProvider, result.success, result.message)
+      setProviderTestStatus(currentConfig.id, result.success, result.message)
       
       if (result.success) {
         toast({
@@ -138,7 +126,7 @@ export function SettingsPanel() {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : t('settings.connectionFailed')
-      setProviderTestStatus(activeProvider, false, message)
+      setProviderTestStatus(currentConfig.id, false, message)
       toast({
         title: t('settings.connectionFailed'),
         description: message,
@@ -153,11 +141,44 @@ export function SettingsPanel() {
    * 应用预设配置
    */
   const handleApplyPreset = () => {
-    applyPresetProvider(activeProvider)
+    const template = PROVIDER_TEMPLATES.find((item) => item.protocol === currentConfig.protocol)
+    applyPresetProvider(currentConfig.id, template?.id)
     toast({
       title: t('settings.restored'),
-      description: PRESET_PROVIDERS.find(p => p.id === activeProvider)?.name,
+      description: template?.name || currentConfig.name,
     })
+  }
+
+  const handleProtocolChange = (protocol: AIProviderProtocol) => {
+    updateProviderConfig(currentConfig.id, {
+      protocol,
+      authType: protocol === 'anthropic-compatible' ? 'x-api-key' : 'bearer',
+      openAIEndpoint: protocol === 'openai-compatible' ? 'auto' : currentConfig.openAIEndpoint,
+      modelDiscovery: {
+        type: protocol === 'anthropic-compatible' ? 'anthropic-models' : 'openai-models',
+        path: '/models',
+      },
+    })
+  }
+
+  const handleRefreshModels = async () => {
+    const apiKey = getDecryptedApiKey(currentConfig.id)
+    if (!currentConfig.baseUrl || !apiKey) {
+      toast({ title: t('settings.configIncomplete'), variant: 'destructive' })
+      return
+    }
+
+    try {
+      const models = await createAIService({ ...currentConfig, apiKey }).listModels()
+      updateProviderModels(currentConfig.id, models.map((model) => model.id))
+      toast({ title: `已刷新 ${models.length} 个模型` })
+    } catch (error) {
+      toast({
+        title: '模型列表刷新失败',
+        description: error instanceof Error ? error.message : '请手动填写模型名称',
+        variant: 'destructive',
+      })
+    }
   }
 
   const handleGitConnect = async () => {
@@ -199,15 +220,14 @@ export function SettingsPanel() {
             
             {/* 厂商选择标签 */}
             <div className="flex flex-wrap gap-2">
-              {PRESET_PROVIDERS.map((preset) => {
-                const config = providerConfigs[preset.id]
-                const isActive = activeProvider === preset.id
-                const isConfigured = config.isTested
+              {providers.map((provider) => {
+                const isActive = activeProviderId === provider.id
+                const isConfigured = provider.isTested
                 
                 return (
                   <button
-                    key={preset.id}
-                    onClick={() => handleProviderSelect(preset.id)}
+                    key={provider.id}
+                    onClick={() => handleProviderSelect(provider.id)}
                     className="flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-all"
                     style={{
                       borderColor: isActive ? themeConfig.primary : themeConfig.border,
@@ -215,13 +235,35 @@ export function SettingsPanel() {
                       color: isActive ? themeConfig.primary : themeConfig.text,
                     }}
                   >
-                    <span>{getProviderDisplayName(preset.id, preset.name)}</span>
+                    <span>{provider.name}</span>
                     {isConfigured && (
                       <CheckCircle className="h-3 w-3" style={{ color: themeConfig.success }} />
                     )}
                   </button>
                 )
               })}
+              <button
+                onClick={() => addCustomProvider('openai-compatible')}
+                className="flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium"
+                style={{
+                  borderColor: themeConfig.border,
+                  backgroundColor: themeConfig.card,
+                  color: themeConfig.textMuted,
+                }}
+              >
+                + OpenAI
+              </button>
+              <button
+                onClick={() => addCustomProvider('anthropic-compatible')}
+                className="flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium"
+                style={{
+                  borderColor: themeConfig.border,
+                  backgroundColor: themeConfig.card,
+                  color: themeConfig.textMuted,
+                }}
+              >
+                + Anthropic
+              </button>
             </div>
             
             {/* 当前厂商配置状态 */}
@@ -250,7 +292,7 @@ export function SettingsPanel() {
             <div className="space-y-3 rounded-lg border p-4" style={{ borderColor: themeConfig.border }}>
               <div className="flex items-center justify-between">
                 <Label className="text-xs font-medium" style={{ color: themeConfig.textMuted }}>
-                  {getProviderDisplayName(activeProvider, currentConfig.name)} {mounted ? t('common.config') : '配置'}
+                  {currentConfig.name} {mounted ? t('common.config') : '配置'}
                 </Label>
                 <button
                   onClick={handleApplyPreset}
@@ -258,6 +300,31 @@ export function SettingsPanel() {
                   style={{ color: themeConfig.primary }}
                 >
                   {mounted ? t('settings.restoreDefault') : '恢复默认'}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => handleProtocolChange('openai-compatible')}
+                  className="rounded-md border px-2 py-2 text-xs"
+                  style={{
+                    borderColor: currentConfig.protocol === 'openai-compatible' ? themeConfig.primary : themeConfig.border,
+                    backgroundColor: currentConfig.protocol === 'openai-compatible' ? `${themeConfig.primary}12` : themeConfig.input,
+                    color: currentConfig.protocol === 'openai-compatible' ? themeConfig.primary : themeConfig.text,
+                  }}
+                >
+                  OpenAI 兼容
+                </button>
+                <button
+                  onClick={() => handleProtocolChange('anthropic-compatible')}
+                  className="rounded-md border px-2 py-2 text-xs"
+                  style={{
+                    borderColor: currentConfig.protocol === 'anthropic-compatible' ? themeConfig.primary : themeConfig.border,
+                    backgroundColor: currentConfig.protocol === 'anthropic-compatible' ? `${themeConfig.primary}12` : themeConfig.input,
+                    color: currentConfig.protocol === 'anthropic-compatible' ? themeConfig.primary : themeConfig.text,
+                  }}
+                >
+                  Anthropic 兼容
                 </button>
               </div>
               
@@ -293,7 +360,7 @@ export function SettingsPanel() {
                 <div className="relative">
                   <Input
                     type={showApiKey ? 'text' : 'password'}
-                    value={getDecryptedApiKey(activeProvider)}
+                    value={getDecryptedApiKey(currentConfig.id)}
                     onChange={(e) => handleApiKeyChange(e.target.value)}
                     placeholder="sk-..."
                     className="h-9 pr-10 text-xs"
@@ -329,6 +396,7 @@ export function SettingsPanel() {
                   </Label>
                 </div>
                 <Input
+                  list="settings-ai-model-options"
                   value={currentConfig.model}
                   onChange={(e) => handleConfigChange('model', e.target.value)}
                   placeholder="model-name"
@@ -339,6 +407,18 @@ export function SettingsPanel() {
                     color: themeConfig.text,
                   }}
                 />
+                <datalist id="settings-ai-model-options">
+                  {currentConfig.models.map((model) => (
+                    <option key={model} value={model} />
+                  ))}
+                </datalist>
+                <button
+                  onClick={handleRefreshModels}
+                  className="text-xs transition-opacity hover:opacity-70"
+                  style={{ color: themeConfig.primary }}
+                >
+                  刷新模型列表
+                </button>
               </div>
             </div>
             

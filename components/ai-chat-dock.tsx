@@ -19,10 +19,12 @@ import { useTranslation } from '@/stores/languageStore'
 import { useSidebarStore } from '@/stores/sidebarStore'
 import { useAiChatStore } from '@/stores/aiChatStore'
 import { useDocumentStore } from '@/stores/documentStore'
+import { useSettingsStore } from '@/stores/settingsStore'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { toast } from '@/hooks/use-toast'
 
 type DockView = 'history' | 'conversation'
 
@@ -63,6 +65,10 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
   const { getThemeConfig } = useThemeStore()
   const { currentLanguage } = useTranslation()
   const setActivePanel = useSidebarStore((state) => state.setActivePanel)
+  const providers = useSettingsStore((state) => state.providers)
+  const activeProviderId = useSettingsStore((state) => state.activeProviderId)
+  const setActiveProvider = useSettingsStore((state) => state.setActiveProvider)
+  const updateProviderConfig = useSettingsStore((state) => state.updateProviderConfig)
   const {
     conversations,
     currentConversationId,
@@ -72,6 +78,7 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
     selectedReferenceIds,
     isLoading,
     isSending,
+    sendingConversationId,
     error,
     chatTemperature,
     chatMaxTokens,
@@ -98,6 +105,14 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
   const documentVersion = useDocumentStore((state) => state.document?.version || 0)
 
   const themeConfig = getThemeConfig()
+  const connectedProviders = useMemo(
+    () => providers.filter((provider) => provider.isTested && provider.model),
+    [providers]
+  )
+  const selectedRuntimeModel = useMemo(() => {
+    const activeProvider = connectedProviders.find((provider) => provider.id === activeProviderId)
+    return activeProvider ? `${activeProvider.id}::${activeProvider.model}` : ''
+  }, [activeProviderId, connectedProviders])
 
   useEffect(() => {
     void initialize()
@@ -135,6 +150,25 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
     void renameConversation(conversationId, editingTitle)
     setEditingConversationId(null)
     setEditingTitle('')
+  }
+  const handleChatModelChange = (value: string) => {
+    const [providerId, ...modelParts] = value.split('::')
+    const model = modelParts.join('::')
+    if (!providerId || !model) return
+
+    const provider = providers.find((item) => item.id === providerId)
+    if (!provider) return
+
+    setActiveProvider(providerId)
+    if (provider.model !== model) {
+      updateProviderConfig(providerId, { model })
+    }
+    toast({
+      title: currentLanguage === 'zh' ? '已切换模型' : 'Model switched',
+      description: currentLanguage === 'zh'
+        ? '中途切换模型可能会增加 token 消耗。'
+        : 'Switching models mid-conversation may increase token usage.',
+    })
   }
 
   return (
@@ -193,11 +227,20 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
         {view === 'history' ? (
           <div className="flex min-h-full flex-col px-4 pb-4 pt-3">
             <div className="space-y-1">
-              {conversations.map((conversation) => (
-                <button
+              {conversations.map((conversation) => {
+                const conversationSending = sendingConversationId === conversation.id
+                return (
+                <div
                   key={conversation.id}
-                  type="button"
+                  role="button"
+                  tabIndex={0}
                   onClick={() => {
+                    if (editingConversationId === conversation.id) return
+                    void openConversation(conversation.id)
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return
+                    event.preventDefault()
                     if (editingConversationId === conversation.id) return
                     void openConversation(conversation.id)
                   }}
@@ -238,10 +281,15 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
                       </div>
                     )}
                     <div className="mt-1 text-xs" style={{ color: themeConfig.textMuted }}>
-                      {conversation.model}
+                      {conversationSending
+                        ? (currentLanguage === 'zh' ? '回复中' : 'Responding')
+                        : conversation.model}
                     </div>
                   </div>
                   <div className="ml-3 flex items-center gap-2">
+                    {conversationSending && (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" style={{ color: themeConfig.primary }} />
+                    )}
                     <div className="flex-shrink-0 text-xs" style={{ color: themeConfig.textMuted }}>
                       {conversation.messageCount}
                     </div>
@@ -289,8 +337,8 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
                       <X className="h-4 w-4" />
                     </Button>
                   </div>
-                </button>
-              ))}
+                </div>
+              )})}
 
               {!conversations.length && (
                 <div
@@ -502,6 +550,31 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
                   }}
                 >
                   <div className="space-y-3">
+                    <div>
+                      <label className="text-xs" style={{ color: themeConfig.textMuted }}>
+                        {currentLanguage === 'zh' ? '模型' : 'Model'}
+                      </label>
+                      <select
+                        value={selectedRuntimeModel}
+                        onChange={(event) => handleChatModelChange(event.target.value)}
+                        className="mt-1 h-8 w-full rounded-md border px-2 text-sm outline-none"
+                        style={{ backgroundColor: themeConfig.input, borderColor: themeConfig.border, color: themeConfig.text }}
+                      >
+                        {!connectedProviders.length && (
+                          <option value="">
+                            {currentLanguage === 'zh' ? '暂无已连接模型' : 'No connected models'}
+                          </option>
+                        )}
+                        {connectedProviders.map((provider) => {
+                          const models = Array.from(new Set([provider.model, ...provider.models].filter(Boolean)))
+                          return models.map((model) => (
+                            <option key={`${provider.id}::${model}`} value={`${provider.id}::${model}`}>
+                              {provider.name} · {model}
+                            </option>
+                          ))
+                        })}
+                      </select>
+                    </div>
                     <div>
                       <label className="text-xs" style={{ color: themeConfig.textMuted }}>
                         Temperature

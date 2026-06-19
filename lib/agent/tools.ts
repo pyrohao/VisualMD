@@ -122,22 +122,54 @@ export async function executeGenerateDocumentTool(args: Record<string, unknown>,
   }
 
   const service = new AIService(context.providerConfig)
-  const result = await service.generateMarkdown({ prompt })
-  if (!result.success) {
-    return { ok: false, message: result.error || 'generate_document failed' }
-  }
+  const targetFileName = fileName || `AI生成文档-${new Date().toISOString().slice(0, 10)}.md`
+  const toolCallId = context.toolCallId || ''
+  context.onGeneratedDocumentEvent?.({ type: 'start', toolCallId, fileName: targetFileName })
 
-  return {
-    ok: true,
-    message: 'generate_document succeeded',
-    generatedFile: {
-      fileName: fileName || result.fileName,
-      content: result.content,
-    },
-    metadata: {
-      fileName: fileName || result.fileName,
-      contentLength: result.content.length,
-    },
+  try {
+    const content = await service.chatMessagesStream({
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'You are a professional Markdown document generation assistant.',
+            'Generate only the Markdown document content.',
+            'Do not include explanations, JSON, or markdown fences around the whole document.',
+            'Use the same language as the user request.',
+          ].join('\n'),
+        },
+        { role: 'user', content: prompt },
+      ],
+      signal: context.signal,
+      onDelta: (delta, fullText) => {
+        context.onGeneratedDocumentEvent?.({
+          type: 'delta',
+          toolCallId,
+          fileName: targetFileName,
+          delta,
+          content: fullText,
+        })
+      },
+    })
+
+    context.onGeneratedDocumentEvent?.({ type: 'done', toolCallId, fileName: targetFileName, content })
+    return {
+      ok: true,
+      message: 'generate_document succeeded',
+      generatedFile: {
+        fileName: targetFileName,
+        content,
+      },
+      metadata: {
+        fileName: targetFileName,
+        contentLength: content.length,
+        streamed: true,
+      },
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'generate_document failed'
+    context.onGeneratedDocumentEvent?.({ type: 'error', toolCallId, fileName: targetFileName, error: message })
+    return { ok: false, message }
   }
 }
 
@@ -158,7 +190,7 @@ export function createDefaultAgentTools() {
     {
       name: 'generate_document_tool',
       description: 'Create and save a NEW Markdown file only when the user explicitly asks to create/generate/save a new document or new file. Never use for normal chat, Q&A, summaries, explanations, or edits to the current document.',
-      parameters: '{"prompt":"string","fileName?":"string"}',
+      parameters: '{"fileName":"string","prompt":"string"}',
       execute: executeGenerateDocumentTool,
     },
   ]

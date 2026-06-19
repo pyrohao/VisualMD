@@ -71,10 +71,19 @@ export interface AgentToolResult {
   metadata?: Record<string, unknown>
 }
 
+export type AgentGeneratedDocumentEvent =
+  | { type: 'start'; toolCallId: string; fileName: string }
+  | { type: 'delta'; toolCallId: string; fileName: string; delta: string; content: string }
+  | { type: 'done'; toolCallId: string; fileName: string; content: string }
+  | { type: 'error'; toolCallId: string; fileName: string; error: string }
+
 export interface AgentToolContext {
   markdown: string
   lastFailedContext?: string | null
   providerConfig?: import('@/stores/settingsStore').ProviderConfig
+  signal?: AbortSignal
+  toolCallId?: string
+  onGeneratedDocumentEvent?: (event: AgentGeneratedDocumentEvent) => void
 }
 
 export interface AgentReferenceContext {

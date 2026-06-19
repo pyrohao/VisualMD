@@ -86,6 +86,7 @@ interface AiChatStore {
   selectedReferenceIds: string[]
   selectionHint: string | null
   sendingStatus: string | null
+  sendingConversationId: string | null
   chatTemperature: number
   chatMaxTokens: number
   chatHistoryRounds: number
@@ -221,7 +222,11 @@ function formatAgentError(error: unknown) {
     return 'AI 服务内部错误（500），请稍后重试。'
   }
 
-  if (lower.includes('network') || lower.includes('failed to fetch') || lower.includes('terminated') || lower.includes('aborted')) {
+  if (lower.includes('cors') || lower.includes('failed to fetch') || lower.includes('authorization、content-type、post、options')) {
+    return '浏览器无法访问 AI 服务，可能是 CORS 跨域限制。请在 AI 网关后台允许当前站点跨域访问，并允许 Authorization、Content-Type、POST、OPTIONS。'
+  }
+
+  if (lower.includes('network') || lower.includes('terminated') || lower.includes('aborted')) {
     return '连接中断，请检查网络或稍后重试。'
   }
 
@@ -384,6 +389,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
   selectedReferenceIds: [],
   selectionHint: null,
   sendingStatus: null,
+  sendingConversationId: null,
   chatTemperature: 0.7,
   chatMaxTokens: 4096,
   chatHistoryRounds: 10,
@@ -454,11 +460,15 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       currentConversationId: conversationId,
       messagesByConversation: {
         ...state.messagesByConversation,
-        [conversationId]: messages,
+        [conversationId]: state.sendingConversationId === conversationId && state.messagesByConversation[conversationId]?.length
+          ? state.messagesByConversation[conversationId]
+          : messages,
       },
       visibleMessagesByConversation: {
         ...state.visibleMessagesByConversation,
-        [conversationId]: getVisibleMessages(messages),
+        [conversationId]: state.sendingConversationId === conversationId && state.visibleMessagesByConversation[conversationId]?.length
+          ? state.visibleMessagesByConversation[conversationId]
+          : getVisibleMessages(messages),
       },
       referencesByConversation: {
         ...state.referencesByConversation,
@@ -758,6 +768,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
     set((state) => ({
       draftInput: '',
       isSending: true,
+      sendingConversationId: conversationId,
       sendingStatus: '正在连接 AI...',
       error: null,
       messagesByConversation: {
@@ -772,6 +783,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
 
     try {
       activeAbortController = new AbortController()
+      const streamingGeneratedFiles = new Map<string, { fileId: string; tabId: string; fileName: string }>()
       const result = await runAgentReActLoop({
         providerConfig: {
           ...providerConfig,
@@ -785,6 +797,33 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         markdown: documentStore.getCurrentMarkdown(),
         maxTurns: 5,
         signal: activeAbortController.signal,
+        onGeneratedDocumentEvent: (event) => {
+          const fileSystemStore = useFileSystemStore.getState()
+          const tabsStore = useTabsStore.getState()
+
+          if (event.type === 'start') {
+            fileSystemStore.importFile(event.fileName, '', null)
+            const fileId = useFileSystemStore.getState().currentFileId
+            if (!fileId) return
+            const tabId = tabsStore.openFileInTab(event.fileName, '', fileId)
+            streamingGeneratedFiles.set(event.toolCallId, { fileId, tabId, fileName: event.fileName })
+            set({ sendingStatus: '正在生成新文档...' })
+            return
+          }
+
+          const target = streamingGeneratedFiles.get(event.toolCallId)
+          if (!target || event.type === 'error') return
+
+          if (event.type === 'delta') {
+            set({ sendingStatus: '正在生成新文档...' })
+            return
+          }
+
+          fileSystemStore.saveFileContent(target.fileId, event.content)
+          tabsStore.updateTabContent(target.tabId, event.content)
+          tabsStore.markTabAsSaved(target.tabId, target.fileName)
+          set({ sendingStatus: '正在写入新文档...' })
+        },
         onAssistantTextDelta: (text) => {
           set((state) => ({
             sendingStatus: 'AI 正在回复...',
@@ -828,6 +867,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       }
 
       result.generatedFiles.forEach((file) => {
+        if (streamingGeneratedFiles.has(file.toolCallId)) return
         useFileSystemStore.getState().importFile(file.fileName, file.content, null)
       })
 
@@ -849,6 +889,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
 
       set((state) => ({
         isSending: false,
+        sendingConversationId: null,
         sendingStatus: null,
         messagesByConversation: {
           ...state.messagesByConversation,
@@ -874,6 +915,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       const nextMessages = [...messages, failedMessage]
       set((state) => ({
         isSending: false,
+        sendingConversationId: null,
         sendingStatus: null,
         error: failedMessage.error || 'AI request failed',
         messagesByConversation: {
@@ -892,7 +934,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
   stopSending: () => {
     activeAbortController?.abort()
     activeAbortController = null
-    set({ isSending: false, sendingStatus: null, error: '已中断 AI 请求。' })
+    set({ isSending: false, sendingConversationId: null, sendingStatus: null, error: '已中断 AI 请求。' })
   },
 
   confirmToolApply: async (messageId) => {

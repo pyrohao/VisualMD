@@ -30,6 +30,18 @@ describe('agent model', () => {
     expect(parseAgentModelResponse('```json\n{"tool":"apply_tool","arguments":{}}\n```').kind).toBe('text')
   })
 
+  it('extracts tool JSON when a model incorrectly prefixes text', () => {
+    const parsed = parseAgentModelResponse(
+      '好的，我来创建文档。\n{"tool":"generate_document_tool","arguments":{"fileName":"睡眠指南.md","prompt":"生成睡眠指南"}}'
+    )
+
+    expect(parsed.kind).toBe('tool')
+    if (parsed.kind === 'tool') {
+      expect(parsed.call.name).toBe('generate_document_tool')
+      expect(parsed.call.arguments).toEqual({ fileName: '睡眠指南.md', prompt: '生成睡眠指南' })
+    }
+  })
+
   it('splits deepseek think blocks from assistant text', () => {
     expect(splitAssistantThinking('<think>reasoning</think>\nAnswer')).toEqual({
       thinking: 'reasoning',
@@ -56,5 +68,6 @@ describe('agent model', () => {
     expect(prompt).toContain('For normal chat')
     expect(prompt).toContain('Only call generate_document_tool')
     expect(prompt).toContain('NEW Markdown document/file')
+    expect(prompt).toContain('arguments.fileName first')
   })
 })

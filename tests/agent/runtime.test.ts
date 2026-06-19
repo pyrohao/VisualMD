@@ -6,9 +6,14 @@ import type { ProviderConfig } from '@/stores/settingsStore'
 const providerConfig: ProviderConfig = {
   id: 'custom',
   name: 'Custom',
+  protocol: 'openai-compatible',
   baseUrl: 'https://example.test/v1',
   apiKey: 'test',
   model: 'test-model',
+  models: [],
+  modelDiscovery: { type: 'openai-models', path: '/models' },
+  authType: 'bearer',
+  openAIEndpoint: 'chat-completions',
   temperature: 0,
   maxTokens: 1000,
   isTested: true,
@@ -89,6 +94,37 @@ describe('agent runtime', () => {
     expect(deltas).toEqual([])
   })
 
+  it('does not stream prefixed generate-document tool text to the chat bubble', async () => {
+    vi.spyOn(AIService.prototype, 'chatMessagesStream')
+      .mockImplementationOnce(async (options) => {
+        options.onDelta?.('好的，我来创建文档。', '好的，我来创建文档。')
+        options.onDelta?.('{"tool"', '好的，我来创建文档。{"tool"')
+        return '好的，我来创建文档。\n{"tool":"generate_document_tool","arguments":{"fileName":"Guide.md","prompt":"make a guide"}}'
+      })
+      .mockResolvedValueOnce('# Guide')
+      .mockImplementationOnce(async (options) => {
+        options.onDelta?.('已生成', '已生成')
+        return '已生成'
+      })
+    const deltas: string[] = []
+    const messages: AgentMessage[] = [
+      { id: 'u1', conversationId: 'c1', role: 'user', message: 'User request:\n帮我生成一份指南', createdAt: 1 },
+    ]
+
+    const result = await runAgentReActLoop({
+      providerConfig,
+      apiKey: 'test',
+      messages,
+      tools: createDefaultAgentTools(),
+      markdown: '',
+      maxTurns: 5,
+      onAssistantTextDelta: (text) => deltas.push(text),
+    })
+
+    expect(deltas).toEqual(['已生成'])
+    expect(result.generatedFiles[0]?.fileName).toBe('Guide.md')
+  })
+
   it('executes tool calls and continues to final text', async () => {
     vi.spyOn(AIService.prototype, 'chatMessagesStream')
       .mockResolvedValueOnce('{"tool":"apply_tool","arguments":{"oldString":"old","newString":"new"}}')
@@ -143,12 +179,13 @@ describe('agent runtime', () => {
   it('executes generate_document_tool and returns generated files', async () => {
     vi.spyOn(AIService.prototype, 'chatMessagesStream')
       .mockResolvedValueOnce('{"tool":"generate_document_tool","arguments":{"prompt":"make a doc","fileName":"Agent.md"}}')
+      .mockImplementationOnce(async (options) => {
+        options.onDelta?.('# Agent', '# Agent')
+        options.onDelta?.(' Doc', '# Agent Doc')
+        return '# Agent Doc'
+      })
       .mockResolvedValueOnce('Generated')
-    vi.spyOn(AIService.prototype, 'generateMarkdown').mockResolvedValueOnce({
-      success: true,
-      content: '# Agent Doc',
-      fileName: 'Generated.md',
-    })
+    const events: any[] = []
     const messages: AgentMessage[] = [
       { id: 'u1', conversationId: 'c1', role: 'user', message: 'generate', createdAt: 1 },
     ]
@@ -160,6 +197,7 @@ describe('agent runtime', () => {
       tools: createDefaultAgentTools(),
       markdown: '',
       maxTurns: 5,
+      onGeneratedDocumentEvent: (event) => events.push(event),
     })
 
     expect(result.generatedFiles).toEqual([
@@ -168,6 +206,7 @@ describe('agent runtime', () => {
         content: '# Agent Doc',
       }),
     ])
+    expect(events.map((event) => event.type)).toEqual(['start', 'delta', 'delta', 'done'])
     expect(result.messages.find((message) => message.role === 'tool')?.message).not.toContain('# Agent Doc')
     expect(result.messages.at(-1)?.message).toBe('Generated')
   })

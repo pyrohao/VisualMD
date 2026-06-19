@@ -78,6 +78,8 @@ export function buildAgentSystemPrompt(toolDescriptions: string[], environment =
     'Return only plain text or a single JSON object.',
     'If you need a tool, return JSON only using this schema:',
     '{"tool":"tool_name","arguments":{...}}',
+    'When calling generate_document_tool, put arguments.fileName first, then arguments.prompt.',
+    'For generate_document_tool, return only the JSON object. Do not add phrases like "好的" or any explanation before or after JSON.',
     'Do not wrap JSON in markdown fences.',
     'Use tools only when the user explicitly requests a document change, recovery search, or new file creation.',
     'For normal chat, explanation, analysis, Q&A, or discussion, return plain text and do not call any tool.',
@@ -101,23 +103,73 @@ export function parseAgentModelResponse(raw: string): ParsedAgentResponse {
     return { kind: 'text', text: payload }
   }
 
-  try {
-    const parsed = JSON.parse(payload) as { tool?: unknown; arguments?: unknown }
-    if (typeof parsed.tool === 'string' && parsed.arguments && typeof parsed.arguments === 'object') {
-      return {
-        kind: 'tool',
-        call: {
-          id: '',
-          name: parsed.tool,
-          arguments: parsed.arguments as Record<string, unknown>,
-        },
-      }
+  const parsedTool = parseToolJson(payload) || extractToolJson(payload)
+  if (parsedTool) {
+    return {
+      kind: 'tool',
+      call: {
+        id: '',
+        name: parsedTool.tool,
+        arguments: parsedTool.arguments,
+      },
     }
-  } catch {
-    return { kind: 'text', text: payload }
   }
 
   return { kind: 'text', text: payload }
+}
+
+function parseToolJson(value: string) {
+  try {
+    const parsed = JSON.parse(value) as { tool?: unknown; arguments?: unknown }
+    if (typeof parsed.tool === 'string' && parsed.arguments && typeof parsed.arguments === 'object') {
+      return { tool: parsed.tool, arguments: parsed.arguments as Record<string, unknown> }
+    }
+  } catch {
+    return null
+  }
+
+  return null
+}
+
+function extractToolJson(value: string) {
+  const toolIndex = value.indexOf('"tool"')
+  if (toolIndex < 0) return null
+
+  for (let start = value.lastIndexOf('{', toolIndex); start >= 0; start = value.lastIndexOf('{', start - 1)) {
+    let depth = 0
+    let inString = false
+    let escaped = false
+
+    for (let index = start; index < value.length; index += 1) {
+      const char = value[index]
+      if (inString) {
+        if (escaped) {
+          escaped = false
+        } else if (char === '\\') {
+          escaped = true
+        } else if (char === '"') {
+          inString = false
+        }
+        continue
+      }
+
+      if (char === '"') {
+        inString = true
+        continue
+      }
+
+      if (char === '{') depth += 1
+      if (char === '}') depth -= 1
+
+      if (depth === 0) {
+        const parsed = parseToolJson(value.slice(start, index + 1))
+        if (parsed) return parsed
+        break
+      }
+    }
+  }
+
+  return null
 }
 
 export function splitAssistantThinking(raw: string) {

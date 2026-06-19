@@ -44,22 +44,30 @@ describe('agent tools', () => {
   })
 
   it('generates markdown documents as a tool result', async () => {
-    vi.spyOn(AIService.prototype, 'generateMarkdown').mockResolvedValueOnce({
-      success: true,
-      content: '# Generated',
-      fileName: 'Generated.md',
+    vi.spyOn(AIService.prototype, 'chatMessagesStream').mockImplementationOnce(async (options) => {
+      options.onDelta?.('# ', '# ')
+      options.onDelta?.('Generated', '# Generated')
+      return '# Generated'
     })
+    const events: any[] = []
 
     const result = await executeGenerateDocumentTool(
-      { prompt: 'make a doc' },
+      { prompt: 'make a doc', fileName: 'Generated.md' },
       {
         markdown: '',
+        toolCallId: 'tool-call-1',
+        onGeneratedDocumentEvent: (event) => events.push(event),
         providerConfig: {
           id: 'custom',
           name: 'Custom',
+          protocol: 'openai-compatible',
           baseUrl: 'https://example.test/v1',
           apiKey: 'test',
           model: 'test',
+          models: [],
+          modelDiscovery: { type: 'openai-models', path: '/models' },
+          authType: 'bearer',
+          openAIEndpoint: 'chat-completions',
           temperature: 0,
           maxTokens: 1000,
           isTested: true,
@@ -69,5 +77,7 @@ describe('agent tools', () => {
 
     expect(result.ok).toBe(true)
     expect(result.generatedFile?.fileName).toBe('Generated.md')
+    expect(result.generatedFile?.content).toBe('# Generated')
+    expect(events.map((event) => event.type)).toEqual(['start', 'delta', 'delta', 'done'])
   })
 })

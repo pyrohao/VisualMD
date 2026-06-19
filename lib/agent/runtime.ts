@@ -2,7 +2,7 @@ import { nanoid } from 'nanoid'
 import type { ProviderConfig } from '@/stores/settingsStore'
 import { createAIService } from '@/lib/ai-service'
 import { buildAgentSystemPrompt, buildAgentTranscript, parseAgentModelResponse } from './model'
-import type { AgentMessage, AgentToolContext, AgentToolResult } from './types'
+import type { AgentGeneratedDocumentEvent, AgentMessage, AgentToolContext, AgentToolResult } from './types'
 import type { AgentToolDefinition } from './tools'
 
 export interface AgentRuntimeTurnOptions {
@@ -13,6 +13,7 @@ export interface AgentRuntimeTurnOptions {
   markdown: string
   maxTurns?: number
   onAssistantTextDelta?: (text: string) => void
+  onGeneratedDocumentEvent?: (event: AgentGeneratedDocumentEvent) => void
   signal?: AbortSignal
 }
 
@@ -92,6 +93,11 @@ function shouldStreamToUser(fullText: string) {
   return Boolean(trimmed) && !trimmed.startsWith('{') && !trimmed.startsWith('[') && !trimmed.startsWith('```')
 }
 
+function likelyRequestsDocumentGeneration(messages: AgentMessage[]) {
+  const latestUser = [...messages].reverse().find((message) => message.role === 'user')?.message || ''
+  return /生成|创建|新建|写一份|起草|create|generate|draft|new\s+(document|file)/i.test(latestUser)
+}
+
 export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promise<AgentRuntimeTurnResult> {
   const conversationId = options.messages[0]?.conversationId || ''
   const service = createAIService(options.providerConfig)
@@ -105,6 +111,7 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
   let markdown = options.markdown
   let stopReason: AgentRuntimeTurnResult['stoppedBecause'] = 'tool-limit'
   let lastFailedContext: string | null = null
+  const suppressFirstTurnAssistantStream = likelyRequestsDocumentGeneration(options.messages)
 
   for (let turn = 0; turn < maxTurns; turn += 1) {
     if (options.signal?.aborted) {
@@ -119,6 +126,10 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
       ? await service.chatMessagesStream({
           messages: requestMessages,
           onDelta: (_delta, fullText) => {
+            if (turn === 0 && suppressFirstTurnAssistantStream) {
+              return
+            }
+
             if (!options.onAssistantTextDelta || !shouldStreamToUser(fullText)) {
               return
             }
@@ -194,6 +205,9 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
       markdown,
       lastFailedContext,
       providerConfig: options.providerConfig,
+      signal: options.signal,
+      toolCallId: toolCall.id,
+      onGeneratedDocumentEvent: options.onGeneratedDocumentEvent,
     })
 
     if (!toolResult.ok && toolCall.name === 'apply_tool') {

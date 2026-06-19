@@ -9,14 +9,24 @@ const storage = vi.hoisted(() => ({
   references: new Map<string, any[]>(),
   ui: new Map<string, string>(),
   importFile: vi.fn(),
+  saveFileContent: vi.fn(),
+  openFileInTab: vi.fn(),
+  updateTabContent: vi.fn(),
+  markTabAsSaved: vi.fn(),
+  currentFileId: null as string | null,
 }))
 
 const providerConfig: ProviderConfig = {
   id: 'custom',
   name: 'Custom',
+  protocol: 'openai-compatible',
   baseUrl: 'https://example.test/v1',
   apiKey: 'test',
   model: 'test-model',
+  models: [],
+  modelDiscovery: { type: 'openai-models', path: '/models' },
+  authType: 'bearer',
+  openAIEndpoint: 'chat-completions',
   temperature: 0,
   maxTokens: 1000,
   isTested: true,
@@ -146,8 +156,10 @@ vi.mock('@/stores/tabsStore', () => ({
   useTabsStore: {
     getState: () => ({
       getActiveTab: () => ({ id: 'tab-1', fileId: 'file-1', sourceType: 'local' }),
-      updateTabContent: vi.fn(),
+      openFileInTab: storage.openFileInTab,
+      updateTabContent: storage.updateTabContent,
       markTabAsModified: vi.fn(),
+      markTabAsSaved: storage.markTabAsSaved,
     }),
   },
 }))
@@ -155,7 +167,9 @@ vi.mock('@/stores/tabsStore', () => ({
 vi.mock('@/stores/fileSystemStore', () => ({
   useFileSystemStore: {
     getState: () => ({
+      currentFileId: storage.currentFileId,
       saveFile: vi.fn(),
+      saveFileContent: storage.saveFileContent,
       renameFile: vi.fn(),
       importFile: storage.importFile,
     }),
@@ -199,7 +213,16 @@ describe('ai chat store hook adapter', () => {
     storage.drafts.clear()
     storage.references.clear()
     storage.ui.clear()
+    storage.currentFileId = null
     storage.importFile.mockClear()
+    storage.saveFileContent.mockClear()
+    storage.openFileInTab.mockClear()
+    storage.updateTabContent.mockClear()
+    storage.markTabAsSaved.mockClear()
+    storage.importFile.mockImplementation(() => {
+      storage.currentFileId = 'generated-file-1'
+    })
+    storage.openFileInTab.mockReturnValue('generated-tab-1')
     vi.resetModules()
   })
 
@@ -292,5 +315,54 @@ describe('ai chat store hook adapter', () => {
     await useAiChatStore.getState().sendMessage()
 
     expect(storage.importFile).toHaveBeenCalledWith('Generated.md', '# Generated', null)
+  })
+
+  it('streams generated document tool output into a new file and tab', async () => {
+    const agent = await import('@/lib/agent')
+    vi.mocked(agent.runAgentReActLoop).mockImplementationOnce(async (options: any) => {
+      options.onGeneratedDocumentEvent?.({ type: 'start', toolCallId: 'tool-call-generate', fileName: 'Live.md' })
+      options.onGeneratedDocumentEvent?.({
+        type: 'delta',
+        toolCallId: 'tool-call-generate',
+        fileName: 'Live.md',
+        delta: '# Live',
+        content: '# Live',
+      })
+      options.onGeneratedDocumentEvent?.({
+        type: 'done',
+        toolCallId: 'tool-call-generate',
+        fileName: 'Live.md',
+        content: '# Live',
+      })
+      return {
+        messages: [
+          ...options.messages,
+          {
+            id: 'assistant-1',
+            conversationId: 'conversation-1',
+            role: 'assistant',
+            message: '已生成',
+            createdAt: 2,
+            state: 'done',
+          },
+        ],
+        appliedMarkdown: '# Doc\n\nSelected text.',
+        previousMarkdown: '# Doc\n\nSelected text.',
+        appliedToolCallIds: [],
+        generatedFiles: [{ toolCallId: 'tool-call-generate', fileName: 'Live.md', content: '# Live' }],
+        stoppedBecause: 'assistant-text',
+      }
+    })
+
+    const { useAiChatStore } = await import('@/stores/aiChatStore')
+    await useAiChatStore.getState().createConversation()
+    await useAiChatStore.getState().setDraftInput('生成一个新文档')
+    await useAiChatStore.getState().sendMessage()
+
+    expect(storage.importFile).toHaveBeenCalledWith('Live.md', '', null)
+    expect(storage.openFileInTab).toHaveBeenCalledWith('Live.md', '', 'generated-file-1')
+    expect(storage.saveFileContent).toHaveBeenCalledWith('generated-file-1', '# Live')
+    expect(storage.updateTabContent).toHaveBeenCalledWith('generated-tab-1', '# Live')
+    expect(storage.importFile).toHaveBeenCalledTimes(1)
   })
 })
