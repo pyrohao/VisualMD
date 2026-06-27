@@ -389,6 +389,7 @@ export function MarkdownEditor() {
   const aiDragStateRef = useRef<{
     startX: number
     startWidth: number
+    startRightWidth: number
     pointerId: number
   } | null>(null)
 
@@ -905,12 +906,23 @@ export function MarkdownEditor() {
 
       const totalWidth = container.getBoundingClientRect().width
       const centerPanelMinWidth = getCenterPanelMinWidth(totalWidth)
+      const rightPanelMinWidth = rightCollapsed ? 0 : getRightPanelMinWidth(totalWidth)
       const maxWidth = Math.max(
         MIN_AI_DOCK_WIDTH,
-        totalWidth - leftPanelWidth - visiblePreviewWidth - centerPanelMinWidth
+        totalWidth - leftPanelWidth - rightPanelMinWidth - centerPanelMinWidth
       )
       const nextWidth = dragState.startWidth + (dragState.startX - event.clientX)
       const clampedWidth = Math.min(Math.max(MIN_AI_DOCK_WIDTH, nextWidth), maxWidth)
+
+      if (!rightCollapsed) {
+        const totalRightAvailable = Math.max(
+          rightPanelMinWidth,
+          totalWidth - leftPanelWidth - centerPanelMinWidth
+        )
+        const nextRightWidth = Math.max(rightPanelMinWidth, totalRightAvailable - clampedWidth)
+        setRightPanelWidth(nextRightWidth)
+      }
+
       setAiDockWidth(clampedWidth)
     }
 
@@ -940,7 +952,7 @@ export function MarkdownEditor() {
       window.removeEventListener('blur', handleWindowBlur)
       window.removeEventListener('blur', handleAiWindowBlur)
     }
-  }, [clearAiResizeState, clearResizeState, leftPanelWidth, setAiDockWidth, setPanelWidth, visiblePreviewWidth])
+  }, [clearAiResizeState, clearResizeState, leftPanelWidth, rightCollapsed, setAiDockWidth, setPanelWidth])
 
   useEffect(() => {
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -988,6 +1000,7 @@ export function MarkdownEditor() {
     aiDragStateRef.current = {
       startX: event.clientX,
       startWidth: aiDockWidth,
+      startRightWidth: rightPanelWidth,
       pointerId: event.pointerId,
     }
     const body = globalThis.document?.body ?? null
@@ -996,7 +1009,7 @@ export function MarkdownEditor() {
       body.style.userSelect = 'none'
     }
     setIsAiDockResizing(true)
-  }, [aiDockWidth])
+  }, [aiDockWidth, rightPanelWidth])
 
   return (
     <div className="flex h-screen flex-col" style={{ backgroundColor: safeThemeConfig.background }}>

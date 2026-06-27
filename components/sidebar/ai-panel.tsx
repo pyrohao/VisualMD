@@ -25,20 +25,18 @@ export function AIPanel() {
     setActiveProvider,
     addCustomProvider,
     removeProvider,
+    selectOrCreatePresetProvider,
     updateProviderConfig,
     updateProviderModels,
     getDecryptedApiKey,
     setProviderTestStatus,
-    applyPresetProvider,
   } = useSettingsStore()
   const currentConfig = providers.find((provider) => provider.id === activeProviderId) || providers[0]
   const connectedProviders = providers.filter((provider) => provider.isTested)
   const presetTemplates = PROVIDER_TEMPLATES.filter((template) => !template.id.startsWith('custom-'))
-  const selectedTemplate = presetTemplates.find((template) =>
-    template.name === currentConfig.name &&
-    template.baseUrl === currentConfig.baseUrl &&
-    template.protocol === currentConfig.protocol
-  )
+  const selectedTemplate = currentConfig.templateId
+    ? presetTemplates.find((template) => template.id === currentConfig.templateId)
+    : undefined
   const isSavedCustomProvider = !selectedTemplate && !isCustomChannel
 
   useEffect(() => {
@@ -54,7 +52,7 @@ export function AIPanel() {
   }
 
   const selectTemplate = (templateId: string) => {
-    applyPresetProvider(currentConfig.id, templateId)
+    selectOrCreatePresetProvider(templateId)
     setIsCustomChannel(false)
     setCustomPreviousProviderId(null)
   }

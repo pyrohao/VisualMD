@@ -249,6 +249,29 @@ describe('ai chat store hook adapter', () => {
     expect(storage.references.get('conversation-1')).toHaveLength(1)
   })
 
+  it('keeps one pending selection candidate until it is added', async () => {
+    const { useAiChatStore } = await import('@/stores/aiChatStore')
+    await useAiChatStore.getState().createConversation()
+
+    await useAiChatStore.getState().addEditorSelectionReference(7, 20, '# Doc\n\nSelected text.', 1)
+    const firstCandidate = useAiChatStore.getState().selectionCandidate
+    expect(firstCandidate?.expectedText).toBe('Selected text')
+    expect(useAiChatStore.getState().selectionHintType).toBe('candidate')
+
+    await useAiChatStore.getState().addEditorSelectionReference(2, 5, '# Doc\n\nSelected text.', 1)
+    const secondCandidate = useAiChatStore.getState().selectionCandidate
+    expect(secondCandidate?.expectedText).toBe('Doc')
+    expect(secondCandidate?.expectedText).not.toBe(firstCandidate?.expectedText)
+    expect(useAiChatStore.getState().referencesByConversation['conversation-1']).toHaveLength(0)
+
+    const committed = await useAiChatStore.getState().commitSelectionCandidate()
+    expect(committed).toBe(true)
+    expect(useAiChatStore.getState().selectionCandidate).toBeNull()
+    expect(useAiChatStore.getState().selectionHintType).toBe('status')
+    expect(useAiChatStore.getState().referencesByConversation['conversation-1']).toHaveLength(1)
+    expect(useAiChatStore.getState().referencesByConversation['conversation-1']?.[0]?.expectedText).toBe('Doc')
+  })
+
   it('sends user messages through the agent runtime', async () => {
     const { useAiChatStore } = await import('@/stores/aiChatStore')
     await useAiChatStore.getState().createConversation()

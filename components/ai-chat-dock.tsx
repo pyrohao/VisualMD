@@ -5,7 +5,9 @@ import {
   AlertCircle,
   ArrowUp,
   Check,
+  ChevronDown,
   ChevronLeft,
+  ChevronRight,
   Loader2,
   MoreHorizontal,
   PencilLine,
@@ -62,6 +64,7 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
   const [editingConversationId, setEditingConversationId] = useState<string | null>(null)
   const [editingTitle, setEditingTitle] = useState('')
   const [showChatSettings, setShowChatSettings] = useState(false)
+  const [referencesExpanded, setReferencesExpanded] = useState(false)
   const { getThemeConfig } = useThemeStore()
   const { currentLanguage } = useTranslation()
   const setActivePanel = useSidebarStore((state) => state.setActivePanel)
@@ -84,6 +87,7 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
     chatMaxTokens,
     chatHistoryRounds,
     selectionHint,
+    selectionHintType,
     initialize,
     openConversation,
     leaveConversation,
@@ -124,13 +128,13 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
   }, [documentVersion, refreshReferenceStaleState])
 
   useEffect(() => {
-    if (!selectionHint) return
+    if (!selectionHint || selectionHintType !== 'status') return
     const timer = window.setTimeout(() => {
       clearSelectionHint()
     }, 2200)
 
     return () => window.clearTimeout(timer)
-  }, [clearSelectionHint, selectionHint])
+  }, [clearSelectionHint, selectionHint, selectionHintType])
 
   const view: DockView = currentConversationId ? 'conversation' : 'history'
   const currentMessages = currentConversationId ? visibleMessagesByConversation[currentConversationId] || [] : []
@@ -142,6 +146,17 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
     },
     [currentConversationId, referencesByConversation, selectedReferenceIds]
   )
+  const getReferencePreviewText = (value: string) => {
+    const normalized = value
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line && !/^[-*_]{3,}$/.test(line))
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    const preview = normalized || (currentLanguage === 'zh' ? '空白选区' : 'Empty selection')
+    return preview.length > 15 ? `${preview.slice(0, 15)}...` : preview
+  }
   const submitMessage = () => {
     if (!draftInput.trim() || isSending || isLoading) return
     void sendMessage()
@@ -225,7 +240,7 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
 
       <ScrollArea className="min-h-0 flex-1">
         {view === 'history' ? (
-          <div className="flex min-h-full flex-col px-4 pb-4 pt-3">
+          <div className="flex min-h-full min-w-0 flex-col px-4 pb-4 pt-3">
             <div className="space-y-1">
               {conversations.map((conversation) => {
                 const conversationSending = sendingConversationId === conversation.id
@@ -244,13 +259,13 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
                     if (editingConversationId === conversation.id) return
                     void openConversation(conversation.id)
                   }}
-                  className="flex w-full items-center justify-between rounded-xl px-2 py-2 text-left transition-colors"
+                  className="flex w-full min-w-0 items-center rounded-xl px-2 py-2 text-left transition-colors"
                   style={{
                     backgroundColor:
                       currentConversationId === conversation.id ? `${themeConfig.primary}10` : 'transparent',
                   }}
                 >
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
                     {editingConversationId === conversation.id ? (
                       <input
                         value={editingTitle}
@@ -267,7 +282,7 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
                           }
                         }}
                         onClick={(event) => event.stopPropagation()}
-                        className="w-full rounded-md border px-2 py-1 text-[15px] outline-none"
+                        className="w-full min-w-0 rounded-md border px-2 py-1 text-[15px] outline-none"
                         style={{
                           color: themeConfig.text,
                           borderColor: themeConfig.border,
@@ -280,13 +295,13 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
                         {conversation.title}
                       </div>
                     )}
-                    <div className="mt-1 text-xs" style={{ color: themeConfig.textMuted }}>
-                      {conversationSending
-                        ? (currentLanguage === 'zh' ? '回复中' : 'Responding')
-                        : conversation.model}
-                    </div>
+                    {conversationSending && (
+                      <div className="mt-1 text-xs" style={{ color: themeConfig.textMuted }}>
+                        {currentLanguage === 'zh' ? '回复中' : 'Responding'}
+                      </div>
+                    )}
                   </div>
-                  <div className="ml-3 flex items-center gap-2">
+                  <div className="ml-2 flex w-[84px] shrink-0 items-center justify-end gap-0.5">
                     {conversationSending && (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" style={{ color: themeConfig.primary }} />
                     )}
@@ -298,7 +313,7 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
                         type="button"
                         variant="ghost"
                         size="icon"
-                        className="h-7 w-7 rounded-md hover:bg-transparent focus-visible:ring-0"
+                        className="h-7 w-6 rounded-md hover:bg-transparent focus-visible:ring-0"
                         onClick={(event) => {
                           event.stopPropagation()
                           submitRename(conversation.id)
@@ -312,7 +327,7 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
                         type="button"
                         variant="ghost"
                         size="icon"
-                        className="h-7 w-7 rounded-md hover:bg-transparent focus-visible:ring-0"
+                        className="h-7 w-6 rounded-md hover:bg-transparent focus-visible:ring-0"
                         onClick={(event) => {
                           event.stopPropagation()
                           setEditingConversationId(conversation.id)
@@ -327,7 +342,7 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
                       type="button"
                       variant="ghost"
                       size="icon"
-                      className="h-7 w-7 rounded-md hover:bg-transparent focus-visible:ring-0"
+                      className="h-7 w-6 rounded-md hover:bg-transparent focus-visible:ring-0"
                       onClick={(event) => {
                         event.stopPropagation()
                         void removeConversation(conversation.id)
@@ -353,8 +368,8 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
             </div>
           </div>
         ) : (
-          <div className="flex min-h-full flex-col px-4 pb-4 pt-3">
-            {selectionHint && (
+          <div className="flex min-h-full min-w-0 flex-col px-4 pb-4 pt-3">
+            {selectionHint && selectionHintType === 'status' && (
               <div
                 className="mb-3 rounded-xl border px-3 py-2 text-xs leading-5"
                 style={{
@@ -368,61 +383,78 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
             )}
 
             {!!selectedReferences.length && (
-              <div className="mb-4 space-y-2">
-                {selectedReferences.map((reference) => (
+              <div
+                className="mb-4 w-full max-w-full overflow-hidden rounded-xl border"
+                style={{ borderColor: themeConfig.border, backgroundColor: themeConfig.card }}
+              >
+                <button
+                  type="button"
+                  className="flex h-11 w-full max-w-full items-center overflow-hidden px-3 text-left"
+                  onClick={() => setReferencesExpanded((value) => !value)}
+                >
+                  <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+                    {referencesExpanded ? (
+                      <ChevronDown className="h-4 w-4 shrink-0" style={{ color: themeConfig.textMuted }} />
+                    ) : (
+                      <ChevronRight className="h-4 w-4 shrink-0" style={{ color: themeConfig.textMuted }} />
+                    )}
+                    <span className="shrink-0 text-xs font-medium" style={{ color: themeConfig.heading }}>
+                      {currentLanguage === 'zh' ? '引用' : 'References'}
+                    </span>
+                    <span className="shrink-0 rounded-full px-2 py-0.5 text-[11px]" style={{ backgroundColor: `${themeConfig.primary}12`, color: themeConfig.primary }}>
+                      {selectedReferences.length}
+                    </span>
+                    <span className="min-w-0 truncate text-xs" style={{ color: themeConfig.textMuted }}>
+                      {selectedReferences.map((reference) => getReferencePreviewText(reference.expectedText)).join(' / ')}
+                    </span>
+                  </div>
+                </button>
+
+                {referencesExpanded && (
                   <div
-                    key={reference.id}
-                    className="rounded-2xl border px-3 py-3"
-                    style={{
-                      borderColor: reference.stale
-                        ? themeConfig.error
-                        : reference.locked
-                          ? themeConfig.primary
-                          : themeConfig.border,
-                      backgroundColor: themeConfig.card,
-                    }}
+                    className="max-h-44 w-full max-w-full space-y-1 overflow-y-auto overflow-x-hidden border-t p-2"
+                    style={{ borderColor: themeConfig.border }}
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="truncate text-xs font-medium" style={{ color: themeConfig.heading }}>
-                          {reference.anchorPath.join(' / ') || (currentLanguage === 'zh' ? '根块' : 'Root')}
-                        </div>
-                        <div className="mt-1 text-xs leading-5" style={{ color: themeConfig.textMuted }}>
-                          {reference.excerpt}
-                        </div>
-                        <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]" style={{ color: themeConfig.textMuted }}>
-                          <span>{reference.blockType}</span>
-                          <span>{reference.blockCount} blocks</span>
+                    {selectedReferences.map((reference) => (
+                      <div
+                        key={reference.id}
+                        className="flex h-9 w-full max-w-full min-w-0 items-center gap-2 overflow-hidden rounded-lg border px-2"
+                        style={{
+                          borderColor: reference.stale
+                            ? themeConfig.error
+                            : reference.locked
+                              ? themeConfig.primary
+                              : themeConfig.border,
+                          backgroundColor: themeConfig.background,
+                        }}
+                      >
+                        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+                          <span className="min-w-0 truncate text-xs font-medium" style={{ color: themeConfig.heading }}>
+                            {getReferencePreviewText(reference.expectedText)}
+                          </span>
                           {reference.locked && (
-                            <Badge variant="outline" style={{ borderColor: themeConfig.primary, color: themeConfig.primary }}>
-                              {currentLanguage === 'zh' ? '已锁定' : 'Locked'}
+                            <Badge variant="outline" className="h-4 shrink-0 px-1 text-[10px]" style={{ borderColor: themeConfig.primary, color: themeConfig.primary }}>
+                              {currentLanguage === 'zh' ? '锁定' : 'Locked'}
                             </Badge>
                           )}
                           {reference.stale && (
-                            <Badge variant="outline" style={{ borderColor: themeConfig.error, color: themeConfig.error }}>
-                              {currentLanguage === 'zh' ? '已失效' : 'Stale'}
-                            </Badge>
+                            <AlertCircle className="h-3.5 w-3.5 shrink-0" style={{ color: themeConfig.error }} />
                           )}
                         </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {reference.stale && (
-                          <AlertCircle className="h-4 w-4" style={{ color: themeConfig.error }} />
-                        )}
                         <Button
                           type="button"
                           variant="ghost"
                           size="icon"
-                          className="h-7 w-7 rounded-md hover:bg-transparent focus-visible:ring-0"
+                          className="h-7 w-7 shrink-0 rounded-md hover:bg-transparent focus-visible:ring-0"
                           onClick={() => void removeReference(reference.id)}
                           style={{ color: themeConfig.textMuted, backgroundColor: 'transparent' }}
                         >
                           <X className="h-4 w-4" />
                         </Button>
                       </div>
-                    </div>
+                    ))}
                   </div>
-                ))}
+                )}
               </div>
             )}
 

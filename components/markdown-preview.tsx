@@ -919,9 +919,11 @@ export function MarkdownPreview() {
           >
             <div className="min-w-0 text-sm" style={{ color: themeConfig.textMuted }}>
               {selectionCandidate
-                ? currentLanguage === 'zh'
-                  ? '已选择段落，点击加入对话或按 Ctrl+L'
-                  : 'Block selected. Add to chat or press Ctrl+L'
+                ? selectionHint || (
+                    currentLanguage === 'zh'
+                      ? '已选择段落，点击加入对话或按 Ctrl+L'
+                      : 'Block selected. Add to chat or press Ctrl+L'
+                  )
                 : selectionHint}
             </div>
             {selectionCandidate && (

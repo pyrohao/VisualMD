@@ -85,6 +85,7 @@ interface AiChatStore {
   draftInput: string
   selectedReferenceIds: string[]
   selectionHint: string | null
+  selectionHintType: 'candidate' | 'status' | null
   sendingStatus: string | null
   sendingConversationId: string | null
   chatTemperature: number
@@ -388,6 +389,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
   draftInput: '',
   selectedReferenceIds: [],
   selectionHint: null,
+  selectionHintType: null,
   sendingStatus: null,
   sendingConversationId: null,
   chatTemperature: 0.7,
@@ -484,13 +486,15 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       selectedReferenceIds: draft?.selectedReferenceIds || [],
       taskType: (draft?.taskType as AiDocTaskType) || 'ask',
       selectionCandidate: null,
+      selectionHint: null,
+      selectionHintType: null,
       error: null,
     }))
     await saveAgentUiState('last_open_conversation_id', conversationId)
   },
 
   leaveConversation: async () => {
-    set({ currentConversationId: null, selectionCandidate: null })
+    set({ currentConversationId: null, selectionCandidate: null, selectionHint: null, selectionHintType: null })
     await saveAgentUiState('last_open_conversation_id', '')
   },
 
@@ -522,6 +526,8 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       draftsByConversation: { ...state.draftsByConversation, [id]: draft },
       selectedReferenceIds: [],
       selectionCandidate: null,
+      selectionHint: null,
+      selectionHintType: null,
     }))
 
     return id
@@ -549,6 +555,9 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         draftsByConversation: nextDrafts,
         draftInput: currentConversationId ? nextDrafts[currentConversationId]?.inputText || '' : '',
         selectedReferenceIds: currentConversationId ? nextDrafts[currentConversationId]?.selectedReferenceIds || [] : [],
+        selectionCandidate: null,
+        selectionHint: null,
+        selectionHintType: null,
       }
     })
   },
@@ -621,19 +630,28 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       const currentReferences = currentConversationId ? state.referencesByConversation[currentConversationId] || [] : []
       const currentFingerprint = state.selectionCandidate ? getReferenceFingerprint(state.selectionCandidate) : null
       const nextFingerprint = getReferenceFingerprint(snapshot)
+      const isDuplicate = hasDuplicateReference(snapshot, currentReferences)
 
-      if (currentFingerprint === nextFingerprint || hasDuplicateReference(snapshot, currentReferences)) {
+      if (isDuplicate) {
+        return {
+          selectionCandidate: null,
+          selectionHint: formatDuplicateHint(),
+          selectionHintType: 'status',
+        }
+      }
+
+      if (currentFingerprint === nextFingerprint) {
         return {
           selectionCandidate: snapshot,
-          selectionHint: hasDuplicateReference(snapshot, currentReferences)
-            ? formatDuplicateHint()
-            : formatCandidateHint(snapshot),
+          selectionHint: formatCandidateHint(snapshot),
+          selectionHintType: 'candidate',
         }
       }
 
       return {
         selectionCandidate: snapshot,
         selectionHint: formatCandidateHint(snapshot),
+        selectionHintType: 'candidate',
       }
     })
   },
@@ -654,7 +672,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
           })
     if (!snapshot) return
 
-    set({ selectionCandidate: snapshot, selectionHint: formatCandidateHint(snapshot) })
+    set({ selectionCandidate: snapshot, selectionHint: formatCandidateHint(snapshot), selectionHintType: 'candidate' })
   },
 
   commitSelectionCandidate: async () => {
@@ -666,7 +684,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
 
     const currentReferences = get().referencesByConversation[conversationId] || []
     if (hasDuplicateReference(snapshot, currentReferences)) {
-      set({ selectionCandidate: null, selectionHint: formatDuplicateHint() })
+      set({ selectionCandidate: null, selectionHint: formatDuplicateHint(), selectionHintType: 'status' })
       useAiDockStore.getState().open()
       return false
     }
@@ -684,6 +702,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         selectedReferenceIds,
         selectionCandidate: null,
         selectionHint: formatAddedSelectionHint(snapshot),
+        selectionHintType: 'status',
       }
     })
 
@@ -693,7 +712,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
   },
 
   clearSelectionCandidate: () => {
-    set({ selectionCandidate: null })
+    set({ selectionCandidate: null, selectionHint: null, selectionHintType: null })
   },
 
   removeReference: async (referenceId) => {
@@ -998,7 +1017,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
   },
 
   clearSelectionHint: () => {
-    set({ selectionHint: null })
+    set({ selectionHint: null, selectionHintType: null })
   },
 
   refreshReferenceStaleState: async () => {

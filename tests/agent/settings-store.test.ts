@@ -84,4 +84,40 @@ describe('settings store provider profiles', () => {
     expect(provider?.name).toBe('')
     expect(provider?.baseUrl).toBe('')
   })
+
+  it('keeps successful preset provider configs independent when switching channels', async () => {
+    const { useSettingsStore } = await import('@/stores/settingsStore')
+    const store = useSettingsStore.getState()
+
+    const openaiId = store.selectOrCreatePresetProvider('openai')
+    store.updateProviderConfig(openaiId, {
+      apiKey: 'openai-secret',
+      model: 'gpt-4.1',
+    })
+    store.setProviderTestStatus(openaiId, true, 'ok')
+
+    const siliconflowId = useSettingsStore.getState().selectOrCreatePresetProvider('siliconflow')
+    useSettingsStore.getState().updateProviderConfig(siliconflowId, {
+      apiKey: 'sf-secret',
+      model: 'deepseek-ai/DeepSeek-V3',
+    })
+
+    const nextOpenaiId = useSettingsStore.getState().selectOrCreatePresetProvider('openai')
+    const providers = useSettingsStore.getState().providers
+    const openai = providers.find((provider) => provider.id === openaiId)
+    const siliconflow = providers.find((provider) => provider.id === siliconflowId)
+
+    expect(nextOpenaiId).toBe(openaiId)
+    expect(openai).toMatchObject({
+      templateId: 'openai',
+      isTested: true,
+      model: 'gpt-4.1',
+    })
+    expect(siliconflow).toMatchObject({
+      templateId: 'siliconflow',
+      model: 'deepseek-ai/DeepSeek-V3',
+    })
+    expect(useSettingsStore.getState().getDecryptedApiKey(openaiId)).toBe('openai-secret')
+    expect(useSettingsStore.getState().getDecryptedApiKey(siliconflowId)).toBe('sf-secret')
+  })
 })

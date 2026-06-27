@@ -40,6 +40,8 @@ export interface ProviderProfile {
 export interface ProviderConfig {
   /** 用户配置 ID */
   id: string
+  /** 来源模板 ID；预设渠道用它保证每个渠道独立保存，自定义渠道可重复 */
+  templateId?: string
   /** 显示名称 */
   name: string
   /** 协议类型 */
@@ -163,6 +165,7 @@ function createProviderId(templateId = 'provider') {
 export function createProviderConfigFromTemplate(template: ProviderProfile): ProviderConfig {
   return {
     id: createProviderId(template.id),
+    templateId: template.id,
     name: template.name,
     protocol: template.protocol,
     baseUrl: template.baseUrl,
@@ -188,6 +191,21 @@ function createDefaultProviders() {
   ]
 }
 
+function inferTemplateId(raw: Partial<ProviderConfig> & Record<string, unknown>, fallback?: ProviderProfile) {
+  if (typeof raw.templateId === 'string') return raw.templateId
+  if (fallback?.id) return fallback.id
+
+  const name = typeof raw.name === 'string' ? raw.name : ''
+  const baseUrl = typeof raw.baseUrl === 'string' ? raw.baseUrl : ''
+  const protocol = raw.protocol === 'anthropic-compatible' ? 'anthropic-compatible' : 'openai-compatible'
+  return PROVIDER_TEMPLATES.find((template) =>
+    !template.id.startsWith('custom-') &&
+    template.name === name &&
+    template.baseUrl === baseUrl &&
+    template.protocol === protocol
+  )?.id
+}
+
 function normalizeProviderConfig(raw: Partial<ProviderConfig> & Record<string, unknown>, fallback?: ProviderProfile): ProviderConfig {
   const protocol = raw.protocol === 'anthropic-compatible' ? 'anthropic-compatible' : fallback?.protocol || 'openai-compatible'
   const authType =
@@ -210,6 +228,7 @@ function normalizeProviderConfig(raw: Partial<ProviderConfig> & Record<string, u
 
   return {
     id: typeof raw.id === 'string' && raw.id ? raw.id : createProviderId(String(fallback?.id || 'provider')),
+    templateId: inferTemplateId(raw, fallback),
     name: typeof raw.name === 'string' ? raw.name : fallback?.name || '自定义模型平台',
     protocol,
     baseUrl: typeof raw.baseUrl === 'string' ? raw.baseUrl : fallback?.baseUrl || 'https://api.example.com/v1',
@@ -262,6 +281,7 @@ interface SettingsStore {
   generatingPrompt: string
   setActiveProvider: (providerId: string) => void
   addProviderFromTemplate: (templateId: string) => string
+  selectOrCreatePresetProvider: (templateId: string) => string
   addCustomProvider: (protocol?: AIProviderProtocol) => string
   removeProvider: (providerId: string) => void
   renameProvider: (providerId: string, name: string) => void
@@ -322,11 +342,30 @@ export const useSettingsStore = create<SettingsStore>()(
             return provider.id
           },
 
+          selectOrCreatePresetProvider: (templateId) => {
+            const template = PROVIDER_TEMPLATES.find((item) => item.id === templateId)
+            if (!template) return get().activeProviderId
+
+            const existing = get().providers.find((provider) => provider.templateId === template.id)
+            if (existing) {
+              set({ activeProviderId: existing.id })
+              return existing.id
+            }
+
+            const provider = createProviderConfigFromTemplate(template)
+            set((state) => ({
+              providers: [...state.providers, provider],
+              activeProviderId: provider.id,
+            }))
+            return provider.id
+          },
+
           addCustomProvider: (protocol = 'openai-compatible') => {
             const template = PROVIDER_TEMPLATES.find((item) =>
               protocol === 'anthropic-compatible' ? item.id === 'custom-anthropic' : item.id === 'custom-openai'
             ) || PROVIDER_TEMPLATES[7]
             const provider = createProviderConfigFromTemplate(template)
+            provider.templateId = undefined
             set((state) => ({
               providers: [...state.providers, provider],
               activeProviderId: provider.id,
