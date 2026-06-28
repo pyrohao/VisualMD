@@ -74,6 +74,7 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
     conversations,
     currentConversationId,
     visibleMessagesByConversation,
+    toolUndoStackByConversation,
     referencesByConversation,
     draftInput,
     selectedReferenceIds,
@@ -97,8 +98,8 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
     setChatTemperature,
     setChatMaxTokens,
     setChatHistoryRounds,
-    confirmToolApply,
-    undoToolApply,
+    undoLastToolApply,
+    dismissLastToolApply,
   } = useAiChatStore()
 
   const themeConfig = getThemeConfig()
@@ -117,6 +118,9 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
 
   const view: DockView = currentConversationId ? 'conversation' : 'history'
   const currentMessages = currentConversationId ? visibleMessagesByConversation[currentConversationId] || [] : []
+  const latestUndoRecord = currentConversationId
+    ? [...(toolUndoStackByConversation[currentConversationId] || [])].reverse().find((record) => record.state === 'available') || null
+    : null
   const currentConversation = conversations.find((conversation) => conversation.id === currentConversationId) || null
   const selectedReferences = useMemo(
     () => {
@@ -474,33 +478,6 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
                             {message.error}
                           </div>
                         )}
-                        {message.action?.type === 'tool_apply' && message.action.status === 'pending' && (
-                          <div className="mt-3 flex items-center gap-2">
-                            <Button
-                              type="button"
-                              size="sm"
-                              className="h-8 rounded-md px-3"
-                              onClick={() => void confirmToolApply(message.id)}
-                              style={{ backgroundColor: themeConfig.primary, color: themeConfig.buttonText }}
-                            >
-                              {currentLanguage === 'zh' ? '确认' : 'Confirm'}
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="h-8 rounded-md px-3"
-                              onClick={() => void undoToolApply(message.id)}
-                              style={{
-                                backgroundColor: themeConfig.buttonSecondaryBg,
-                                borderColor: themeConfig.border,
-                                color: themeConfig.text,
-                              }}
-                            >
-                              Undo
-                            </Button>
-                          </div>
-                        )}
                       </div>
                     </div>
                   )
@@ -519,6 +496,45 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
             backgroundColor: themeConfig.card,
           }}
         >
+          {latestUndoRecord && (
+            <div
+              className="mb-3 flex min-w-0 items-center justify-between gap-3 rounded-xl border px-3 py-2 text-xs"
+              style={{
+                borderColor: themeConfig.border,
+                backgroundColor: themeConfig.background,
+                color: themeConfig.textMuted,
+              }}
+            >
+              <span className="min-w-0 truncate">
+                {currentLanguage === 'zh' ? 'AI 已自动应用修改' : 'AI edit applied'}
+              </span>
+              <div className="flex shrink-0 items-center gap-1">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 rounded-md px-2 hover:bg-transparent focus-visible:ring-0"
+                  onClick={() => void undoLastToolApply()}
+                  style={{ color: themeConfig.primary, backgroundColor: 'transparent' }}
+                >
+                  <RotateCcw className="mr-1 h-3.5 w-3.5" />
+                  Undo
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 rounded-md hover:bg-transparent focus-visible:ring-0"
+                  onClick={() => dismissLastToolApply()}
+                  style={{ color: themeConfig.textMuted, backgroundColor: 'transparent' }}
+                  title={currentLanguage === 'zh' ? '关闭提示' : 'Dismiss'}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
+          )}
+
           <Textarea
             value={draftInput}
             onChange={(event) => void setDraftInput(event.target.value)}

@@ -119,6 +119,7 @@ interface HistoryStore {
    * 获取当前操作描述（用于UI显示）
    */
   getCurrentDescription: () => string | null
+  getRedoDescription: () => string | null
 }
 
 /**
@@ -357,6 +358,12 @@ export const useHistoryStore = create<HistoryStore>()(
         const { past } = get()
         if (past.length === 0) return null
         return past[past.length - 1].description
+      },
+
+      getRedoDescription: () => {
+        const { future } = get()
+        if (future.length === 0) return null
+        return future[future.length - 1].description
       },
     }),
     {

@@ -37,6 +37,7 @@ import { useGitStore } from './gitStore'
 import { useHistoryStore } from './historyStore'
 import { useSettingsStore } from './settingsStore'
 import { useTabsStore } from './tabsStore'
+import { saveDirtyEditors } from './unsavedChangesStore'
 
 export type AiReferenceRecord = AiDocReferenceSnapshot & {
   id: string
@@ -61,12 +62,16 @@ type UiConversationRecord = AgentConversation & {
 type VisibleAgentMessage = AgentMessage & {
   displayMessage?: string
   thinking?: string
-  action?: {
-    type: 'tool_apply'
-    status: 'pending' | 'confirmed' | 'undone'
-    previousMarkdown: string
-    appliedMarkdown: string
-  }
+}
+
+export interface ToolUndoRecord {
+  id: string
+  conversationId: string
+  toolCallId: string
+  previousMarkdown: string
+  appliedMarkdown: string
+  createdAt: number
+  state: 'available' | 'undone' | 'dismissed'
 }
 
 interface AiChatStore {
@@ -74,6 +79,7 @@ interface AiChatStore {
   currentConversationId: string | null
   messagesByConversation: Record<string, AgentMessage[]>
   visibleMessagesByConversation: Record<string, VisibleAgentMessage[]>
+  toolUndoStackByConversation: Record<string, ToolUndoRecord[]>
   referencesByConversation: Record<string, AiReferenceRecord[]>
   draftsByConversation: Record<string, AgentDraft>
   taskType: AiDocTaskType
@@ -110,8 +116,9 @@ interface AiChatStore {
   setChatTemperature: (value: number) => Promise<void>
   setChatMaxTokens: (value: number) => Promise<void>
   setChatHistoryRounds: (value: number) => Promise<void>
-  confirmToolApply: (messageId: string) => Promise<void>
-  undoToolApply: (messageId: string) => Promise<boolean>
+  undoLastToolApply: () => Promise<boolean>
+  dismissLastToolApply: () => void
+  syncToolUndoStackWithMarkdown: (markdown: string) => void
 }
 
 let activeAbortController: AbortController | null = null
@@ -175,27 +182,21 @@ function getVisibleMessages(messages: AgentMessage[]): VisibleAgentMessage[] {
   }))
 }
 
-function createToolApplyVisibleMessage(args: {
+function createToolUndoRecord(args: {
   conversationId: string
   toolCallId: string
   previousMarkdown: string
   appliedMarkdown: string
 }) {
   return {
-    id: `tool-apply-${args.toolCallId}`,
+    id: `tool-undo-${args.toolCallId}`,
     conversationId: args.conversationId,
-    role: 'assistant',
-    message: '工具已应用到文档',
-    displayMessage: '工具已应用到文档',
+    toolCallId: args.toolCallId,
+    previousMarkdown: args.previousMarkdown,
+    appliedMarkdown: args.appliedMarkdown,
     createdAt: Date.now(),
-    state: 'done',
-    action: {
-      type: 'tool_apply',
-      status: 'pending',
-      previousMarkdown: args.previousMarkdown,
-      appliedMarkdown: args.appliedMarkdown,
-    },
-  } satisfies VisibleAgentMessage
+    state: 'available',
+  } satisfies ToolUndoRecord
 }
 
 function formatAgentError(error: unknown) {
@@ -227,6 +228,26 @@ function formatAgentError(error: unknown) {
   }
 
   return message
+}
+
+function createFailedAssistantMessage(conversationId: string, error: unknown): AgentMessage {
+  return {
+    id: nanoid(),
+    conversationId,
+    role: 'assistant',
+    message: '',
+    createdAt: Date.now(),
+    state: 'failed',
+    error: formatAgentError(error),
+  }
+}
+
+async function persistFailedMessage(message: AgentMessage) {
+  try {
+    await saveAgentMessage(message)
+  } catch {
+    // The UI error state is more important than surfacing a secondary persistence failure.
+  }
 }
 
 function buildDraftRecord(
@@ -317,25 +338,70 @@ async function syncCurrentDraft(store: Pick<AiChatStore, 'currentConversationId'
   await saveAgentDraft(buildDraftRecord(store.currentConversationId, store.taskType, store.draftInput, store.selectedReferenceIds))
 }
 
-async function syncMarkdownToActiveSource(nextMarkdown: string, nextFileName?: string) {
+async function syncMarkdownToActiveSource(
+  nextMarkdown: string,
+  nextFileName?: string,
+  options: { markSaved?: boolean } = {}
+) {
   const tabsStore = useTabsStore.getState()
   const activeTab = tabsStore.getActiveTab()
   if (!activeTab) return
 
   tabsStore.updateTabContent(activeTab.id, nextMarkdown)
-  tabsStore.markTabAsModified(activeTab.id, true)
 
   if (activeTab.sourceType === 'git' && activeTab.fileId) {
     useGitStore.getState().updateDraftContent(activeTab.fileId, nextMarkdown)
+    if (options.markSaved) {
+      tabsStore.markTabAsSaved(activeTab.id, nextFileName)
+    } else {
+      tabsStore.markTabAsModified(activeTab.id, true)
+    }
     return
   }
 
   if (activeTab.fileId) {
-    useFileSystemStore.getState().saveFile(activeTab.fileId, nextMarkdown)
+    if (options.markSaved) {
+      useFileSystemStore.getState().saveFileContent(activeTab.fileId, nextMarkdown)
+    } else {
+      useFileSystemStore.getState().saveFile(activeTab.fileId, nextMarkdown)
+    }
     if (nextFileName) {
       useFileSystemStore.getState().renameFile(activeTab.fileId, nextFileName)
     }
+    if (options.markSaved) {
+      tabsStore.markTabAsSaved(activeTab.id, nextFileName)
+    } else {
+      tabsStore.markTabAsModified(activeTab.id, true)
+    }
+    return
   }
+
+  if (options.markSaved) {
+    tabsStore.markTabAsSaved(activeTab.id, nextFileName)
+  } else {
+    tabsStore.markTabAsModified(activeTab.id, true)
+  }
+}
+
+async function applyMarkdownTransaction(
+  nextMarkdown: string,
+  nextFileName?: string,
+  options: { markSaved?: boolean } = {}
+) {
+  const applied = useDocumentStore.getState().applyExternalMarkdown(nextMarkdown)
+  if (!applied) {
+    throw new Error('AI 工具写回失败：文档解析失败。')
+  }
+
+  const committedMarkdown = useDocumentStore.getState().getCurrentMarkdown()
+
+  await syncMarkdownToActiveSource(committedMarkdown, nextFileName, options)
+
+  if (options.markSaved) {
+    useDocumentStore.getState().markAsSaved?.()
+  }
+
+  return committedMarkdown
 }
 
 export const useAiChatStore = create<AiChatStore>((set, get) => ({
@@ -343,6 +409,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
   currentConversationId: null,
   messagesByConversation: {},
   visibleMessagesByConversation: {},
+  toolUndoStackByConversation: {},
   referencesByConversation: {},
   draftsByConversation: {},
   taskType: 'ask',
@@ -395,6 +462,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         currentConversationId,
         messagesByConversation,
         visibleMessagesByConversation,
+        toolUndoStackByConversation: {},
         draftsByConversation,
         referencesByConversation,
         taskType: (currentDraft?.taskType as AiDocTaskType) || 'ask',
@@ -430,6 +498,10 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         [conversationId]: state.sendingConversationId === conversationId && state.visibleMessagesByConversation[conversationId]?.length
           ? state.visibleMessagesByConversation[conversationId]
           : getVisibleMessages(messages),
+      },
+      toolUndoStackByConversation: {
+        ...state.toolUndoStackByConversation,
+        [conversationId]: state.toolUndoStackByConversation[conversationId] || [],
       },
       referencesByConversation: {
         ...state.referencesByConversation,
@@ -479,6 +551,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       currentConversationId: id,
       messagesByConversation: { ...state.messagesByConversation, [id]: [] },
       visibleMessagesByConversation: { ...state.visibleMessagesByConversation, [id]: [] },
+      toolUndoStackByConversation: { ...state.toolUndoStackByConversation, [id]: [] },
       referencesByConversation: { ...state.referencesByConversation, [id]: [] },
       draftsByConversation: { ...state.draftsByConversation, [id]: draft },
       selectedReferenceIds: [],
@@ -495,6 +568,8 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       delete nextMessages[conversationId]
       const nextVisibleMessages = { ...state.visibleMessagesByConversation }
       delete nextVisibleMessages[conversationId]
+      const nextToolUndoStack = { ...state.toolUndoStackByConversation }
+      delete nextToolUndoStack[conversationId]
       const nextReferences = { ...state.referencesByConversation }
       delete nextReferences[conversationId]
       const nextDrafts = { ...state.draftsByConversation }
@@ -506,6 +581,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         currentConversationId,
         messagesByConversation: nextMessages,
         visibleMessagesByConversation: nextVisibleMessages,
+        toolUndoStackByConversation: nextToolUndoStack,
         referencesByConversation: nextReferences,
         draftsByConversation: nextDrafts,
         draftInput: currentConversationId ? nextDrafts[currentConversationId]?.inputText || '' : '',
@@ -653,87 +729,92 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
   },
 
   sendMessage: async () => {
-    const documentStore = useDocumentStore.getState()
-    const document = documentStore.document
-    if (!document) {
-      set({ error: 'No active document' })
-      return
-    }
-
-    const input = get().draftInput.trim()
-    if (!input) return
-
-    const settings = useSettingsStore.getState()
-    const providerConfig = settings.getActiveProviderConfig()
-    const apiKey = settings.getActiveProviderApiKey()
-    if (!apiKey || !providerConfig.baseUrl || !providerConfig.model) {
-      set({ error: 'AI provider is not configured' })
-      return
-    }
-
-    const conversationId = get().currentConversationId || (await get().createConversation())
-    if (!conversationId) return
-
-    const selectedReferenceId = get().selectedReferenceIds.at(-1)
-    const references = (get().referencesByConversation[conversationId] || []).filter((reference) =>
-      reference.id === selectedReferenceId
-    )
-    const userMessage = buildUserAgentMessage({
-      conversationId,
-      taskType: get().taskType,
-      input,
-      references,
-    })
-
-    const existingMessages = get().messagesByConversation[conversationId] || []
-    const userMessageIds = existingMessages
-      .filter((message) => message.role === 'user')
-      .slice(-Math.max(0, get().chatHistoryRounds - 1))
-      .map((message) => message.id)
-    const firstKeptUserIndex = existingMessages.findIndex((message) => userMessageIds.includes(message.id))
-    const historyMessages = firstKeptUserIndex >= 0 ? existingMessages.slice(firstKeptUserIndex) : existingMessages
-    const pendingAssistantMessage: VisibleAgentMessage = {
-      id: nanoid(),
-      conversationId,
-      role: 'assistant',
-      message: '',
-      displayMessage: '',
-      createdAt: Date.now() + 1,
-      state: 'pending',
-    }
-    const runtimeMessages = [...historyMessages, userMessage]
-    const messages = [...existingMessages, userMessage]
-    const displayMessages = [...messages, pendingAssistantMessage]
-
-    const currentReferences = get().referencesByConversation[conversationId] || []
-
-    await saveAgentMessage(userMessage)
-    await Promise.all(currentReferences.map((reference) => deleteAgentReference(reference.id)))
-    await saveAgentDraft(buildDraftRecord(conversationId, get().taskType, '', []))
-
-    set((state) => ({
-      draftInput: '',
-      selectedReferenceIds: [],
-      selectionCandidate: null,
-      isSending: true,
-      sendingConversationId: conversationId,
-      sendingStatus: '正在连接 AI...',
-      error: null,
-      referencesByConversation: {
-        ...state.referencesByConversation,
-        [conversationId]: [],
-      },
-      messagesByConversation: {
-        ...state.messagesByConversation,
-        [conversationId]: messages,
-      },
-      visibleMessagesByConversation: {
-        ...state.visibleMessagesByConversation,
-        [conversationId]: getVisibleMessages(displayMessages),
-      },
-    }))
+    let conversationId = get().currentConversationId
+    let messages: AgentMessage[] = []
 
     try {
+      await saveDirtyEditors()
+
+      const documentStore = useDocumentStore.getState()
+      const document = documentStore.document
+      if (!document) {
+        set({ error: 'No active document' })
+        return
+      }
+
+      const input = get().draftInput.trim()
+      if (!input) return
+
+      const settings = useSettingsStore.getState()
+      const providerConfig = settings.getActiveProviderConfig()
+      const apiKey = settings.getActiveProviderApiKey()
+      if (!apiKey || !providerConfig.baseUrl || !providerConfig.model) {
+        set({ error: 'AI provider is not configured' })
+        return
+      }
+
+      conversationId = conversationId || (await get().createConversation())
+      if (!conversationId) return
+
+      const selectedReferenceId = get().selectedReferenceIds.at(-1)
+      const references = (get().referencesByConversation[conversationId] || []).filter((reference) =>
+        reference.id === selectedReferenceId
+      )
+      const userMessage = buildUserAgentMessage({
+        conversationId,
+        taskType: get().taskType,
+        input,
+        references,
+      })
+
+      const existingMessages = get().messagesByConversation[conversationId] || []
+      const userMessageIds = existingMessages
+        .filter((message) => message.role === 'user')
+        .slice(-Math.max(0, get().chatHistoryRounds - 1))
+        .map((message) => message.id)
+      const firstKeptUserIndex = existingMessages.findIndex((message) => userMessageIds.includes(message.id))
+      const historyMessages = firstKeptUserIndex >= 0 ? existingMessages.slice(firstKeptUserIndex) : existingMessages
+      const pendingAssistantMessage: VisibleAgentMessage = {
+        id: nanoid(),
+        conversationId,
+        role: 'assistant',
+        message: '',
+        displayMessage: '',
+        createdAt: Date.now() + 1,
+        state: 'pending',
+      }
+      const runtimeMessages = [...historyMessages, userMessage]
+      messages = [...existingMessages, userMessage]
+      const displayMessages = [...messages, pendingAssistantMessage]
+
+      const currentReferences = get().referencesByConversation[conversationId] || []
+
+      await saveAgentMessage(userMessage)
+      await Promise.all(currentReferences.map((reference) => deleteAgentReference(reference.id)))
+      await saveAgentDraft(buildDraftRecord(conversationId, get().taskType, '', []))
+
+      set((state) => ({
+        draftInput: '',
+        selectedReferenceIds: [],
+        selectionCandidate: null,
+        isSending: true,
+        sendingConversationId: conversationId,
+        sendingStatus: '正在连接 AI...',
+        error: null,
+        referencesByConversation: {
+          ...state.referencesByConversation,
+          [conversationId]: [],
+        },
+        messagesByConversation: {
+          ...state.messagesByConversation,
+          [conversationId]: messages,
+        },
+        visibleMessagesByConversation: {
+          ...state.visibleMessagesByConversation,
+          [conversationId]: getVisibleMessages(displayMessages),
+        },
+      }))
+
       activeAbortController = new AbortController()
       const streamingGeneratedFiles = new Map<string, { fileId: string; tabId: string; fileName: string }>()
       const result = await runAgentReActLoop({
@@ -798,24 +879,29 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       await saveAgentMessages(newMessages)
       const nextMessages = [...messages, ...newMessages]
 
-      const toolApplyMessages = result.appliedToolCallIds.map((toolCallId) =>
-        createToolApplyVisibleMessage({
-          conversationId,
-          toolCallId,
-          previousMarkdown: result.previousMarkdown,
-          appliedMarkdown: result.appliedMarkdown,
-        })
-      )
-
-      if (result.appliedMarkdown !== documentStore.getCurrentMarkdown()) {
+      const appliedDocumentChanged = result.appliedMarkdown !== documentStore.getCurrentMarkdown()
+      let toolUndoRecords: ToolUndoRecord[] = []
+      if (appliedDocumentChanged) {
         set({ sendingStatus: '正在应用工具结果...' })
         useHistoryStore.getState().addHistory({
           type: 'batch',
           description: 'AI agent apply_tool',
         })
-        documentStore.applyExternalMarkdown(result.appliedMarkdown)
         const nextDocument = useDocumentStore.getState().document
-        await syncMarkdownToActiveSource(result.appliedMarkdown, nextDocument?.fileName)
+        const committedMarkdown = await applyMarkdownTransaction(result.appliedMarkdown, nextDocument?.fileName, { markSaved: true })
+        const appliedToolCallId = result.appliedTools.at(-1)?.toolCallId || result.appliedToolCallIds.at(-1)
+        const previousMarkdown = result.appliedTools[0]?.previousMarkdown || result.previousMarkdown
+
+        if (appliedToolCallId && previousMarkdown !== committedMarkdown) {
+          toolUndoRecords = [
+            createToolUndoRecord({
+              conversationId,
+              toolCallId: appliedToolCallId,
+              previousMarkdown,
+              appliedMarkdown: committedMarkdown,
+            }),
+          ]
+        }
       }
 
       result.generatedFiles.forEach((file) => {
@@ -849,21 +935,23 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         },
         visibleMessagesByConversation: {
           ...state.visibleMessagesByConversation,
-          [conversationId]: [...getVisibleMessages(nextMessages), ...toolApplyMessages],
+          [conversationId]: getVisibleMessages(nextMessages),
+        },
+        toolUndoStackByConversation: {
+          ...state.toolUndoStackByConversation,
+          [conversationId]: [
+            ...(state.toolUndoStackByConversation[conversationId] || []),
+            ...toolUndoRecords,
+          ],
         },
       }))
       activeAbortController = null
     } catch (error) {
-      const failedMessage: AgentMessage = {
-        id: nanoid(),
-        conversationId,
-        role: 'assistant',
-        message: '',
-        createdAt: Date.now(),
-        state: 'failed',
-        error: formatAgentError(error),
+      const failedConversationId = conversationId || get().currentConversationId || ''
+      const failedMessage = createFailedAssistantMessage(failedConversationId, error)
+      if (failedConversationId) {
+        await persistFailedMessage(failedMessage)
       }
-      await saveAgentMessage(failedMessage)
       const nextMessages = [...messages, failedMessage]
       set((state) => ({
         isSending: false,
@@ -872,11 +960,11 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         error: failedMessage.error || 'AI request failed',
         messagesByConversation: {
           ...state.messagesByConversation,
-          [conversationId]: nextMessages,
+          ...(failedConversationId ? { [failedConversationId]: nextMessages } : {}),
         },
         visibleMessagesByConversation: {
           ...state.visibleMessagesByConversation,
-          [conversationId]: getVisibleMessages(nextMessages),
+          ...(failedConversationId ? { [failedConversationId]: getVisibleMessages(nextMessages) } : {}),
         },
       }))
       activeAbortController = null
@@ -889,63 +977,73 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
     set({ isSending: false, sendingConversationId: null, sendingStatus: null, error: '已中断 AI 请求。' })
   },
 
-  confirmToolApply: async (messageId) => {
-    const conversationId = get().currentConversationId
-    if (!conversationId) return
-    const target = (get().visibleMessagesByConversation[conversationId] || []).find((message) => message.id === messageId)
-    if (target?.action?.type === 'tool_apply') {
-      const nextDocument = useDocumentStore.getState().document
-      await syncMarkdownToActiveSource(target.action.appliedMarkdown, nextDocument?.fileName)
-    }
-
-    set((state) => ({
-      visibleMessagesByConversation: {
-        ...state.visibleMessagesByConversation,
-        [conversationId]: (state.visibleMessagesByConversation[conversationId] || []).map((message) =>
-          message.id === messageId && message.action?.type === 'tool_apply'
-            ? {
-                ...message,
-                displayMessage: '工具应用已确认',
-                action: { ...message.action, status: 'confirmed' },
-              }
-            : message
-        ),
-      },
-    }))
-  },
-
-  undoToolApply: async (messageId) => {
+  undoLastToolApply: async () => {
     const conversationId = get().currentConversationId
     if (!conversationId) return false
 
-    const target = (get().visibleMessagesByConversation[conversationId] || []).find((message) => message.id === messageId)
-    if (!target?.action || target.action.type !== 'tool_apply' || target.action.status !== 'pending') {
-      return false
-    }
+    const stack = get().toolUndoStackByConversation[conversationId] || []
+    const target = [...stack].reverse().find((record) => record.state === 'available')
+    if (!target) return false
 
     useHistoryStore.getState().addHistory({
       type: 'batch',
       description: 'Undo AI agent apply_tool',
     })
-    useDocumentStore.getState().applyExternalMarkdown(target.action.previousMarkdown)
     const nextDocument = useDocumentStore.getState().document
-    await syncMarkdownToActiveSource(target.action.previousMarkdown, nextDocument?.fileName)
+    await applyMarkdownTransaction(target.previousMarkdown, nextDocument?.fileName, { markSaved: true })
 
     set((state) => ({
-      visibleMessagesByConversation: {
-        ...state.visibleMessagesByConversation,
-        [conversationId]: (state.visibleMessagesByConversation[conversationId] || []).map((message) =>
-          message.id === messageId && message.action?.type === 'tool_apply'
-            ? {
-                ...message,
-                displayMessage: '工具应用已撤销',
-                action: { ...message.action, status: 'undone' },
-              }
-            : message
+      toolUndoStackByConversation: {
+        ...state.toolUndoStackByConversation,
+        [conversationId]: (state.toolUndoStackByConversation[conversationId] || []).map((record) =>
+          record.id === target.id ? { ...record, state: 'undone' } : record
         ),
       },
     }))
 
     return true
+  },
+
+  dismissLastToolApply: () => {
+    const conversationId = get().currentConversationId
+    if (!conversationId) return
+
+    const stack = get().toolUndoStackByConversation[conversationId] || []
+    const target = [...stack].reverse().find((record) => record.state === 'available')
+    if (!target) return
+
+    set((state) => ({
+      toolUndoStackByConversation: {
+        ...state.toolUndoStackByConversation,
+        [conversationId]: (state.toolUndoStackByConversation[conversationId] || []).map((record) =>
+          record.id === target.id ? { ...record, state: 'dismissed' } : record
+        ),
+      },
+    }))
+  },
+
+  syncToolUndoStackWithMarkdown: (markdown) => {
+    const conversationId = get().currentConversationId
+    if (!conversationId) return
+
+    const stack = get().toolUndoStackByConversation[conversationId] || []
+    if (!stack.length) return
+
+    set((state) => ({
+      toolUndoStackByConversation: {
+        ...state.toolUndoStackByConversation,
+        [conversationId]: (state.toolUndoStackByConversation[conversationId] || []).map((record) => {
+          if (record.state === 'available' && record.previousMarkdown === markdown) {
+            return { ...record, state: 'undone' }
+          }
+
+          if (record.state === 'undone' && record.appliedMarkdown === markdown) {
+            return { ...record, state: 'available' }
+          }
+
+          return record
+        }),
+      },
+    }))
   },
 }))

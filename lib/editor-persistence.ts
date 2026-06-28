@@ -4,13 +4,13 @@ import { useGitStore } from '@/stores/gitStore'
 import { useTabsStore } from '@/stores/tabsStore'
 import { inferGitFileKind, isGitBinaryFileKind } from '@/lib/git/file-kind'
 
-export function persistActiveTabSave() {
+export function syncActiveDocumentToActiveSource(options: { markSaved?: boolean } = {}) {
   const tabsStore = useTabsStore.getState()
   const activeTab = tabsStore.getActiveTab()
   const documentStore = useDocumentStore.getState()
   const document = documentStore.document
 
-  if (!activeTab || !document) return
+  if (!activeTab || !document) return false
 
   const latestMarkdown = documentStore.getCurrentMarkdown()
   const activeGitKind =
@@ -18,13 +18,17 @@ export function persistActiveTabSave() {
 
   if (activeTab.sourceType === 'git' && activeTab.fileId) {
     if (isGitBinaryFileKind(activeGitKind)) {
-      return
+      return false
     }
     useGitStore.getState().updateDraftContent(activeTab.fileId, latestMarkdown)
     tabsStore.updateTabContent(activeTab.id, latestMarkdown)
-    tabsStore.markTabAsSaved(activeTab.id, document.fileName)
-    documentStore.markAsSaved()
-    return
+    if (options.markSaved) {
+      tabsStore.markTabAsSaved(activeTab.id, document.fileName)
+      documentStore.markAsSaved()
+    } else {
+      tabsStore.markTabAsModified(activeTab.id, true)
+    }
+    return true
   }
 
   if (activeTab.fileId) {
@@ -35,16 +39,33 @@ export function persistActiveTabSave() {
       fileStore.renameFile(activeTab.fileId, document.fileName)
     }
 
-    fileStore.saveFileContent(activeTab.fileId, latestMarkdown)
+    if (options.markSaved) {
+      fileStore.saveFileContent(activeTab.fileId, latestMarkdown)
+    } else {
+      fileStore.saveFile(activeTab.fileId, latestMarkdown)
+    }
     tabsStore.updateTabContent(activeTab.id, latestMarkdown)
-    tabsStore.markTabAsSaved(activeTab.id, document.fileName)
-    documentStore.markAsSaved()
-    return
+    if (options.markSaved) {
+      tabsStore.markTabAsSaved(activeTab.id, document.fileName)
+      documentStore.markAsSaved()
+    } else {
+      tabsStore.markTabAsModified(activeTab.id, true)
+    }
+    return true
   }
 
   tabsStore.updateTabContent(activeTab.id, latestMarkdown)
-  tabsStore.markTabAsSaved(activeTab.id, document.fileName)
-  documentStore.markAsSaved()
+  if (options.markSaved) {
+    tabsStore.markTabAsSaved(activeTab.id, document.fileName)
+    documentStore.markAsSaved()
+  } else {
+    tabsStore.markTabAsModified(activeTab.id, true)
+  }
+  return true
+}
+
+export function persistActiveTabSave() {
+  syncActiveDocumentToActiveSource({ markSaved: true })
 }
 
 export function discardActiveTabChanges() {

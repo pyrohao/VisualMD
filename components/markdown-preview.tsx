@@ -374,6 +374,7 @@ function GitBinaryPreview({
 
 export function MarkdownPreview() {
   const { document, updateFromMarkdown } = useDocumentStore()
+  const externalRevision = useDocumentStore((state) => state.externalRevision)
   const addEditorSelectionReference = useAiChatStore((state) => state.addEditorSelectionReference)
   const selectionCandidate = useAiChatStore((state) => state.selectionCandidate)
   const commitSelectionCandidate = useAiChatStore((state) => state.commitSelectionCandidate)
@@ -428,17 +429,27 @@ export function MarkdownPreview() {
   // 从Store获取当前Markdown
   const markdown = useDocumentStore.getState().getCurrentMarkdown()
   const latestMarkdownRef = useRef(markdown)
+  const latestExternalRevisionRef = useRef(externalRevision)
   const isEditingMode = mode === 'edit' || mode === 'live'
   const renderMarkdown = mode === 'live' ? editContent : markdown
   const documentKey = `${activeTabId || ''}\u0000${document?.fileId || ''}\u0000${document?.fileName || ''}`
 
   // 当 markdown 变化时，更新编辑内容
   useEffect(() => {
+    if (externalRevision !== latestExternalRevisionRef.current) {
+      latestExternalRevisionRef.current = externalRevision
+      latestMarkdownRef.current = markdown
+      skipLiveSyncRef.current = true
+      setEditContent(markdown)
+      return
+    }
+
+    const previousMarkdown = latestMarkdownRef.current
     latestMarkdownRef.current = markdown
-    if (!isEditingMode) {
+    if (!isEditingMode || editContent === previousMarkdown) {
       setEditContent(markdown)
     }
-  }, [isEditingMode, markdown])
+  }, [editContent, externalRevision, isEditingMode, markdown])
 
   useEffect(() => {
     if (documentKey === previousDocumentKeyRef.current) {

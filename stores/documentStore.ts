@@ -38,6 +38,8 @@ interface DocumentStore {
   isLoading: boolean
   /** 错误信息 */
   error: string | null
+  /** 外部事务写回版本，用于同步本地编辑文本 */
+  externalRevision: number
 
   // ==================== 操作 ====================
   
@@ -155,8 +157,8 @@ interface DocumentStore {
    * 从Markdown文本更新（用于文本编辑器）
    * @param markdown Markdown文本
    */
-  updateFromMarkdown: (markdown: string) => void
-  applyExternalMarkdown: (markdown: string) => void
+  updateFromMarkdown: (markdown: string) => boolean
+  applyExternalMarkdown: (markdown: string) => boolean
 
   /**
    * Refresh structure near a node after node-panel edits.
@@ -202,12 +204,12 @@ interface DocumentStore {
   /**
    * 撤销操作
    */
-  undo: () => void
+  undo: () => boolean
 
   /**
    * 重做操作
    */
-  redo: () => void
+  redo: () => boolean
 
   /**
    * 是否可以撤销
@@ -765,6 +767,7 @@ export const useDocumentStore = create<DocumentStore>()(
         expandedNodeIds: new Set(['root']),
         isLoading: false,
         error: null,
+        externalRevision: 0,
 
         // ==================== 操作实现 ====================
         
@@ -1480,11 +1483,11 @@ export const useDocumentStore = create<DocumentStore>()(
 
         updateFromMarkdown: (markdown: string) => {
           const { document } = get()
-          if (!document) return
+          if (!document) return false
 
           const currentMarkdown = get().getCurrentMarkdown()
           if (markdown === currentMarkdown && !document.isModified) {
-            return
+            return true
           }
           
           try {
@@ -1498,15 +1501,22 @@ export const useDocumentStore = create<DocumentStore>()(
               document: { ...newDocument, isModified: true },
               error: null 
             })
+            return true
           } catch (error) {
             set({ 
               error: error instanceof Error ? error.message : 'Failed to parse markdown' 
             })
+            return false
           }
         },
 
         applyExternalMarkdown: (markdown: string) => {
-          get().updateFromMarkdown(markdown)
+          const applied = get().updateFromMarkdown(markdown)
+          if (!applied) {
+            return false
+          }
+          set((state) => ({ externalRevision: state.externalRevision + 1 }))
+          return true
         },
 
         refreshNodeStructure: (nodeId: string): StructuralRefreshScope => {
@@ -1625,10 +1635,13 @@ export const useDocumentStore = create<DocumentStore>()(
                   metadata: result.metadata,
                   version: bumpDocumentVersion(document),
                   isModified: true
-                }
+                },
+                externalRevision: get().externalRevision + 1,
               })
+              return true
             }
           }
+          return false
         },
 
         redo: () => {
@@ -1646,10 +1659,13 @@ export const useDocumentStore = create<DocumentStore>()(
                   metadata: result.metadata,
                   version: bumpDocumentVersion(document),
                   isModified: true
-                }
+                },
+                externalRevision: get().externalRevision + 1,
               })
+              return true
             }
           }
+          return false
         },
 
         canUndo: () => {

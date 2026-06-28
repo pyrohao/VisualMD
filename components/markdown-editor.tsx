@@ -32,8 +32,9 @@ import { MIN_AI_DOCK_WIDTH, useAiDockStore } from '@/stores/aiDockStore'
 import { useAiChatStore } from '@/stores/aiChatStore'
 import { EmptyTabView } from './empty-tab-view'
 import { EditorCanvasShell } from './editor-canvas-shell'
-import { persistActiveTabSave } from '@/lib/editor-persistence'
+import { persistActiveTabSave, syncActiveDocumentToActiveSource } from '@/lib/editor-persistence'
 import { inferGitFileKind, isGitBinaryFileKind } from '@/lib/git/file-kind'
+import { useHistoryStore } from '@/stores/historyStore'
 
 /**
  * 默认示例Markdown内容（英文版）
@@ -323,6 +324,12 @@ const getCenterPanelMinWidth = (containerWidth: number) =>
 const getInitialRightPanelWidth = (containerWidth: number) =>
   getRatioWidth(containerWidth, RIGHT_PANEL_INITIAL_WIDTH_RATIO, RIGHT_PANEL_MIN_WIDTH_FALLBACK)
 
+function isTextEditingTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false
+  const tagName = target.tagName.toLowerCase()
+  return target.isContentEditable || tagName === 'input' || tagName === 'textarea' || tagName === 'select'
+}
+
 function BinaryGitCanvasPlaceholder({
   fileName,
   themeConfig,
@@ -394,8 +401,8 @@ export function MarkdownEditor() {
   } | null>(null)
 
   // 获取Store
-  const { loadDocument, document, selectedNodeId, getCurrentMarkdown, getIsModified, updateNode } = useDocumentStore()
-  const { currentFileId, files, saveFile, markFileAsSaved, openFile, createFile } = useFileSystemStore()
+  const { loadDocument, document, selectedNodeId } = useDocumentStore()
+  const { currentFileId, openFile } = useFileSystemStore()
   const { setCurrentDocumentId } = useGitStore()
   const {
     isOpen: isAiDockOpen,
@@ -407,21 +414,25 @@ export function MarkdownEditor() {
   } = useAiDockStore()
   const { isPanelExpanded, panelWidth, setPanelWidth, togglePanel, setActivePanel } = useSidebarStore()
   const { activeTabId, getActiveTab, tabs } = useTabsStore()
-  const currentMarkdown = getCurrentMarkdown()
-  const isModified = getIsModified()
   const { t } = useTranslation()
 
   // 获取当前激活的标签页
   const activeTab = getActiveTab()
+  const hasActiveTab = Boolean(activeTab)
+  const activeTabFileName = activeTab?.fileName || ''
+  const activeTabFileId = activeTab?.fileId || undefined
+  const activeTabSourceType = activeTab?.sourceType
+  const activeTabIsTemplate = Boolean(activeTab?.isTemplate)
+  const activeTabTemplateId = activeTab?.templateId || null
+  const activeTabIsModified = Boolean(activeTab?.isModified)
+  const activeTabGitPath = activeTab?.gitMeta?.path || ''
+  const activeTabGitFileKind = activeTab?.gitMeta?.fileKind
   const activeGitFileKind =
-    activeTab?.sourceType === 'git' && activeTab.gitMeta?.path
-      ? activeTab.gitMeta.fileKind || inferGitFileKind(activeTab.gitMeta.path)
+    activeTabSourceType === 'git' && activeTabGitPath
+      ? activeTabGitFileKind || inferGitFileKind(activeTabGitPath)
       : 'text'
   const isActiveBinaryGitTab =
-    activeTab?.sourceType === 'git' && isGitBinaryFileKind(activeGitFileKind)
-
-  // 计算当前文件
-  const currentFile = files.find(f => f.id === currentFileId) || null
+    activeTabSourceType === 'git' && isGitBinaryFileKind(activeGitFileKind)
 
   // 使用 ref 保存当前文件 ID，避免自动保存时的闭包问题
   const currentFileIdRef = useRef(currentFileId)
@@ -451,24 +462,26 @@ export function MarkdownEditor() {
   useEffect(() => {
     if (!mounted) return
 
-    if (!activeTab) {
+    const latestActiveTab = useTabsStore.getState().getActiveTab()
+
+    if (!hasActiveTab) {
       setCurrentDocumentId(null)
       useFileSystemStore.setState({ currentFileId: null })
       return
     }
 
     // 处理模板编辑状态
-    if (activeTab.isTemplate && activeTab.templateId) {
+    if (activeTabIsTemplate && activeTabTemplateId) {
       // 切换到模板编辑模式
       setTemplateEditMode({
         isActive: true,
-        content: activeTab.content,
-        templateName: activeTab.fileName,
-        templateId: activeTab.templateId,
+        content: latestActiveTab?.content || '',
+        templateName: activeTabFileName,
+        templateId: activeTabTemplateId,
       })
       useTemplateStore.setState({
-        editingTemplateId: activeTab.templateId,
-        isTemplateModified: activeTab.isModified,
+        editingTemplateId: activeTabTemplateId,
+        isTemplateModified: activeTabIsModified,
       })
     } else {
       // 非模板标签，退出模板编辑模式
@@ -476,33 +489,46 @@ export function MarkdownEditor() {
       useTemplateStore.setState({ editingTemplateId: null, isTemplateModified: false })
     }
 
-    const activeGitKind =
-      activeTab.sourceType === 'git' && activeTab.gitMeta?.path
-        ? activeTab.gitMeta.fileKind || inferGitFileKind(activeTab.gitMeta.path)
-        : 'text'
-
-    if (activeTab.sourceType === 'git' && isGitBinaryFileKind(activeGitKind)) {
-      loadDocument('', activeTab.fileName)
+    if (activeTabSourceType === 'git' && isGitBinaryFileKind(activeGitFileKind)) {
+      loadDocument('', activeTabFileName)
       setCurrentDocumentId(null)
       useFileSystemStore.setState({ currentFileId: null })
       return
     }
 
-    // 如果标签页有内容，加载到编辑器（传入 fileId 以恢复状态）
-    loadDocument(activeTab.content || '', activeTab.fileName, activeTab.fileId || undefined)
+    // 只在标签身份切换时加载文档。内容更新由编辑器/AI 写回事务显式同步，避免 tab 内容变化反复触发 loadDocument。
+    if (document?.fileId !== (activeTabFileId || undefined) || document?.fileName !== activeTabFileName) {
+      loadDocument(latestActiveTab?.content || '', activeTabFileName, activeTabFileId)
+    }
 
     // 同步文件面板选中状态
-    if (activeTab.sourceType === 'git') {
-      setCurrentDocumentId(activeTab.fileId || null)
+    if (activeTabSourceType === 'git') {
+      setCurrentDocumentId(activeTabFileId || null)
       useFileSystemStore.setState({ currentFileId: null })
-    } else if (activeTab.fileId) {
-      openFile(activeTab.fileId)
+    } else if (activeTabFileId) {
+      openFile(activeTabFileId)
       setCurrentDocumentId(null)
     } else {
       useFileSystemStore.setState({ currentFileId: null })
       setCurrentDocumentId(null)
     }
-  }, [activeTab, activeTabId, mounted, loadDocument, openFile, setCurrentDocumentId])
+  }, [
+    activeTabFileId,
+    activeTabFileName,
+    activeGitFileKind,
+    activeTabId,
+    activeTabIsModified,
+    activeTabIsTemplate,
+    activeTabSourceType,
+    activeTabTemplateId,
+    document?.fileId,
+    document?.fileName,
+    hasActiveTab,
+    loadDocument,
+    mounted,
+    openFile,
+    setCurrentDocumentId,
+  ])
 
   // 创建默认文件（只在客户端挂载后且确实没有文件时执行一次）
   useEffect(() => {
@@ -521,30 +547,6 @@ export function MarkdownEditor() {
 
     return () => clearTimeout(timer)
   }, [mounted])
-
-  // 当切换文件时，加载文档到编辑器
-  useEffect(() => {
-    if (currentFileId) {
-      // 如果正在编辑模板，先退出模板编辑模式
-      if (templateEditMode.isActive) {
-        setTemplateEditMode({ isActive: false, content: '', templateName: '', templateId: null })
-      }
-      
-      // 保存之前文件的状态（如果有）
-      const previousFileId = currentFileIdRef.current
-      if (previousFileId && previousFileId !== currentFileId) {
-        const { markAsSaved } = useDocumentStore.getState()
-        markAsSaved()
-      }
-      
-      // 直接从 store 获取最新的文件内容，而不是使用闭包中的 currentFile
-      const { files: latestFiles } = useFileSystemStore.getState()
-      const latestFile = latestFiles.find(f => f.id === currentFileId)
-      if (latestFile) {
-        loadDocument(latestFile.content, latestFile.name, latestFile.id)
-      }
-    }
-  }, [currentFileId, loadDocument, templateEditMode.isActive])
 
   // 监听文档修改状态，在模板编辑模式下标记模板和标签为已修改
   useEffect(() => {
@@ -575,18 +577,6 @@ export function MarkdownEditor() {
       useTabsStore.getState().markTabAsModified(currentTab.id, true)
     }
   }, [document?.isModified, templateEditMode.isActive])
-
-  // 自动保存逻辑已移至 node-edit-panel.tsx
-  // 这里保留 markAsSaved 用于手动保存（Ctrl+S）
-  const handleAutoSave = useCallback(() => {
-    const { document } = useDocumentStore.getState()
-    if (document?.fileId) {
-      const { markAsSaved } = useDocumentStore.getState()
-      markAsSaved()
-    }
-  }, [])
-
-
 
   // 处理保存
   const handleSave = useCallback(async () => {
@@ -658,7 +648,37 @@ export function MarkdownEditor() {
 
   // 监听 Ctrl+S 保存
   useEffect(() => {
+    const runDocumentHistoryShortcut = (type: 'undo' | 'redo') => {
+      const documentStore = useDocumentStore.getState()
+      const applied = type === 'undo' ? documentStore.undo() : documentStore.redo()
+      if (!applied) return false
+
+      syncActiveDocumentToActiveSource({ markSaved: false })
+      useAiChatStore.getState().syncToolUndoStackWithMarkdown(documentStore.getCurrentMarkdown())
+      return true
+    }
+
     const handleKeyDown = (e: KeyboardEvent) => {
+      const key = e.key.toLowerCase()
+      const isUndoKey = (e.ctrlKey || e.metaKey) && !e.shiftKey && key === 'z'
+      const isRedoKey = (e.ctrlKey || e.metaKey) && (key === 'y' || (e.shiftKey && key === 'z'))
+
+      if (isUndoKey || isRedoKey) {
+        const historyStore = useHistoryStore.getState()
+        const targetHistoryDescription = isUndoKey
+          ? historyStore.getCurrentDescription()
+          : historyStore.getRedoDescription()
+        const shouldPreferNativeTextUndo = isTextEditingTarget(e.target) && targetHistoryDescription !== 'AI agent apply_tool'
+        if (!shouldPreferNativeTextUndo) {
+          const applied = runDocumentHistoryShortcut(isUndoKey ? 'undo' : 'redo')
+          if (applied) {
+            e.preventDefault()
+            e.stopPropagation()
+          }
+        }
+        return
+      }
+
       if ((e.ctrlKey || e.metaKey) && e.key === 'o') {
         e.preventDefault()
         setActivePanel('files')

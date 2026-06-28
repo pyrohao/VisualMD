@@ -8,10 +8,18 @@ const storage = vi.hoisted(() => ({
   drafts: new Map<string, AgentDraft>(),
   references: new Map<string, any[]>(),
   ui: new Map<string, string>(),
+  documentMarkdown: '# Doc\n\nSelected text.',
+  applyExternalMarkdown: vi.fn((markdown: string) => {
+    storage.documentMarkdown = markdown
+    return true
+  }),
+  markAsSaved: vi.fn(),
   importFile: vi.fn(),
+  saveFile: vi.fn(),
   saveFileContent: vi.fn(),
   openFileInTab: vi.fn(),
   updateTabContent: vi.fn(),
+  markTabAsModified: vi.fn(),
   markTabAsSaved: vi.fn(),
   currentFileId: null as string | null,
 }))
@@ -126,6 +134,13 @@ vi.mock('@/lib/agent', async (importOriginal) => {
         appliedMarkdown: '# Doc\n\nChanged text.',
         previousMarkdown: options.markdown,
         appliedToolCallIds: ['tool-call-1'],
+        appliedTools: [
+          {
+            toolCallId: 'tool-call-1',
+            previousMarkdown: options.markdown,
+            appliedMarkdown: '# Doc\n\nChanged text.',
+          },
+        ],
         generatedFiles: [],
         stoppedBecause: 'assistant-text',
       }
@@ -146,8 +161,9 @@ vi.mock('@/stores/documentStore', () => ({
   useDocumentStore: {
     getState: () => ({
       document: { version: 1, fileName: 'doc.md' },
-      getCurrentMarkdown: () => '# Doc\n\nSelected text.',
-      applyExternalMarkdown: vi.fn(),
+      getCurrentMarkdown: () => storage.documentMarkdown,
+      applyExternalMarkdown: storage.applyExternalMarkdown,
+      markAsSaved: storage.markAsSaved,
     }),
   },
 }))
@@ -158,7 +174,7 @@ vi.mock('@/stores/tabsStore', () => ({
       getActiveTab: () => ({ id: 'tab-1', fileId: 'file-1', sourceType: 'local' }),
       openFileInTab: storage.openFileInTab,
       updateTabContent: storage.updateTabContent,
-      markTabAsModified: vi.fn(),
+      markTabAsModified: storage.markTabAsModified,
       markTabAsSaved: storage.markTabAsSaved,
     }),
   },
@@ -168,7 +184,7 @@ vi.mock('@/stores/fileSystemStore', () => ({
   useFileSystemStore: {
     getState: () => ({
       currentFileId: storage.currentFileId,
-      saveFile: vi.fn(),
+      saveFile: storage.saveFile,
       saveFileContent: storage.saveFileContent,
       renameFile: vi.fn(),
       importFile: storage.importFile,
@@ -213,11 +229,16 @@ describe('ai chat store hook adapter', () => {
     storage.drafts.clear()
     storage.references.clear()
     storage.ui.clear()
+    storage.documentMarkdown = '# Doc\n\nSelected text.'
+    storage.applyExternalMarkdown.mockClear()
+    storage.markAsSaved.mockClear()
     storage.currentFileId = null
     storage.importFile.mockClear()
+    storage.saveFile.mockClear()
     storage.saveFileContent.mockClear()
     storage.openFileInTab.mockClear()
     storage.updateTabContent.mockClear()
+    storage.markTabAsModified.mockClear()
     storage.markTabAsSaved.mockClear()
     storage.importFile.mockImplementation(() => {
       storage.currentFileId = 'generated-file-1'
@@ -303,11 +324,17 @@ describe('ai chat store hook adapter', () => {
     const visibleMessages = useAiChatStore.getState().visibleMessagesByConversation['conversation-1']
     expect(messages.some((message) => message.role === 'user')).toBe(true)
     expect(messages.some((message) => message.role === 'tool' || message.toolName)).toBe(true)
-    expect(visibleMessages.map((message) => message.role)).toEqual(['user', 'assistant', 'assistant'])
+    expect(visibleMessages.map((message) => message.role)).toEqual(['user', 'assistant'])
     expect(visibleMessages[0]?.displayMessage).toBe('润色')
     expect(messages.at(-1)?.message).toBe('Done')
     expect(visibleMessages[1]?.message).toBe('Done')
-    expect(visibleMessages.at(-1)?.action?.type).toBe('tool_apply')
+    expect(storage.documentMarkdown).toBe('# Doc\n\nChanged text.')
+    expect(storage.applyExternalMarkdown).toHaveBeenCalledWith('# Doc\n\nChanged text.')
+    expect(storage.updateTabContent).toHaveBeenCalledWith('tab-1', '# Doc\n\nChanged text.')
+    expect(storage.saveFileContent).toHaveBeenCalledWith('file-1', '# Doc\n\nChanged text.')
+    expect(storage.markTabAsSaved).toHaveBeenCalledWith('tab-1', 'doc.md')
+    expect(storage.markAsSaved).toHaveBeenCalled()
+    expect(useAiChatStore.getState().toolUndoStackByConversation['conversation-1']).toHaveLength(1)
     expect(messages[0]?.message).toContain('Selected text')
     expect(useAiChatStore.getState().selectedReferenceIds).toEqual([])
     expect(useAiChatStore.getState().referencesByConversation['conversation-1']).toEqual([])
@@ -319,6 +346,77 @@ describe('ai chat store hook adapter', () => {
       new Set(messages.map((message) => message.id))
     )
     expect(useAiChatStore.getState().isSending).toBe(false)
+  })
+
+  it('undoes the last automatically applied tool change from the stack', async () => {
+    const { useAiChatStore } = await import('@/stores/aiChatStore')
+    await useAiChatStore.getState().createConversation()
+    await useAiChatStore.getState().setDraftInput('润色')
+    await useAiChatStore.getState().sendMessage()
+
+    expect(storage.documentMarkdown).toBe('# Doc\n\nChanged text.')
+    expect(useAiChatStore.getState().toolUndoStackByConversation['conversation-1']).toHaveLength(1)
+
+    storage.saveFileContent.mockClear()
+    storage.markTabAsSaved.mockClear()
+    const undone = await useAiChatStore.getState().undoLastToolApply()
+
+    expect(undone).toBe(true)
+    expect(storage.documentMarkdown).toBe('# Doc\n\nSelected text.')
+    expect(storage.saveFileContent).toHaveBeenCalledWith('file-1', '# Doc\n\nSelected text.')
+    expect(storage.markTabAsSaved).toHaveBeenCalledWith('tab-1', 'doc.md')
+    expect(
+      useAiChatStore.getState().toolUndoStackByConversation['conversation-1']?.[0]?.state
+    ).toBe('undone')
+  })
+
+  it('dismisses the latest available tool undo prompt without changing the document', async () => {
+    const { useAiChatStore } = await import('@/stores/aiChatStore')
+    await useAiChatStore.getState().createConversation()
+    await useAiChatStore.getState().setDraftInput('润色')
+    await useAiChatStore.getState().sendMessage()
+
+    expect(storage.documentMarkdown).toBe('# Doc\n\nChanged text.')
+    useAiChatStore.getState().dismissLastToolApply()
+
+    expect(storage.documentMarkdown).toBe('# Doc\n\nChanged text.')
+    expect(
+      useAiChatStore.getState().toolUndoStackByConversation['conversation-1']?.[0]?.state
+    ).toBe('dismissed')
+  })
+
+  it('syncs tool undo prompt state when document history undo or redo changes markdown', async () => {
+    const { useAiChatStore } = await import('@/stores/aiChatStore')
+    await useAiChatStore.getState().createConversation()
+    await useAiChatStore.getState().setDraftInput('润色')
+    await useAiChatStore.getState().sendMessage()
+
+    useAiChatStore.getState().syncToolUndoStackWithMarkdown('# Doc\n\nSelected text.')
+    expect(
+      useAiChatStore.getState().toolUndoStackByConversation['conversation-1']?.[0]?.state
+    ).toBe('undone')
+
+    useAiChatStore.getState().syncToolUndoStackWithMarkdown('# Doc\n\nChanged text.')
+    expect(
+      useAiChatStore.getState().toolUndoStackByConversation['conversation-1']?.[0]?.state
+    ).toBe('available')
+  })
+
+  it('reports a failed assistant message when document writeback cannot be applied', async () => {
+    storage.applyExternalMarkdown.mockImplementationOnce(() => false)
+
+    const { useAiChatStore } = await import('@/stores/aiChatStore')
+    await useAiChatStore.getState().createConversation()
+    await useAiChatStore.getState().setDraftInput('润色')
+    await useAiChatStore.getState().sendMessage()
+
+    const state = useAiChatStore.getState()
+    const messages = state.messagesByConversation['conversation-1']
+    expect(messages.at(-1)?.role).toBe('assistant')
+    expect(messages.at(-1)?.state).toBe('failed')
+    expect(messages.at(-1)?.error).toContain('AI 工具写回失败')
+    expect(state.toolUndoStackByConversation['conversation-1']).toHaveLength(0)
+    expect(storage.saveFileContent).not.toHaveBeenCalledWith('file-1', '# Doc\n\nChanged text.')
   })
 
   it('renames conversations', async () => {
@@ -354,6 +452,7 @@ describe('ai chat store hook adapter', () => {
       appliedMarkdown: '# Doc\n\nSelected text.',
       previousMarkdown: '# Doc\n\nSelected text.',
       appliedToolCallIds: [],
+      appliedTools: [],
       generatedFiles: [{ toolCallId: 'tool-call-generate', fileName: 'Generated.md', content: '# Generated' }],
       stoppedBecause: 'assistant-text',
     })
@@ -398,6 +497,7 @@ describe('ai chat store hook adapter', () => {
         appliedMarkdown: '# Doc\n\nSelected text.',
         previousMarkdown: '# Doc\n\nSelected text.',
         appliedToolCallIds: [],
+        appliedTools: [],
         generatedFiles: [{ toolCallId: 'tool-call-generate', fileName: 'Live.md', content: '# Live' }],
         stoppedBecause: 'assistant-text',
       }

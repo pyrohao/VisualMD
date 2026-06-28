@@ -143,11 +143,52 @@ describe('agent runtime', () => {
     })
 
     expect(result.appliedMarkdown).toBe('new')
+    expect(result.appliedTools).toEqual([
+      { toolCallId: expect.any(String), previousMarkdown: 'old', appliedMarkdown: 'new' },
+    ])
     expect(result.messages.some((message) => message.role === 'tool')).toBe(true)
     expect(result.messages.find((message) => message.role === 'assistant' && message.toolName)?.message).toContain('"argumentKeys"')
     expect(result.messages.find((message) => message.role === 'assistant' && message.toolName)?.message).not.toContain('"old"')
     expect(result.messages.find((message) => message.role === 'tool')?.message).not.toContain('nextMarkdown')
     expect(result.messages.at(-1)?.message).toBe('Applied')
+  })
+
+  it('retries with apply_tool when an edit request gets plain text instead of tool JSON', async () => {
+    vi.spyOn(AIService.prototype, 'chatMessagesStream')
+      .mockResolvedValueOnce('已成功将内容修改为你好。')
+      .mockResolvedValueOnce('{"tool":"apply_tool","arguments":{"oldString":"工具调用测试内容","newString":"你好"}}')
+      .mockResolvedValueOnce('已完成')
+    const messages: AgentMessage[] = [
+      {
+        id: 'u1',
+        conversationId: 'c1',
+        role: 'user',
+        message: [
+          'Task type: ask',
+          'User request:',
+          '把这里修改为你好',
+          '',
+          'Selected document text:',
+          '<selected_text>',
+          '工具调用测试内容',
+          '</selected_text>',
+        ].join('\n'),
+        createdAt: 1,
+      },
+    ]
+
+    const result = await runAgentReActLoop({
+      providerConfig,
+      apiKey: 'test',
+      messages,
+      tools: createDefaultAgentTools(),
+      markdown: '# 测试章节\n\n工具调用测试内容',
+      maxTurns: 5,
+    })
+
+    expect(result.appliedMarkdown).toBe('# 测试章节\n\n你好')
+    expect(result.messages.some((message) => message.role === 'assistant' && message.message.includes('已成功将内容修改'))).toBe(false)
+    expect(result.messages.some((message) => message.role === 'tool' && message.error?.includes('Return apply_tool JSON'))).toBe(true)
   })
 
   it('uses semantic recovery after an apply failure', async () => {

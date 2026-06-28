@@ -24,6 +24,7 @@ export interface AgentRuntimeTurnResult {
   appliedMarkdown: string
   previousMarkdown: string
   appliedToolCallIds: string[]
+  appliedTools: Array<{ toolCallId: string; previousMarkdown: string; appliedMarkdown: string }>
   generatedFiles: Array<{ toolCallId: string; fileName: string; content: string }>
   stoppedBecause: 'assistant-text' | 'tool-limit' | 'invalid-tool'
 }
@@ -100,6 +101,30 @@ function likelyRequestsDocumentGeneration(messages: AgentMessage[]) {
   return /生成|创建|新建|写一份|起草|create|generate|draft|new\s+(document|file)/i.test(latestUser)
 }
 
+function likelyRequiresApplyTool(messages: AgentMessage[]) {
+  const latestUser = [...messages].reverse().find((message) => message.role === 'user')?.message || ''
+  const hasSelectedText = /Selected document text:\s*[\s\S]*?<selected_text>[\s\S]+?<\/selected_text>/i.test(latestUser)
+  const asksForEdit = /修改|替换|改成|改为|完善|润色|优化|重写|rewrite|revise|polish|improve|replace|change/i.test(latestUser)
+  return hasSelectedText && asksForEdit
+}
+
+function createToolRequiredMessage(conversationId: string, reason: string): AgentMessage {
+  return {
+    id: nanoid(),
+    conversationId,
+    role: 'tool',
+    message: JSON.stringify({
+      ok: false,
+      message: reason,
+      metadata: { requiredTool: 'apply_tool' },
+    }),
+    createdAt: Date.now(),
+    toolName: 'apply_tool',
+    state: 'failed',
+    error: reason,
+  }
+}
+
 export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promise<AgentRuntimeTurnResult> {
   const conversationId = options.messages[0]?.conversationId || ''
   const service = createAIService(options.providerConfig)
@@ -109,11 +134,13 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
   const modelMessages: AgentMessage[] = [...options.messages]
   const previousMarkdown = options.markdown
   const appliedToolCallIds: string[] = []
+  const appliedTools: AgentRuntimeTurnResult['appliedTools'] = []
   const generatedFiles: AgentRuntimeTurnResult['generatedFiles'] = []
   let markdown = options.markdown
   let stopReason: AgentRuntimeTurnResult['stoppedBecause'] = 'tool-limit'
   let lastFailedContext: string | null = null
-  const suppressFirstTurnAssistantStream = likelyRequestsDocumentGeneration(options.messages)
+  const requiresApplyTool = likelyRequiresApplyTool(options.messages)
+  const suppressFirstTurnAssistantStream = likelyRequestsDocumentGeneration(options.messages) || requiresApplyTool
 
   for (let turn = 0; turn < maxTurns; turn += 1) {
     if (options.signal?.aborted) {
@@ -151,6 +178,16 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
 
     if (parsed.kind === 'text') {
       const text = parsed.text.trim()
+      if (requiresApplyTool && appliedTools.length === 0 && turn < maxTurns - 1) {
+        const toolRequiredMessage = createToolRequiredMessage(
+          conversationId,
+          'The user requested a document edit. Return apply_tool JSON with exact oldString and newString instead of plain text.'
+        )
+        messages.push(toolRequiredMessage)
+        modelMessages.push(toolRequiredMessage)
+        continue
+      }
+
       if (!text) {
         const failedMessage: AgentMessage = {
           id: nanoid(),
@@ -163,7 +200,7 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
         }
         messages.push(failedMessage)
         modelMessages.push(failedMessage)
-        return { messages, appliedMarkdown: markdown, previousMarkdown, appliedToolCallIds, generatedFiles, stoppedBecause: 'invalid-tool' }
+        return { messages, appliedMarkdown: markdown, previousMarkdown, appliedToolCallIds, appliedTools, generatedFiles, stoppedBecause: 'invalid-tool' }
       }
 
       const assistantMessage: AgentMessage = {
@@ -177,7 +214,7 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
       messages.push(assistantMessage)
       modelMessages.push(assistantMessage)
       stopReason = 'assistant-text'
-      return { messages, appliedMarkdown: markdown, previousMarkdown, appliedToolCallIds, generatedFiles, stoppedBecause: stopReason }
+      return { messages, appliedMarkdown: markdown, previousMarkdown, appliedToolCallIds, appliedTools, generatedFiles, stoppedBecause: stopReason }
     }
 
     const toolCall = {
@@ -221,8 +258,14 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
     }
 
     if (toolResult.ok && toolResult.nextMarkdown) {
+      const toolPreviousMarkdown = markdown
       markdown = toolResult.nextMarkdown
       appliedToolCallIds.push(toolCall.id)
+      appliedTools.push({
+        toolCallId: toolCall.id,
+        previousMarkdown: toolPreviousMarkdown,
+        appliedMarkdown: markdown,
+      })
     }
 
     if (toolResult.ok && toolResult.generatedFile) {
@@ -251,7 +294,7 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
     modelMessages.push(toolModelMessage)
 
     if (!tool) {
-      return { messages, appliedMarkdown: markdown, previousMarkdown, appliedToolCallIds, generatedFiles, stoppedBecause: 'invalid-tool' }
+      return { messages, appliedMarkdown: markdown, previousMarkdown, appliedToolCallIds, appliedTools, generatedFiles, stoppedBecause: 'invalid-tool' }
     }
 
     if (!toolResult.ok && toolCall.name !== 'semantic_tool') {
@@ -271,5 +314,5 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
   messages.push(limitMessage)
   modelMessages.push(limitMessage)
 
-  return { messages, appliedMarkdown: markdown, previousMarkdown, appliedToolCallIds, generatedFiles, stoppedBecause: stopReason }
+  return { messages, appliedMarkdown: markdown, previousMarkdown, appliedToolCallIds, appliedTools, generatedFiles, stoppedBecause: stopReason }
 }
