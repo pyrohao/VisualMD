@@ -114,6 +114,26 @@ function trimRange(content: string, start: number, end: number) {
   return { start: nextStart, end: nextEnd }
 }
 
+function expandRangeToCompleteMarkdownImages(content: string, start: number, end: number) {
+  const imagePattern = /!\[[^\]\n]*\]\((?:\\.|[^)\n])+\)/g
+  let nextStart = start
+  let nextEnd = end
+  let match: RegExpExecArray | null
+
+  while ((match = imagePattern.exec(content)) !== null) {
+    const imageStart = match.index
+    const imageEnd = imageStart + match[0].length
+    if (nextEnd <= imageStart || nextStart >= imageEnd) {
+      continue
+    }
+
+    nextStart = Math.min(nextStart, imageStart)
+    nextEnd = Math.max(nextEnd, imageEnd)
+  }
+
+  return { start: nextStart, end: nextEnd }
+}
+
 function isHeadingLine(text: string) {
   return /^(#{1,6})\s+(.+?)\s*$/.test(text.trimEnd())
 }
@@ -307,7 +327,8 @@ function createExactSelectionSnapshot(
   selectionStart: number,
   selectionEnd: number
 ) {
-  const { start, end } = trimRange(markdown, Math.min(selectionStart, selectionEnd), Math.max(selectionStart, selectionEnd))
+  const trimmed = trimRange(markdown, Math.min(selectionStart, selectionEnd), Math.max(selectionStart, selectionEnd))
+  const { start, end } = expandRangeToCompleteMarkdownImages(markdown, trimmed.start, trimmed.end)
   if (start === end) {
     return null
   }

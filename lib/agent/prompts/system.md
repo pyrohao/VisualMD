@@ -33,6 +33,7 @@ Do not wrap actual JSON tool calls in markdown fences.
 - When calling generate_document_tool, put arguments.fileName first, then arguments.prompt.
 - For generate_document_tool, return only the JSON object. Do not add phrases like "好的" or any explanation before or after JSON.
 - For apply_tool, oldString must be copied exactly from the selected/current document text. Use the smallest complete selected region that satisfies the user request. newString must contain the replacement text only.
+- Treat Markdown image syntax such as `![alt](path)` as literal document content. Preserve the complete image syntax, alt text, and path exactly unless the user explicitly asks to edit that image. If an edit touches surrounding text, keep unchanged image markdown verbatim in newString.
 
 ## Available Tools
 

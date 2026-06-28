@@ -114,6 +114,23 @@ describe('ai-doc-chat', () => {
     expect(reference?.endOffset).toBe(end)
   })
 
+  it('expands partial image path selections to the complete markdown image syntax', () => {
+    const imageSyntax = '![alt](./image.png)'
+    const start = SAMPLE_MARKDOWN.indexOf('image.png')
+    const end = start + 'image'.length
+    const reference = createReferenceSnapshot({
+      markdown: SAMPLE_MARKDOWN,
+      selectionStart: start,
+      selectionEnd: end,
+      version: 1,
+    })
+
+    expect(reference).not.toBeNull()
+    expect(reference?.blockType).toBe('image')
+    expect(reference?.expectedText).toBe(imageSyntax)
+    expect(SAMPLE_MARKDOWN.slice(reference!.startOffset, reference!.endOffset)).toBe(imageSyntax)
+  })
+
   it('detects stale reference when target content changed', () => {
     const start = SAMPLE_MARKDOWN.indexOf('First paragraph.')
     const end = start + 'First paragraph.'.length

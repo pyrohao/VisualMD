@@ -24,10 +24,14 @@ import remarkParse from 'remark-parse'
 import remarkGfm from 'remark-gfm'
 import remarkRehype from 'remark-rehype'
 import rehypeStringify from 'rehype-stringify'
-import { BookOpen, Pencil, Plus, SplitSquareHorizontal, X } from 'lucide-react'
+import { BookOpen, Columns2, Pencil, Plus, Rows2, SplitSquareHorizontal, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getMarkdownImagePasteResult, hasClipboardImage } from '@/lib/clipboard-image'
 import { getGitMarkdownImagePasteResult } from '@/lib/git-asset-paste'
+import {
+  createMarkdownReferenceHighlightPlugin,
+  resolvePreviewHighlightRanges,
+} from '@/lib/markdown-preview-highlight'
 import {
   buildGitImageRuntimeConfig,
   collectGitAssetMap,
@@ -41,6 +45,13 @@ import { Button } from '@/components/ui/button'
  * 预览模式类型
  */
 type PreviewMode = 'preview' | 'edit' | 'live'
+type LivePreviewLayout = 'side-by-side' | 'stacked'
+
+const LIVE_PREVIEW_LAYOUT_STORAGE_KEY = 'visualmd-live-preview-layout'
+
+function isLivePreviewLayout(value: string | null): value is LivePreviewLayout {
+  return value === 'side-by-side' || value === 'stacked'
+}
 
 /**
  * 根据主题生成CSS变量样式
@@ -185,6 +196,25 @@ function getThemeStyles(theme: ThemeMode): string {
       border-collapse: collapse;
       margin: 1.5rem 0;
     }
+    .markdown-body .visualmd-reference-highlight {
+      position: relative;
+      border-radius: 0.75rem;
+      outline: 2px solid ${config.primary}73;
+      background-color: ${config.primary}14;
+      box-shadow: 0 0 0 6px ${config.primary}0f;
+    }
+    .markdown-body li.visualmd-reference-highlight,
+    .markdown-body p.visualmd-reference-highlight,
+    .markdown-body h1.visualmd-reference-highlight,
+    .markdown-body h2.visualmd-reference-highlight,
+    .markdown-body h3.visualmd-reference-highlight,
+    .markdown-body h4.visualmd-reference-highlight,
+    .markdown-body h5.visualmd-reference-highlight,
+    .markdown-body h6.visualmd-reference-highlight,
+    .markdown-body pre.visualmd-reference-highlight,
+    .markdown-body table.visualmd-reference-highlight {
+      padding: 0.35rem 0.55rem;
+    }
     .markdown-body th,
     .markdown-body td {
       border: 1px solid ${config.border};
@@ -196,13 +226,6 @@ function getThemeStyles(theme: ThemeMode): string {
       font-weight: 600;
     }
   `
-}
-
-/**
- * 移除 Metadata (YAML Front Matter)
- */
-function removeMetadata(markdown: string): string {
-  return markdown.replace(/^---\n[\s\S]*?\n---\n?/, '')
 }
 
 function GitBinaryPreview({
@@ -379,6 +402,9 @@ export function MarkdownPreview() {
   const selectionCandidate = useAiChatStore((state) => state.selectionCandidate)
   const commitSelectionCandidate = useAiChatStore((state) => state.commitSelectionCandidate)
   const clearSelectionCandidate = useAiChatStore((state) => state.clearSelectionCandidate)
+  const currentConversationId = useAiChatStore((state) => state.currentConversationId)
+  const referencesByConversation = useAiChatStore((state) => state.referencesByConversation)
+  const selectedReferenceIds = useAiChatStore((state) => state.selectedReferenceIds)
   const activeTabId = useTabsStore((state) => state.activeTabId)
   const activeTab = useTabsStore((state) => state.tabs.find((item) => item.id === state.activeTabId) || null)
   const activeGitMeta = useTabsStore((state) => {
@@ -394,6 +420,7 @@ export function MarkdownPreview() {
   const { theme, getThemeConfig } = useThemeStore()
   const [mounted, setMounted] = useState(false)
   const [mode, setMode] = useState<PreviewMode>('preview')
+  const [liveLayout, setLiveLayout] = useState<LivePreviewLayout>('side-by-side')
   const [html, setHtml] = useState('')
   const [editContent, setEditContent] = useState('')
   const editTextareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -409,6 +436,15 @@ export function MarkdownPreview() {
 
   useEffect(() => {
     setMounted(true)
+    const storedLayout = window.localStorage.getItem(LIVE_PREVIEW_LAYOUT_STORAGE_KEY)
+    if (isLivePreviewLayout(storedLayout)) {
+      setLiveLayout(storedLayout)
+    }
+  }, [])
+
+  const handleLiveLayoutChange = useCallback((nextLayout: LivePreviewLayout) => {
+    setLiveLayout(nextLayout)
+    window.localStorage.setItem(LIVE_PREVIEW_LAYOUT_STORAGE_KEY, nextLayout)
   }, [])
 
   useEffect(() => {
@@ -433,6 +469,16 @@ export function MarkdownPreview() {
   const isEditingMode = mode === 'edit' || mode === 'live'
   const renderMarkdown = mode === 'live' ? editContent : markdown
   const documentKey = `${activeTabId || ''}\u0000${document?.fileId || ''}\u0000${document?.fileName || ''}`
+  const activeReferences = useMemo(() => {
+    if (!currentConversationId || selectedReferenceIds.length === 0) {
+      return []
+    }
+
+    const selectedReferenceIdSet = new Set(selectedReferenceIds)
+    return (referencesByConversation[currentConversationId] || []).filter((reference) =>
+      selectedReferenceIdSet.has(reference.id)
+    )
+  }, [currentConversationId, referencesByConversation, selectedReferenceIds])
 
   // 当 markdown 变化时，更新编辑内容
   useEffect(() => {
@@ -488,11 +534,19 @@ export function MarkdownPreview() {
     let cancelled = false
 
     const processMarkdown = async () => {
-      const content = removeMetadata(renderMarkdown)
-      
-      const result = await unified()
+      const { body: content, ranges: referenceHighlightRanges } = resolvePreviewHighlightRanges(
+        renderMarkdown,
+        activeReferences
+      )
+      const processor = unified()
         .use(remarkParse)
-        .use(remarkGfm) // 支持 GitHub Flavored Markdown
+        .use(remarkGfm)
+
+      if (referenceHighlightRanges.length > 0) {
+        processor.use(createMarkdownReferenceHighlightPlugin(referenceHighlightRanges))
+      }
+      
+      const result = await processor
         .use(remarkRehype, { allowDangerousHtml: true })
         .use(rehypeStringify, { allowDangerousHtml: true })
         .process(content)
@@ -518,7 +572,7 @@ export function MarkdownPreview() {
     return () => {
       cancelled = true
     }
-  }, [activeGitMeta?.path, gitAssets, renderMarkdown, resolveGitImageSources])
+  }, [activeGitMeta?.path, activeReferences, gitAssets, renderMarkdown, resolveGitImageSources])
 
   // 处理模式切换
   const handleModeChange = useCallback((newMode: PreviewMode) => {
@@ -901,6 +955,44 @@ export function MarkdownPreview() {
             <span>{liveLabels.short}</span>
           </button>
         </div>
+
+        {mode === 'live' && (
+          <div
+            className="flex flex-shrink-0 items-center rounded-lg p-1"
+            style={{ backgroundColor: themeConfig.background }}
+          >
+            <button
+              type="button"
+              onClick={() => handleLiveLayoutChange('side-by-side')}
+              className={cn(
+                'flex h-8 w-8 items-center justify-center rounded-md transition-all duration-200',
+                liveLayout === 'side-by-side' ? 'shadow-sm' : 'hover:opacity-80'
+              )}
+              style={{
+                backgroundColor: liveLayout === 'side-by-side' ? themeConfig.card : 'transparent',
+                color: liveLayout === 'side-by-side' ? themeConfig.heading : themeConfig.muted,
+              }}
+              title={currentLanguage === 'zh' ? '左右分屏' : 'Side by side'}
+            >
+              <Columns2 className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => handleLiveLayoutChange('stacked')}
+              className={cn(
+                'flex h-8 w-8 items-center justify-center rounded-md transition-all duration-200',
+                liveLayout === 'stacked' ? 'shadow-sm' : 'hover:opacity-80'
+              )}
+              style={{
+                backgroundColor: liveLayout === 'stacked' ? themeConfig.card : 'transparent',
+                color: liveLayout === 'stacked' ? themeConfig.heading : themeConfig.muted,
+              }}
+              title={currentLanguage === 'zh' ? '上下分屏' : 'Stacked'}
+            >
+              <Rows2 className="h-4 w-4" />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* 内容区域 */}
@@ -943,10 +1035,31 @@ export function MarkdownPreview() {
         )}
 
         {mode === 'live' && (
-          <>
+          <div className={cn('flex h-full w-full min-w-0', liveLayout === 'stacked' ? 'flex-col' : 'flex-row')}>
             <div
-              className="relative h-full w-1/2 border-r"
+              ref={livePreviewRef}
+              onScroll={handleLivePreviewScroll}
+              className={cn(
+                'min-h-0 min-w-0 overflow-y-auto overflow-x-hidden',
+                liveLayout === 'stacked'
+                  ? 'h-1/2 w-full border-b'
+                  : 'h-full w-1/2 border-r'
+              )}
               style={{ borderColor: themeConfig.border }}
+            >
+              <div className="max-w-none p-5">
+                <style>{getThemeStyles(theme)}</style>
+                <article
+                  className="markdown-body max-w-none"
+                  dangerouslySetInnerHTML={{ __html: html }}
+                />
+              </div>
+            </div>
+            <div
+              className={cn(
+                'relative min-h-0 min-w-0',
+                liveLayout === 'stacked' ? 'h-1/2 w-full' : 'h-full w-1/2'
+              )}
             >
               {selectionPrompt}
               <textarea
@@ -968,20 +1081,7 @@ export function MarkdownPreview() {
                 {...bindTextareaSelection()}
               />
             </div>
-            <div
-              ref={livePreviewRef}
-              onScroll={handleLivePreviewScroll}
-              className="h-full w-1/2 overflow-y-auto overflow-x-hidden"
-            >
-              <div className="max-w-none p-5">
-                <style>{getThemeStyles(theme)}</style>
-                <article
-                  className="markdown-body max-w-none"
-                  dangerouslySetInnerHTML={{ __html: html }}
-                />
-              </div>
-            </div>
-          </>
+          </div>
         )}
       </div>
     </div>
