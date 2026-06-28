@@ -249,32 +249,53 @@ describe('ai chat store hook adapter', () => {
     expect(storage.references.get('conversation-1')).toHaveLength(1)
   })
 
-  it('keeps one pending selection candidate until it is added', async () => {
+  it('keeps one pending selection candidate until it is added or cleared', async () => {
     const { useAiChatStore } = await import('@/stores/aiChatStore')
     await useAiChatStore.getState().createConversation()
 
     await useAiChatStore.getState().addEditorSelectionReference(7, 20, '# Doc\n\nSelected text.', 1)
     const firstCandidate = useAiChatStore.getState().selectionCandidate
     expect(firstCandidate?.expectedText).toBe('Selected text')
-    expect(useAiChatStore.getState().selectionHintType).toBe('candidate')
 
     await useAiChatStore.getState().addEditorSelectionReference(2, 5, '# Doc\n\nSelected text.', 1)
     const secondCandidate = useAiChatStore.getState().selectionCandidate
-    expect(secondCandidate?.expectedText).toBe('Doc')
-    expect(secondCandidate?.expectedText).not.toBe(firstCandidate?.expectedText)
+    expect(secondCandidate?.expectedText).toBe('Selected text')
     expect(useAiChatStore.getState().referencesByConversation['conversation-1']).toHaveLength(0)
+
+    useAiChatStore.getState().clearSelectionCandidate()
+    await useAiChatStore.getState().addEditorSelectionReference(2, 5, '# Doc\n\nSelected text.', 1)
+    expect(useAiChatStore.getState().selectionCandidate?.expectedText).toBe('Doc')
 
     const committed = await useAiChatStore.getState().commitSelectionCandidate()
     expect(committed).toBe(true)
     expect(useAiChatStore.getState().selectionCandidate).toBeNull()
-    expect(useAiChatStore.getState().selectionHintType).toBe('status')
     expect(useAiChatStore.getState().referencesByConversation['conversation-1']).toHaveLength(1)
     expect(useAiChatStore.getState().referencesByConversation['conversation-1']?.[0]?.expectedText).toBe('Doc')
+  })
+
+  it('replaces the previous committed reference instead of keeping multiple blocks', async () => {
+    const { useAiChatStore } = await import('@/stores/aiChatStore')
+    await useAiChatStore.getState().createConversation()
+
+    await useAiChatStore.getState().addEditorSelectionReference(7, 20, '# Doc\n\nSelected text.', 1)
+    await useAiChatStore.getState().commitSelectionCandidate()
+    const firstReferenceId = useAiChatStore.getState().selectedReferenceIds[0]
+
+    await useAiChatStore.getState().addEditorSelectionReference(2, 5, '# Doc\n\nSelected text.', 1)
+    await useAiChatStore.getState().commitSelectionCandidate()
+    const state = useAiChatStore.getState()
+
+    expect(state.referencesByConversation['conversation-1']).toHaveLength(1)
+    expect(state.referencesByConversation['conversation-1']?.[0]?.expectedText).toBe('Doc')
+    expect(state.selectedReferenceIds).toHaveLength(1)
+    expect(state.selectedReferenceIds[0]).not.toBe(firstReferenceId)
   })
 
   it('sends user messages through the agent runtime', async () => {
     const { useAiChatStore } = await import('@/stores/aiChatStore')
     await useAiChatStore.getState().createConversation()
+    await useAiChatStore.getState().addEditorSelectionReference(7, 20, '# Doc\n\nSelected text.', 1)
+    await useAiChatStore.getState().commitSelectionCandidate()
     await useAiChatStore.getState().setDraftInput('润色')
     await useAiChatStore.getState().sendMessage()
 
@@ -287,6 +308,11 @@ describe('ai chat store hook adapter', () => {
     expect(messages.at(-1)?.message).toBe('Done')
     expect(visibleMessages[1]?.message).toBe('Done')
     expect(visibleMessages.at(-1)?.action?.type).toBe('tool_apply')
+    expect(messages[0]?.message).toContain('Selected text')
+    expect(useAiChatStore.getState().selectedReferenceIds).toEqual([])
+    expect(useAiChatStore.getState().referencesByConversation['conversation-1']).toEqual([])
+    expect(storage.references.get('conversation-1')).toEqual([])
+    expect(storage.drafts.get('conversation-1')?.selectedReferenceIds).toEqual([])
     expect(Array.from(storage.messages.keys())).toEqual(['conversation-1'])
     expect(storage.messages.get('conversation-1')).toHaveLength(messages.length)
     expect(new Set(storage.messages.get('conversation-1')?.map((message) => message.id))).toEqual(

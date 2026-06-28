@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import {
-  AlertCircle,
   ArrowUp,
   Check,
   ChevronDown,
@@ -20,7 +19,6 @@ import { useThemeStore } from '@/stores/themeStore'
 import { useTranslation } from '@/stores/languageStore'
 import { useSidebarStore } from '@/stores/sidebarStore'
 import { useAiChatStore } from '@/stores/aiChatStore'
-import { useDocumentStore } from '@/stores/documentStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
@@ -86,8 +84,6 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
     chatTemperature,
     chatMaxTokens,
     chatHistoryRounds,
-    selectionHint,
-    selectionHintType,
     initialize,
     openConversation,
     leaveConversation,
@@ -96,7 +92,6 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
     renameConversation,
     setDraftInput,
     removeReference,
-    clearSelectionHint,
     sendMessage,
     stopSending,
     setChatTemperature,
@@ -104,9 +99,7 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
     setChatHistoryRounds,
     confirmToolApply,
     undoToolApply,
-    refreshReferenceStaleState,
   } = useAiChatStore()
-  const documentVersion = useDocumentStore((state) => state.document?.version || 0)
 
   const themeConfig = getThemeConfig()
   const connectedProviders = useMemo(
@@ -121,20 +114,6 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
   useEffect(() => {
     void initialize()
   }, [initialize])
-
-  useEffect(() => {
-    if (!documentVersion) return
-    void refreshReferenceStaleState()
-  }, [documentVersion, refreshReferenceStaleState])
-
-  useEffect(() => {
-    if (!selectionHint || selectionHintType !== 'status') return
-    const timer = window.setTimeout(() => {
-      clearSelectionHint()
-    }, 2200)
-
-    return () => window.clearTimeout(timer)
-  }, [clearSelectionHint, selectionHint, selectionHintType])
 
   const view: DockView = currentConversationId ? 'conversation' : 'history'
   const currentMessages = currentConversationId ? visibleMessagesByConversation[currentConversationId] || [] : []
@@ -154,8 +133,7 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
       .join(' ')
       .replace(/\s+/g, ' ')
       .trim()
-    const preview = normalized || (currentLanguage === 'zh' ? '空白选区' : 'Empty selection')
-    return preview.length > 15 ? `${preview.slice(0, 15)}...` : preview
+    return normalized || (currentLanguage === 'zh' ? '空白选区' : 'Empty selection')
   }
   const submitMessage = () => {
     if (!draftInput.trim() || isSending || isLoading) return
@@ -188,13 +166,13 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
 
   return (
     <div
-      className="flex h-full min-h-0 flex-col"
+      className="flex h-full min-h-0 w-full min-w-0 max-w-full flex-col overflow-hidden"
       style={{
         background: `linear-gradient(180deg, ${themeConfig.card} 0%, ${themeConfig.background} 18%)`,
       }}
     >
       <div
-        className="flex items-start justify-between border-b px-4 py-3"
+        className="flex w-full min-w-0 max-w-full items-start justify-between overflow-hidden border-b px-4 py-3"
         style={{ borderColor: themeConfig.border }}
       >
         {view === 'history' ? (
@@ -203,8 +181,8 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
             {currentLanguage === 'zh' ? 'Tasks' : 'Tasks'}
           </div>
         ) : (
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
+          <div className="min-w-0 flex-1 basis-0">
+            <div className="flex min-w-0 items-center gap-2">
               <Button
                 type="button"
                 variant="ghost"
@@ -215,14 +193,14 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
               >
                 <ChevronLeft className="h-4 w-4" />
               </Button>
-              <div className="truncate text-[15px] font-medium" style={{ color: themeConfig.heading }}>
+              <div className="min-w-0 flex-1 truncate text-[15px] font-medium" style={{ color: themeConfig.heading }}>
                 {currentConversation?.title || (currentLanguage === 'zh' ? '新对话' : 'New chat')}
               </div>
             </div>
           </div>
         )}
 
-        <div className="flex items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1">
           <ActionIcon icon={<MoreHorizontal className="h-4 w-4" />} color={themeConfig.muted} />
           <ActionIcon icon={<RotateCcw className="h-4 w-4" />} color={themeConfig.muted} />
           <ActionIcon
@@ -238,9 +216,9 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
         </div>
       </div>
 
-      <ScrollArea className="min-h-0 flex-1">
-        {view === 'history' ? (
-          <div className="flex min-h-full min-w-0 flex-col px-4 pb-4 pt-3">
+      {view === 'history' ? (
+        <ScrollArea className="min-h-0 w-full max-w-full flex-1 overflow-x-hidden">
+          <div className="flex min-h-full w-full min-w-0 max-w-full flex-col overflow-x-hidden px-4 pb-4 pt-3">
             <div className="space-y-1">
               {conversations.map((conversation) => {
                 const conversationSending = sendingConversationId === conversation.id
@@ -361,183 +339,181 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
                   style={{ borderColor: themeConfig.border, color: themeConfig.textMuted }}
                 >
                   {currentLanguage === 'zh'
-                    ? '暂无对话历史。先在编辑区选中文本，或点击预览区块，将内容加入对话。'
-                    : 'No chat history yet. Select text in the editor or click a preview block to add it to chat.'}
+                    ? '暂无对话历史。先在编辑区选中文本，将内容加入对话。'
+                    : 'No chat history yet. Select text in the editor to add it to chat.'}
                 </div>
               )}
             </div>
           </div>
-        ) : (
-          <div className="flex min-h-full min-w-0 flex-col px-4 pb-4 pt-3">
-            {selectionHint && selectionHintType === 'status' && (
-              <div
-                className="mb-3 rounded-xl border px-3 py-2 text-xs leading-5"
-                style={{
-                  borderColor: themeConfig.border,
-                  backgroundColor: themeConfig.background,
-                  color: themeConfig.textMuted,
-                }}
+        </ScrollArea>
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          {!!selectedReferences.length && (
+            <div
+              className="shrink-0 box-border w-full max-w-full overflow-hidden border-b px-4 py-3"
+              style={{
+                borderColor: themeConfig.border,
+                backgroundColor: themeConfig.card,
+              }}
+            >
+              <button
+                type="button"
+                className="box-border flex h-11 w-full max-w-full items-center overflow-hidden rounded-xl px-3 text-left"
+                onClick={() => setReferencesExpanded((value) => !value)}
               >
-                {selectionHint}
-              </div>
-            )}
+                <div className="flex min-w-0 flex-1 basis-0 items-center gap-2 overflow-hidden">
+                  {referencesExpanded ? (
+                    <ChevronDown className="h-4 w-4 shrink-0" style={{ color: themeConfig.textMuted }} />
+                  ) : (
+                    <ChevronRight className="h-4 w-4 shrink-0" style={{ color: themeConfig.textMuted }} />
+                  )}
+                  <span className="shrink-0 text-xs font-medium" style={{ color: themeConfig.heading }}>
+                    {currentLanguage === 'zh' ? '引用' : 'References'}
+                  </span>
+                  <span
+                    className="shrink-0 rounded-full px-2 py-0.5 text-[11px]"
+                    style={{ backgroundColor: `${themeConfig.primary}12`, color: themeConfig.primary }}
+                  >
+                    {selectedReferences.length}
+                  </span>
+                  <span className="block min-w-0 flex-1 basis-0 truncate text-xs" style={{ color: themeConfig.textMuted }}>
+                    {selectedReferences.map((reference) => getReferencePreviewText(reference.expectedText)).join(' / ')}
+                  </span>
+                </div>
+              </button>
 
-            {!!selectedReferences.length && (
-              <div
-                className="mb-4 w-full max-w-full overflow-hidden rounded-xl border"
-                style={{ borderColor: themeConfig.border, backgroundColor: themeConfig.card }}
-              >
-                <button
-                  type="button"
-                  className="flex h-11 w-full max-w-full items-center overflow-hidden px-3 text-left"
-                  onClick={() => setReferencesExpanded((value) => !value)}
+              {referencesExpanded && (
+                <div
+                  className="box-border mt-2 max-h-44 w-full max-w-full space-y-1 overflow-y-auto overflow-x-hidden rounded-xl border p-2"
+                  style={{ borderColor: themeConfig.border }}
                 >
-                  <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
-                    {referencesExpanded ? (
-                      <ChevronDown className="h-4 w-4 shrink-0" style={{ color: themeConfig.textMuted }} />
-                    ) : (
-                      <ChevronRight className="h-4 w-4 shrink-0" style={{ color: themeConfig.textMuted }} />
-                    )}
-                    <span className="shrink-0 text-xs font-medium" style={{ color: themeConfig.heading }}>
-                      {currentLanguage === 'zh' ? '引用' : 'References'}
-                    </span>
-                    <span className="shrink-0 rounded-full px-2 py-0.5 text-[11px]" style={{ backgroundColor: `${themeConfig.primary}12`, color: themeConfig.primary }}>
-                      {selectedReferences.length}
-                    </span>
-                    <span className="min-w-0 truncate text-xs" style={{ color: themeConfig.textMuted }}>
-                      {selectedReferences.map((reference) => getReferencePreviewText(reference.expectedText)).join(' / ')}
-                    </span>
-                  </div>
-                </button>
-
-                {referencesExpanded && (
-                  <div
-                    className="max-h-44 w-full max-w-full space-y-1 overflow-y-auto overflow-x-hidden border-t p-2"
-                    style={{ borderColor: themeConfig.border }}
-                  >
-                    {selectedReferences.map((reference) => (
-                      <div
-                        key={reference.id}
-                        className="flex h-9 w-full max-w-full min-w-0 items-center gap-2 overflow-hidden rounded-lg border px-2"
-                        style={{
-                          borderColor: reference.stale
-                            ? themeConfig.error
-                            : reference.locked
-                              ? themeConfig.primary
-                              : themeConfig.border,
-                          backgroundColor: themeConfig.background,
-                        }}
-                      >
-                        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
-                          <span className="min-w-0 truncate text-xs font-medium" style={{ color: themeConfig.heading }}>
-                            {getReferencePreviewText(reference.expectedText)}
-                          </span>
-                          {reference.locked && (
-                            <Badge variant="outline" className="h-4 shrink-0 px-1 text-[10px]" style={{ borderColor: themeConfig.primary, color: themeConfig.primary }}>
-                              {currentLanguage === 'zh' ? '锁定' : 'Locked'}
-                            </Badge>
-                          )}
-                          {reference.stale && (
-                            <AlertCircle className="h-3.5 w-3.5 shrink-0" style={{ color: themeConfig.error }} />
-                          )}
-                        </div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 shrink-0 rounded-md hover:bg-transparent focus-visible:ring-0"
-                          onClick={() => void removeReference(reference.id)}
-                          style={{ color: themeConfig.textMuted, backgroundColor: 'transparent' }}
-                        >
-                          <X className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            <div className="space-y-3">
-              {currentMessages.map((message) => {
-                const isUser = message.role === 'user'
-                return (
-                  <div
-                    key={message.id}
-                    className="flex"
-                    style={{ justifyContent: isUser ? 'flex-end' : 'flex-start' }}
-                  >
+                  {selectedReferences.map((reference) => (
                     <div
-                      className="max-w-[88%] rounded-2xl px-4 py-3 text-sm leading-6"
+                      key={reference.id}
+                      className="box-border flex h-9 w-full max-w-full min-w-0 items-center gap-2 overflow-hidden rounded-lg border px-2"
                       style={{
-                        backgroundColor: isUser ? `${themeConfig.primary}10` : themeConfig.card,
-                        border: `1px solid ${isUser ? `${themeConfig.primary}22` : themeConfig.border}`,
-                        color: themeConfig.text,
+                        borderColor: reference.locked ? themeConfig.primary : themeConfig.border,
+                        backgroundColor: themeConfig.background,
                       }}
                     >
-                      {message.thinking && (
-                        <div
-                          className="mb-2 border-b pb-2 text-xs leading-5"
-                          style={{ color: themeConfig.textMuted, borderColor: themeConfig.border }}
+                      <div className="flex min-w-0 flex-1 basis-0 items-center gap-2 overflow-hidden">
+                        <span
+                          className="block min-w-0 flex-1 basis-0 truncate text-xs font-medium"
+                          title={getReferencePreviewText(reference.expectedText)}
+                          style={{ color: themeConfig.heading }}
                         >
-                          <div className="mb-1 font-medium" style={{ color: themeConfig.heading }}>
-                            {currentLanguage === 'zh' ? '思考' : 'Thinking'}
-                          </div>
-                          {message.thinking}
-                        </div>
-                      )}
-                      <div className="flex items-start gap-2">
-                        {message.state === 'pending' && !isUser && (
-                          <Loader2 className="mt-1 h-4 w-4 shrink-0 animate-spin" style={{ color: themeConfig.primary }} />
-                        )}
-                        {(message.displayMessage || message.message) && (
-                          <span>{message.displayMessage || message.message}</span>
+                          {getReferencePreviewText(reference.expectedText)}
+                        </span>
+                        {reference.locked && (
+                          <Badge
+                            variant="outline"
+                            className="h-4 shrink-0 px-1 text-[10px]"
+                            style={{ borderColor: themeConfig.primary, color: themeConfig.primary }}
+                          >
+                            {currentLanguage === 'zh' ? '锁定' : 'Locked'}
+                          </Badge>
                         )}
                       </div>
-                      {!!message.error && (
-                        <div className="mt-2 text-xs" style={{ color: themeConfig.error }}>
-                          {message.error}
-                        </div>
-                      )}
-                      {message.action?.type === 'tool_apply' && message.action.status === 'pending' && (
-                        <div className="mt-3 flex items-center gap-2">
-                          <Button
-                            type="button"
-                            size="sm"
-                            className="h-8 rounded-md px-3"
-                            onClick={() => void confirmToolApply(message.id)}
-                            style={{ backgroundColor: themeConfig.primary, color: themeConfig.buttonText }}
-                          >
-                            {currentLanguage === 'zh' ? '确认' : 'Confirm'}
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="h-8 rounded-md px-3"
-                            onClick={() => void undoToolApply(message.id)}
-                            style={{
-                              backgroundColor: themeConfig.buttonSecondaryBg,
-                              borderColor: themeConfig.border,
-                              color: themeConfig.text,
-                            }}
-                          >
-                            Undo
-                          </Button>
-                        </div>
-                      )}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 shrink-0 rounded-md hover:bg-transparent focus-visible:ring-0"
+                        onClick={() => void removeReference(reference.id)}
+                        style={{ color: themeConfig.textMuted, backgroundColor: 'transparent' }}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
                     </div>
-                  </div>
-                )
-              })}
+                  ))}
+                </div>
+              )}
             </div>
-          </div>
-        )}
-      </ScrollArea>
+          )}
 
-      <div className="border-t p-3" style={{ borderColor: themeConfig.border }}>
+          <ScrollArea className="min-h-0 w-full max-w-full flex-1 overflow-x-hidden">
+            <div className="flex min-h-full w-full min-w-0 max-w-full flex-col overflow-x-hidden px-4 pb-4 pt-3">
+              <div className="w-full min-w-0 max-w-full space-y-3 overflow-x-hidden">
+                {currentMessages.map((message) => {
+                  const isUser = message.role === 'user'
+                  return (
+                    <div
+                      key={message.id}
+                      className="flex w-full min-w-0 max-w-full"
+                      style={{ justifyContent: isUser ? 'flex-end' : 'flex-start' }}
+                    >
+                      <div
+                        className="min-w-0 max-w-[88%] overflow-hidden rounded-2xl px-4 py-3 text-sm leading-6 break-words whitespace-pre-wrap"
+                        style={{
+                          backgroundColor: isUser ? `${themeConfig.primary}10` : themeConfig.card,
+                          border: `1px solid ${isUser ? `${themeConfig.primary}22` : themeConfig.border}`,
+                          color: themeConfig.text,
+                        }}
+                      >
+                        {message.thinking && (
+                          <div
+                            className="mb-2 border-b pb-2 text-xs leading-5"
+                            style={{ color: themeConfig.textMuted, borderColor: themeConfig.border }}
+                          >
+                            <div className="mb-1 font-medium" style={{ color: themeConfig.heading }}>
+                              {currentLanguage === 'zh' ? '思考' : 'Thinking'}
+                            </div>
+                            {message.thinking}
+                          </div>
+                        )}
+                        <div className="flex items-start gap-2">
+                          {message.state === 'pending' && !isUser && (
+                            <Loader2 className="mt-1 h-4 w-4 shrink-0 animate-spin" style={{ color: themeConfig.primary }} />
+                          )}
+                          {(message.displayMessage || message.message) && (
+                            <span className="min-w-0 break-words">{message.displayMessage || message.message}</span>
+                          )}
+                        </div>
+                        {!!message.error && (
+                          <div className="mt-2 text-xs" style={{ color: themeConfig.error }}>
+                            {message.error}
+                          </div>
+                        )}
+                        {message.action?.type === 'tool_apply' && message.action.status === 'pending' && (
+                          <div className="mt-3 flex items-center gap-2">
+                            <Button
+                              type="button"
+                              size="sm"
+                              className="h-8 rounded-md px-3"
+                              onClick={() => void confirmToolApply(message.id)}
+                              style={{ backgroundColor: themeConfig.primary, color: themeConfig.buttonText }}
+                            >
+                              {currentLanguage === 'zh' ? '确认' : 'Confirm'}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-8 rounded-md px-3"
+                              onClick={() => void undoToolApply(message.id)}
+                              style={{
+                                backgroundColor: themeConfig.buttonSecondaryBg,
+                                borderColor: themeConfig.border,
+                                color: themeConfig.text,
+                              }}
+                            >
+                              Undo
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </ScrollArea>
+        </div>
+      )}
+
+      <div className="w-full min-w-0 max-w-full overflow-hidden border-t p-3" style={{ borderColor: themeConfig.border }}>
         <div
-          className="rounded-[26px] border px-4 pb-3 pt-3 shadow-[0_16px_40px_rgba(0,0,0,0.06)]"
+          className="w-full min-w-0 max-w-full overflow-hidden rounded-[26px] border px-4 pb-3 pt-3 shadow-[0_16px_40px_rgba(0,0,0,0.06)]"
           style={{
             borderColor: themeConfig.border,
             backgroundColor: themeConfig.card,
@@ -556,11 +532,11 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
                 ? '围绕引用内容提问，或要求修改当前块'
                 : 'Ask about the references or request a document edit'
             }
-            className="min-h-12 resize-none border-0 bg-transparent p-0 text-[15px] leading-6 shadow-none outline-none focus-visible:ring-0"
+            className="min-h-12 w-full min-w-0 resize-none border-0 bg-transparent p-0 text-[15px] leading-6 shadow-none outline-none focus-visible:ring-0"
             style={{ color: themeConfig.text }}
           />
 
-          <div className="mt-3 flex items-center justify-between gap-3">
+          <div className="mt-3 flex min-w-0 items-center justify-between gap-3">
             <div className="relative">
               <Button
                 type="button"

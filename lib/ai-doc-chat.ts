@@ -282,53 +282,23 @@ function findBlocksForSelection(blocks: AiDocBlock[], selectionStart: number, se
   return overlapping
 }
 
-function findBlocksForClick(blocks: AiDocBlock[], clickedText: string, tagName?: string) {
-  const normalizedClickedText = normalizeText(clickedText)
-  const preferredBlockType: PrimitiveBlockType | null =
-    tagName && /^h[1-6]$/i.test(tagName) ? 'heading' : null
-
-  const ranked = blocks
-    .filter((block) => (preferredBlockType ? block.blockType === preferredBlockType : true))
-    .map((block) => {
-      const normalizedBlockText = normalizeText(block.text)
-      return {
-        block,
-        score:
-          normalizedBlockText === normalizedClickedText
-            ? 0
-            : normalizedBlockText.includes(normalizedClickedText)
-              ? 1
-              : 2,
-      }
-    })
-    .sort((left, right) => left.score - right.score || left.block.blockIndex - right.block.blockIndex)
-
-  const match = ranked[0]?.block
-  return match ? [match] : null
-}
-
-function createRangeSnapshot(blocks: AiDocBlock[], matchedBlocks: AiDocBlock[]) {
-  const sorted = [...matchedBlocks].sort((left, right) => left.blockIndex - right.blockIndex)
-  const first = sorted[0]
-  const last = sorted[sorted.length - 1]
-  const expectedText = sorted.map((block) => block.text).join('')
-  const anchorPath = first.titlePath
-
-  return {
-    anchorPath,
-    blockType: first.blockType,
-    startBlockIndex: first.blockIndex,
-    blockCount: sorted.length,
-    startOffset: first.startOffset,
-    endOffset: last.endOffset,
-    expectedText,
-    excerpt: excerptOf(expectedText),
-    locked: false,
-  } satisfies AiDocReferenceSnapshot
-}
-
 function findBlockForOffset(blocks: AiDocBlock[], offset: number) {
   return blocks.find((block) => offset >= block.startOffset && offset <= block.endOffset) || null
+}
+
+function createFallbackSelectionBlock(selectionStart: number, selectionEnd: number): AiDocBlock {
+  return {
+    blockId: `selection::${selectionStart}:${selectionEnd}`,
+    blockType: 'paragraph',
+    titlePath: [],
+    headingLevel: 0,
+    headingText: '',
+    startOffset: selectionStart,
+    endOffset: selectionEnd,
+    text: '',
+    excerpt: '',
+    blockIndex: -1,
+  }
 }
 
 function createExactSelectionSnapshot(
@@ -343,10 +313,10 @@ function createExactSelectionSnapshot(
   }
 
   const selectedText = markdown.slice(start, end)
-  const firstBlock = findBlockForOffset(blocks, start) || blocks.find((block) => end > block.startOffset && start < block.endOffset)
-  if (!firstBlock) {
-    return null
-  }
+  const firstBlock =
+    findBlockForOffset(blocks, start) ||
+    blocks.find((block) => end > block.startOffset && start < block.endOffset) ||
+    createFallbackSelectionBlock(start, end)
 
   const overlapping = findBlocksForSelection(blocks, start, end) || [firstBlock]
 
@@ -365,35 +335,18 @@ function createExactSelectionSnapshot(
 
 export function createReferenceSnapshot(options: {
   markdown: string
-  selectionStart?: number | null
-  selectionEnd?: number | null
-  clickedText?: string
-  clickedTagName?: string
+  selectionStart: number
+  selectionEnd: number
   version: number
 }) {
-  const { markdown, selectionStart, selectionEnd, clickedText, clickedTagName, version } = options
+  const { markdown, selectionStart, selectionEnd, version } = options
   const blocks = buildMarkdownBlockIndex(markdown, version)
-
-  let matchedBlocks: AiDocBlock[] | null = null
 
   if (typeof selectionStart === 'number' && typeof selectionEnd === 'number' && selectionStart !== selectionEnd) {
     return createExactSelectionSnapshot(blocks, markdown, selectionStart, selectionEnd)
-  } else if (clickedText) {
-    matchedBlocks = findBlocksForClick(blocks, clickedText, clickedTagName)
   }
 
-  if (!matchedBlocks?.length) return null
-  return createRangeSnapshot(blocks, matchedBlocks)
-}
-
-export function createReferenceSnapshotFromBlockIndex(markdown: string, blockIndex: number, version: number) {
-  const blocks = buildMarkdownBlockIndex(markdown, version)
-  const matchedBlock = blocks.find((block) => block.blockIndex === blockIndex)
-  if (!matchedBlock) {
-    return null
-  }
-
-  return createRangeSnapshot(blocks, [matchedBlock])
+  return null
 }
 
 function blockPathFor(block: AiDocBlock) {
@@ -560,20 +513,6 @@ export function buildTrackedRangeFromReference(reference: AiDocReferenceSnapshot
     expectedText: reference.expectedText,
     blocked: false,
   }
-}
-
-export function recalculateReferenceOffsets(reference: AiDocReferenceSnapshot, markdown: string, version: number) {
-  const resolved = resolveReferenceSnapshot(reference, markdown, version)
-  if (!resolved) {
-    return null
-  }
-
-  return {
-    ...reference,
-    startOffset: resolved.startOffset,
-    endOffset: resolved.endOffset,
-    expectedText: resolved.expectedText,
-  } satisfies AiDocReferenceSnapshot
 }
 
 export function createEditFromRangeReplacement(startOffset: number, endOffset: number, content: string) {

@@ -1102,7 +1102,7 @@ export function MarkdownEditor() {
 
         {isAiDockOpen && (
           <div
-            className="absolute right-0 top-0 bottom-0 border-l transition-all duration-300"
+            className="absolute right-0 top-0 bottom-0 overflow-hidden border-l transition-all duration-300"
             style={{
               width: aiDockWidth,
               backgroundColor: safeThemeConfig.card,

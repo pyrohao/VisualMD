@@ -1,7 +1,9 @@
 import { nanoid } from 'nanoid'
 import type { ProviderConfig } from '@/stores/settingsStore'
 import { createAIService } from '@/lib/ai-service'
-import { buildAgentSystemPrompt, buildAgentTranscript, parseAgentModelResponse } from './model'
+import { buildAgentTranscript } from './model'
+import { parseAgentModelResponse } from './json'
+import { buildAgentSystemPrompt } from './prompt'
 import type { AgentGeneratedDocumentEvent, AgentMessage, AgentToolContext, AgentToolResult } from './types'
 import type { AgentToolDefinition } from './tools'
 

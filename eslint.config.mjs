@@ -9,6 +9,7 @@ export default tseslint.config(
       '.next/**',
       'coverage/**',
       'node_modules/**',
+      'loaders/**',
       'temp_git_panel_snapshot.txt',
     ],
   },

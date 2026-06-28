@@ -42,6 +42,17 @@ describe('agent model', () => {
     }
   })
 
+  it('extracts tool JSON with braces inside string arguments', () => {
+    const parsed = parseAgentModelResponse(
+      'prefix {"tool":"apply_tool","arguments":{"oldString":"a { tricky } value","newString":"b"}} suffix'
+    )
+
+    expect(parsed.kind).toBe('tool')
+    if (parsed.kind === 'tool') {
+      expect(parsed.call.arguments.oldString).toBe('a { tricky } value')
+    }
+  })
+
   it('splits deepseek think blocks from assistant text', () => {
     expect(splitAssistantThinking('<think>reasoning</think>\nAnswer')).toEqual({
       thinking: 'reasoning',

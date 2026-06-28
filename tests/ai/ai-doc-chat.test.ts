@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import {
   applyDocumentChatAction,
   buildMarkdownBlockIndex,
-  createReferenceSnapshotFromBlockIndex,
   createReferenceSnapshot,
   deriveTextEdit,
   isReferenceStale,
@@ -57,20 +56,6 @@ describe('ai-doc-chat', () => {
     expect(reference?.expectedText).toBe('Second')
   })
 
-  it('creates reference snapshot from preview block index', () => {
-    const blocks = buildMarkdownBlockIndex(SAMPLE_MARKDOWN, 1)
-    const secondParagraphBlock = blocks.find((block) => block.blockType === 'paragraph' && block.text.includes('Second paragraph.'))
-
-    expect(secondParagraphBlock).toBeTruthy()
-
-    const reference = createReferenceSnapshotFromBlockIndex(SAMPLE_MARKDOWN, secondParagraphBlock!.blockIndex, 1)
-
-    expect(reference).not.toBeNull()
-    expect(reference?.anchorPath).toEqual(['Intro'])
-    expect(reference?.blockCount).toBe(1)
-    expect(reference?.expectedText).toContain('Second paragraph.')
-  })
-
   it('resolves selected string after preceding edits', () => {
     const start = SAMPLE_MARKDOWN.indexOf('Second paragraph.')
     const end = start + 'Second paragraph.'.length
@@ -88,6 +73,45 @@ describe('ai-doc-chat', () => {
 
     expect(resolved).not.toBeNull()
     expect(nextMarkdown.slice(resolved!.startOffset, resolved!.endOffset)).toBe('Second paragraph.')
+  })
+
+  it('creates exact text references from editor selection without requiring headings', () => {
+    const markdown = '# Doc\n\nAlpha beta gamma.'
+    const start = markdown.indexOf('beta')
+    const end = start + 'beta'.length
+    const reference = createReferenceSnapshot({
+      markdown,
+      selectionStart: start,
+      selectionEnd: end,
+      version: 1,
+    })
+
+    expect(reference).not.toBeNull()
+    expect(reference?.anchorPath).toEqual(['Doc'])
+    expect(reference?.blockType).toBe('paragraph')
+    expect(reference?.blockCount).toBe(1)
+    expect(reference?.expectedText).toBe('beta')
+    expect(reference?.startOffset).toBe(start)
+    expect(reference?.endOffset).toBe(end)
+  })
+
+  it('creates exact text references from body text when the document has no headings', () => {
+    const markdown = 'Alpha beta gamma.\n\nSecond paragraph.'
+    const start = markdown.indexOf('beta')
+    const end = start + 'beta'.length
+    const reference = createReferenceSnapshot({
+      markdown,
+      selectionStart: start,
+      selectionEnd: end,
+      version: 1,
+    })
+
+    expect(reference).not.toBeNull()
+    expect(reference?.anchorPath).toEqual([])
+    expect(reference?.blockType).toBe('paragraph')
+    expect(reference?.expectedText).toBe('beta')
+    expect(reference?.startOffset).toBe(start)
+    expect(reference?.endOffset).toBe(end)
   })
 
   it('detects stale reference when target content changed', () => {

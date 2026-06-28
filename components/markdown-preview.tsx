@@ -27,7 +27,6 @@ import rehypeStringify from 'rehype-stringify'
 import { BookOpen, Pencil, Plus, SplitSquareHorizontal, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getMarkdownImagePasteResult, hasClipboardImage } from '@/lib/clipboard-image'
-import { buildMarkdownBlockIndex } from '@/lib/ai-doc-chat'
 import { getGitMarkdownImagePasteResult } from '@/lib/git-asset-paste'
 import {
   buildGitImageRuntimeConfig,
@@ -206,39 +205,6 @@ function removeMetadata(markdown: string): string {
   return markdown.replace(/^---\n[\s\S]*?\n---\n?/, '')
 }
 
-function escapeHtmlAttribute(value: string) {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-}
-
-function injectPreviewBlockAttributes(markdown: string, html: string) {
-  const blocks = buildMarkdownBlockIndex(markdown)
-  const eligibleBlocks = blocks.filter((block) =>
-    ['heading', 'paragraph', 'list', 'table', 'code', 'image'].includes(block.blockType)
-  )
-
-  if (!eligibleBlocks.length) {
-    return html
-  }
-
-  const tagRegex = /<(h[1-6]|p|ul|ol|blockquote|pre|table|img)(\s|>)/gi
-  let matchIndex = 0
-
-  return html.replace(tagRegex, (match, tagName, suffix) => {
-    const block = eligibleBlocks[matchIndex]
-    matchIndex += 1
-
-    if (!block) {
-      return match
-    }
-
-    return `<${tagName} data-ai-block-index="${block.blockIndex}" data-ai-block-type="${escapeHtmlAttribute(block.blockType)}"${suffix}`
-  })
-}
-
 function GitBinaryPreview({
   fileName,
   gitMeta,
@@ -409,14 +375,9 @@ function GitBinaryPreview({
 export function MarkdownPreview() {
   const { document, updateFromMarkdown } = useDocumentStore()
   const addEditorSelectionReference = useAiChatStore((state) => state.addEditorSelectionReference)
-  const addPreviewReference = useAiChatStore((state) => state.addPreviewReference)
   const selectionCandidate = useAiChatStore((state) => state.selectionCandidate)
-  const selectionHint = useAiChatStore((state) => state.selectionHint)
   const commitSelectionCandidate = useAiChatStore((state) => state.commitSelectionCandidate)
   const clearSelectionCandidate = useAiChatStore((state) => state.clearSelectionCandidate)
-  const currentConversationId = useAiChatStore((state) => state.currentConversationId)
-  const referencesByConversation = useAiChatStore((state) => state.referencesByConversation)
-  const selectedReferenceIds = useAiChatStore((state) => state.selectedReferenceIds)
   const activeTabId = useTabsStore((state) => state.activeTabId)
   const activeTab = useTabsStore((state) => state.tabs.find((item) => item.id === state.activeTabId) || null)
   const activeGitMeta = useTabsStore((state) => {
@@ -436,8 +397,8 @@ export function MarkdownPreview() {
   const [editContent, setEditContent] = useState('')
   const editTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const liveEditorRef = useRef<HTMLTextAreaElement | null>(null)
-  const previewContainerRef = useRef<HTMLDivElement | null>(null)
   const livePreviewRef = useRef<HTMLDivElement | null>(null)
+  const selectionTimerRef = useRef<number | null>(null)
   const isSyncingLiveScrollRef = useRef(false)
   const previousDocumentKeyRef = useRef<string>('')
   const skipLiveSyncRef = useRef(false)
@@ -449,6 +410,14 @@ export function MarkdownPreview() {
     setMounted(true)
   }, [])
 
+  useEffect(() => {
+    return () => {
+      if (selectionTimerRef.current !== null) {
+        window.clearTimeout(selectionTimerRef.current)
+      }
+    }
+  }, [])
+
   const activeGitFileKind =
     activeTab?.sourceType === 'git' && activeTab.gitMeta?.path
       ? activeTab.gitMeta.fileKind || inferGitFileKind(activeTab.gitMeta.path)
@@ -458,19 +427,14 @@ export function MarkdownPreview() {
 
   // 从Store获取当前Markdown
   const markdown = useDocumentStore.getState().getCurrentMarkdown()
+  const latestMarkdownRef = useRef(markdown)
   const isEditingMode = mode === 'edit' || mode === 'live'
   const renderMarkdown = mode === 'live' ? editContent : markdown
   const documentKey = `${activeTabId || ''}\u0000${document?.fileId || ''}\u0000${document?.fileName || ''}`
-  const selectedReferences = useMemo(
-    () => {
-      const currentReferences = currentConversationId ? referencesByConversation[currentConversationId] || [] : []
-      return currentReferences.filter((reference) => selectedReferenceIds.includes(reference.id))
-    },
-    [currentConversationId, referencesByConversation, selectedReferenceIds]
-  )
 
   // 当 markdown 变化时，更新编辑内容
   useEffect(() => {
+    latestMarkdownRef.current = markdown
     if (!isEditingMode) {
       setEditContent(markdown)
     }
@@ -483,8 +447,9 @@ export function MarkdownPreview() {
 
     previousDocumentKeyRef.current = documentKey
     skipLiveSyncRef.current = true
-    setEditContent(markdown)
-  }, [documentKey, markdown])
+    setEditContent(latestMarkdownRef.current)
+    clearSelectionCandidate()
+  }, [clearSelectionCandidate, documentKey])
 
   const gitAssets = useMemo(
     () => collectGitAssetMap(stagedChanges, pendingAssetChanges),
@@ -521,7 +486,7 @@ export function MarkdownPreview() {
         .use(rehypeStringify, { allowDangerousHtml: true })
         .process(content)
       
-      const rawHtml = injectPreviewBlockAttributes(renderMarkdown, String(result))
+      const rawHtml = String(result)
       const immediateHtml = activeGitMeta?.path
         ? prepareGitHtmlImageSources(rawHtml, activeGitMeta.path, gitAssets)
         : rawHtml
@@ -566,20 +531,55 @@ export function MarkdownPreview() {
     setEditContent(e.target.value)
   }, [])
 
-  const handleAddTextareaSelection = useCallback((textarea: HTMLTextAreaElement | null, sourceMarkdown: string) => {
+  const handleAddTextareaSelection = useCallback((textarea: HTMLTextAreaElement | null, delay = 0) => {
     if (!textarea) return
-    const selectionStart = textarea.selectionStart ?? 0
-    const selectionEnd = textarea.selectionEnd ?? 0
-    if (selectionStart === selectionEnd) return
-    if (sourceMarkdown !== useDocumentStore.getState().getCurrentMarkdown()) {
-      updateFromMarkdown(sourceMarkdown)
+
+    const submitSelection = () => {
+      if (useAiChatStore.getState().selectionCandidate) return
+      const sourceMarkdown = textarea.value
+      const selectionStart = textarea.selectionStart ?? 0
+      const selectionEnd = textarea.selectionEnd ?? 0
+      if (selectionStart === selectionEnd) return
+      if (sourceMarkdown !== editContent) {
+        setEditContent(sourceMarkdown)
+      }
+      if (sourceMarkdown !== useDocumentStore.getState().getCurrentMarkdown()) {
+        updateFromMarkdown(sourceMarkdown)
+      }
+      void addEditorSelectionReference(
+        selectionStart,
+        selectionEnd,
+        sourceMarkdown
+      )
     }
-    void addEditorSelectionReference(
-      selectionStart,
-      selectionEnd,
-      sourceMarkdown
-    )
-  }, [addEditorSelectionReference, updateFromMarkdown])
+
+    if (selectionTimerRef.current !== null) {
+      window.clearTimeout(selectionTimerRef.current)
+      selectionTimerRef.current = null
+    }
+
+    if (delay > 0) {
+      selectionTimerRef.current = window.setTimeout(() => {
+        selectionTimerRef.current = null
+        submitSelection()
+      }, delay)
+      return
+    }
+
+    submitSelection()
+  }, [addEditorSelectionReference, editContent, updateFromMarkdown])
+
+  const bindTextareaSelection = useCallback(() => ({
+    onSelect: (event: React.SyntheticEvent<HTMLTextAreaElement>) => {
+      handleAddTextareaSelection(event.currentTarget, 120)
+    },
+    onMouseUp: (event: React.MouseEvent<HTMLTextAreaElement>) => {
+      handleAddTextareaSelection(event.currentTarget)
+    },
+    onKeyUp: (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      handleAddTextareaSelection(event.currentTarget)
+    },
+  }), [handleAddTextareaSelection])
 
   const persistGitDraftAfterPaste = useCallback((nextValue: string) => {
     const activeTab = useTabsStore.getState().getActiveTab()
@@ -715,66 +715,13 @@ export function MarkdownPreview() {
   }, [editContent, markdown, mode, updateFromMarkdown])
 
   useEffect(() => {
-    const rootNodes = [previewContainerRef.current, livePreviewRef.current]
-
-    rootNodes.forEach((rootNode) => {
-      if (!rootNode) return
-      const blockNodes = rootNode.querySelectorAll<HTMLElement>('[data-ai-block-index]')
-      blockNodes.forEach((node) => {
-        const blockIndexValue = node.dataset.aiBlockIndex
-        const blockIndex = blockIndexValue ? Number(blockIndexValue) : NaN
-        if (!Number.isFinite(blockIndex)) return
-
-        const isCandidate =
-          !!selectionCandidate &&
-          blockIndex >= selectionCandidate.startBlockIndex &&
-          blockIndex < selectionCandidate.startBlockIndex + selectionCandidate.blockCount
-        const isSelected = selectedReferences.some(
-          (reference) =>
-            blockIndex >= reference.startBlockIndex &&
-            blockIndex < reference.startBlockIndex + reference.blockCount
-        )
-
-        node.style.transition = 'background-color 160ms ease, box-shadow 160ms ease, opacity 160ms ease'
-        node.style.borderRadius = '10px'
-        node.style.boxShadow = 'none'
-        node.style.backgroundColor = 'transparent'
-        node.style.opacity = '1'
-
-        if (isSelected) {
-          node.style.backgroundColor = `${themeConfig.primary}12`
-          node.style.boxShadow = `inset 0 0 0 1px ${themeConfig.primary}30`
-        }
-
-        if (isCandidate) {
-          node.style.backgroundColor = `${themeConfig.primary}18`
-          node.style.boxShadow = `inset 0 0 0 1px ${themeConfig.primary}55`
-        }
-      })
-    })
-
-    return () => {
-      rootNodes.forEach((rootNode) => {
-        if (!rootNode) return
-        const blockNodes = rootNode.querySelectorAll<HTMLElement>('[data-ai-block-index]')
-        blockNodes.forEach((node) => {
-          node.style.backgroundColor = ''
-          node.style.boxShadow = ''
-          node.style.opacity = ''
-          node.style.borderRadius = ''
-          node.style.transition = ''
-        })
-      })
-    }
-  }, [html, selectedReferences, selectionCandidate, themeConfig.primary])
-
-  useEffect(() => {
     if (!selectionCandidate) {
       return
     }
 
     const applySelection = (textarea: HTMLTextAreaElement | null) => {
       if (!textarea) return
+      textarea.focus({ preventScroll: true })
       textarea.setSelectionRange(selectionCandidate.startOffset, selectionCandidate.endOffset)
     }
 
@@ -788,26 +735,64 @@ export function MarkdownPreview() {
     }
   }, [mode, selectionCandidate])
 
-  const handlePreviewClickCapture = useCallback((event: React.MouseEvent<HTMLElement>) => {
-    const target = event.target as HTMLElement | null
-    if (!target) return
+  const candidatePreview = useMemo(() => {
+    if (!selectionCandidate) return ''
+    const normalized = selectionCandidate.expectedText
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line && !/^[-*_]{3,}$/.test(line))
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    return normalized
+  }, [selectionCandidate])
 
-    const blockElement = target.closest<HTMLElement>('[data-ai-block-index]')
-    if (!blockElement) return
-
-    const blockIndexValue = blockElement.dataset.aiBlockIndex
-    const blockIndex = blockIndexValue ? Number(blockIndexValue) : NaN
-    if (!Number.isFinite(blockIndex)) return
-
-    const tagName = blockElement.tagName?.toLowerCase()
-    const text =
-      tagName === 'img'
-        ? blockElement.getAttribute('alt')?.trim() || 'image'
-        : blockElement.innerText?.trim()
-
-    if (!text) return
-    void addPreviewReference(text, tagName, blockIndex)
-  }, [addPreviewReference])
+  const selectionPrompt = selectionCandidate ? (
+    <div
+      className="pointer-events-auto absolute left-4 right-4 top-4 z-20 flex items-center justify-between gap-3 rounded-xl border px-3 py-2 shadow-sm"
+      style={{
+        borderColor: themeConfig.border,
+        backgroundColor: themeConfig.card,
+      }}
+    >
+      <div className="min-w-0 truncate text-xs" title={candidatePreview} style={{ color: themeConfig.textMuted }}>
+        {currentLanguage === 'zh'
+          ? `已选择文本：${candidatePreview || '空白选区'}`
+          : `Selected text: ${candidatePreview || 'Empty selection'}`}
+      </div>
+      <div className="flex shrink-0 items-center gap-1.5">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-8 rounded-full px-2.5 hover:bg-transparent focus-visible:ring-0"
+          style={{
+            color: themeConfig.textMuted,
+            backgroundColor: 'transparent',
+          }}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => clearSelectionCandidate()}
+        >
+          <X className="mr-1 h-3.5 w-3.5" />
+          {currentLanguage === 'zh' ? '取消' : 'Cancel'}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          className="h-8 rounded-full px-3 shadow-none hover:opacity-90"
+          style={{
+            backgroundColor: `${themeConfig.primary}14`,
+            color: themeConfig.primary,
+          }}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => void commitSelectionCandidate()}
+        >
+          <Plus className="mr-1 h-3.5 w-3.5" />
+          {currentLanguage === 'zh' ? '加入' : 'Add'}
+        </Button>
+      </div>
+    </div>
+  ) : null
 
   // 如果没有文档，显示空状态
   if (isActiveBinaryGitTab && activeTab?.gitMeta) {
@@ -909,62 +894,14 @@ export function MarkdownPreview() {
 
       {/* 内容区域 */}
       <div className="relative flex flex-1 overflow-hidden">
-        {(selectionCandidate || selectionHint) && (
-          <div
-            className="absolute left-5 right-5 top-5 z-20 flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 shadow-sm"
-            style={{
-              borderColor: themeConfig.border,
-              backgroundColor: themeConfig.card,
-            }}
-          >
-            <div className="min-w-0 text-sm" style={{ color: themeConfig.textMuted }}>
-              {selectionCandidate
-                ? selectionHint || (
-                    currentLanguage === 'zh'
-                      ? '已选择段落，点击加入对话或按 Ctrl+L'
-                      : 'Block selected. Add to chat or press Ctrl+L'
-                  )
-                : selectionHint}
-            </div>
-            {selectionCandidate && (
-              <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  className="h-9 rounded-full px-3 hover:bg-transparent focus-visible:ring-0"
-                  style={{
-                    color: themeConfig.textMuted,
-                    backgroundColor: 'transparent',
-                  }}
-                  onClick={() => clearSelectionCandidate()}
-                >
-                  <X className="mr-1 h-4 w-4" />
-                  {currentLanguage === 'zh' ? '取消' : 'Dismiss'}
-                </Button>
-                <Button
-                  type="button"
-                  className="h-9 rounded-full px-4 shadow-none hover:opacity-90"
-                  style={{
-                    backgroundColor: `${themeConfig.primary}14`,
-                    color: themeConfig.primary,
-                  }}
-                  onClick={() => void commitSelectionCandidate()}
-                >
-                  <Plus className="mr-1 h-4 w-4" />
-                  {currentLanguage === 'zh' ? '加入对话' : 'Add to chat'}
-                </Button>
-              </div>
-            )}
-          </div>
-        )}
-
         {mode === 'preview' && (
-          <div ref={previewContainerRef} className="h-full w-full overflow-y-auto overflow-x-hidden">
+          <div
+            className="h-full w-full overflow-y-auto overflow-x-hidden"
+          >
             <div className="max-w-none p-8">
               <style>{getThemeStyles(theme)}</style>
               <article
                 className="markdown-body max-w-none"
-                onClick={handlePreviewClickCapture}
                 dangerouslySetInnerHTML={{ __html: html }}
               />
             </div>
@@ -972,32 +909,35 @@ export function MarkdownPreview() {
         )}
 
         {mode === 'edit' && (
-          <textarea
-            ref={editTextareaRef}
-            value={editContent}
-            onChange={handleEditChange}
-            onPaste={(e) => {
-              void handleEditPaste(e, editContent, editTextareaRef)
-            }}
-            className="h-full w-full resize-none border-0 p-6 font-mono text-sm outline-none"
-            style={{
-              backgroundColor: themeConfig.background,
-              color: themeConfig.text,
-              lineHeight: 1.6,
-            }}
-            placeholder={mounted ? t('preview.editPlaceholder') : '在此编辑 Markdown 文档...'}
-            spellCheck={false}
-            onMouseUp={(event) => handleAddTextareaSelection(event.currentTarget, editContent)}
-            onKeyUp={(event) => handleAddTextareaSelection(event.currentTarget, editContent)}
-          />
+          <div className="relative h-full w-full">
+            {selectionPrompt}
+            <textarea
+              ref={editTextareaRef}
+              value={editContent}
+              onChange={handleEditChange}
+              onPaste={(e) => {
+                void handleEditPaste(e, editContent, editTextareaRef)
+              }}
+              className="h-full w-full resize-none border-0 p-6 font-mono text-sm outline-none"
+              style={{
+                backgroundColor: themeConfig.background,
+                color: themeConfig.text,
+                lineHeight: 1.6,
+              }}
+              placeholder={mounted ? t('preview.editPlaceholder') : '在此编辑 Markdown 文档...'}
+              spellCheck={false}
+              {...bindTextareaSelection()}
+            />
+          </div>
         )}
 
         {mode === 'live' && (
           <>
             <div
-              className="h-full w-1/2 border-r"
+              className="relative h-full w-1/2 border-r"
               style={{ borderColor: themeConfig.border }}
             >
+              {selectionPrompt}
               <textarea
                 ref={liveEditorRef}
                 value={editContent}
@@ -1014,8 +954,7 @@ export function MarkdownPreview() {
                 }}
                 placeholder={mounted ? t('preview.editPlaceholder') : '在此编辑 Markdown 文档...'}
                 spellCheck={false}
-                onMouseUp={(event) => handleAddTextareaSelection(event.currentTarget, editContent)}
-                onKeyUp={(event) => handleAddTextareaSelection(event.currentTarget, editContent)}
+                {...bindTextareaSelection()}
               />
             </div>
             <div
@@ -1027,7 +966,6 @@ export function MarkdownPreview() {
                 <style>{getThemeStyles(theme)}</style>
                 <article
                   className="markdown-body max-w-none"
-                  onClick={handlePreviewClickCapture}
                   dangerouslySetInnerHTML={{ __html: html }}
                 />
               </div>
