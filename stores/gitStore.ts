@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { devtools, persist } from 'zustand/middleware'
 import { nanoid } from 'nanoid'
 import { getGitProviderClient } from '@/lib/git/providers'
+import { hasMeaningfulLocalGitChange, hasMeaningfulRemoteGitChange } from '@/lib/git/sync'
 import { createIndexedDbPersistStorage } from '@/lib/git-store-persist-storage'
 import type { GitBatchCommitAction, GitBranchRef, GitDraftFile, GitProviderConfig, GitRepoRef, GitTreeItem, StagedGitChange } from '@/lib/git/types'
 import { arrayBufferToBase64, buildGitDocumentId, getGitFileName, joinGitPath, normalizeGitPath, parseGitDocumentId } from '@/lib/git/utils'
@@ -748,7 +749,7 @@ export const useGitStore = create<GitStore>()(
               ...draft,
               content,
               draftContent: content,
-              isDirty: content !== draft.originalContent,
+              isDirty: hasMeaningfulLocalGitChange(content, draft.originalContent),
             }
             return {
               drafts: {
@@ -1136,8 +1137,16 @@ export const useGitStore = create<GitStore>()(
               const currentDraft = state.drafts[targetDocumentId]
               if (!currentDraft) return state
 
-              const remoteChanged = remoteFile.sha !== currentDraft.sha || remoteFile.content !== currentDraft.originalContent
-              const preserveLocalDraft = currentDraft.isDirty
+              const remoteChanged = hasMeaningfulRemoteGitChange(
+                remoteFile.content,
+                currentDraft.originalContent,
+                remoteFile.sha,
+                currentDraft.sha
+              )
+              const preserveLocalDraft = hasMeaningfulLocalGitChange(
+                currentDraft.draftContent,
+                currentDraft.originalContent
+              )
 
               nextDraft = {
                 ...currentDraft,
