@@ -626,6 +626,16 @@ describe('ai chat store hook adapter', () => {
     )
     await useAiChatStore.getState().chooseGeneratedDocumentSaveTarget('conversation-1', 'git')
     expect(storage.createGitFile).toHaveBeenCalledWith('GitDoc.md', '# Git Doc', 'Create GitDoc.md')
+    expect(storage.openGitFileInTab).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fileName: 'GitDoc.md',
+        content: '# Git Doc',
+        savedContent: '# Git Doc',
+        fileId: 'git:github:owner/repo:main:GitDoc.md',
+        sourceType: 'git',
+      })
+    )
+    expect(storage.loadDocument).toHaveBeenCalledWith('# Git Doc', 'GitDoc.md', 'git:github:owner/repo:main:GitDoc.md')
   })
 
   it('restores a generated document session after reinitialization', async () => {

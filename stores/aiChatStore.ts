@@ -496,6 +496,7 @@ async function removeGeneratedDocumentSession(conversationId: string) {
 async function moveGeneratedDocumentToGit(session: GeneratedDocumentSession) {
   const gitStore = useGitStore.getState()
   const tabsStore = useTabsStore.getState()
+  const documentStore = useDocumentStore.getState()
   const fileSystemStore = useFileSystemStore.getState()
   const normalizedPath = normalizeGitPath(joinGitPath(session.gitTargetDirectory || '', session.fileName))
 
@@ -503,10 +504,11 @@ async function moveGeneratedDocumentToGit(session: GeneratedDocumentSession) {
   const nextGitState = useGitStore.getState()
   const draft = nextGitState.currentDocumentId ? nextGitState.drafts[nextGitState.currentDocumentId] : null
   if (draft) {
+    const draftContent = draft.draftContent || session.content
     tabsStore.openGitFileInTab({
       fileName: draft.name || getGitFileName(normalizedPath),
-      content: draft.draftContent,
-      savedContent: draft.originalContent,
+      content: draftContent,
+      savedContent: draftContent,
       isModified: draft.isDirty || Boolean(draft.isNew),
       isNew: draft.isNew,
       fileId: draft.documentId,
@@ -521,6 +523,7 @@ async function moveGeneratedDocumentToGit(session: GeneratedDocumentSession) {
         fileKind: 'text',
       },
     })
+    documentStore.loadDocument(draftContent, draft.name || getGitFileName(normalizedPath), draft.documentId)
   }
 
   if (session.tempFileId) {

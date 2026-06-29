@@ -6,7 +6,6 @@ import {
   AlertTriangle,
   ChevronDown,
   ChevronRight,
-  Download,
   File,
   FilePlus2,
   FileText,
@@ -268,7 +267,6 @@ export function GitPanel() {
     isConnecting,
     isLoadingTree,
     isCommitting,
-    isFetchingRemote,
     error,
     connected,
     lastFetchedAt,
@@ -281,7 +279,6 @@ export function GitPanel() {
     stageGitDraft,
     unstageChange,
     restagePendingAsset,
-    fetchRemoteFile,
     syncRemoteStatus,
     commitCurrentFile,
     createFile,
@@ -440,29 +437,13 @@ export function GitPanel() {
     }
   }
 
-  const handleFetch = async () => {
-    if (!currentDocumentId) return
-
+  const handleRefreshTree = async () => {
     try {
-      const nextDraft = await fetchRemoteFile(currentDocumentId)
-      if (!nextDraft) return
-
-      if (nextDraft.hasConflict) {
-        toast({
-          title: t('git.conflictDetected'),
-          description: t('git.localChangesPreserved'),
-          variant: 'destructive',
-        })
-        return
-      }
-
-      if (nextDraft.hasRemoteUpdates) {
-        openDraftInTab(nextDraft.documentId, nextDraft.draftContent)
-        toast({ title: t('git.remoteUpdated') })
-        return
-      }
-
-      toast({ title: t('git.remoteUpToDate') })
+      await loadTree('')
+      toast({
+        title: t('git.refreshTree'),
+        description: t('git.reposLoaded'),
+      })
     } catch {
       // handled by store
     }
@@ -701,22 +682,12 @@ export function GitPanel() {
                 type="button"
                 className="flex h-8 w-8 items-center justify-center rounded-md border transition-colors"
                 style={{ borderColor: themeConfig.border, color: themeConfig.text, backgroundColor: themeConfig.background }}
-                onClick={() => void loadTree('')}
+                onClick={() => void handleRefreshTree()}
                 title={t('git.refreshTree')}
               >
                 {isLoadingTree ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
               </button>
 
-              <button
-                type="button"
-                className="flex h-8 w-8 items-center justify-center rounded-md border transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                style={{ borderColor: themeConfig.border, color: themeConfig.text, backgroundColor: themeConfig.background }}
-                onClick={() => void handleFetch()}
-                disabled={!currentDocumentId || isFetchingRemote}
-                title={t('git.fetchRemote')}
-              >
-                {isFetchingRemote ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-              </button>
             </div>
           </div>
 
