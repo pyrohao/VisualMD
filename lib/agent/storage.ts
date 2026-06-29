@@ -1,6 +1,6 @@
 import { nanoid } from 'nanoid'
 import { createIdbStore } from '@/lib/idb'
-import type { AgentConversation, AgentDraft, AgentMessage, AgentReferenceRecord, AgentUiState } from './types'
+import type { AgentConversation, AgentDocumentSessionRecord, AgentDraft, AgentMessage, AgentReferenceRecord, AgentUiState } from './types'
 
 const DB_NAME = 'visualmd-agent'
 const conversationsStore = createIdbStore<AgentConversation>(DB_NAME, 'conversations')
@@ -8,6 +8,7 @@ const messagesStore = createIdbStore<AgentMessage[]>(DB_NAME, 'messages')
 const referencesStore = createIdbStore<AgentReferenceRecord>(DB_NAME, 'references')
 const draftsStore = createIdbStore<AgentDraft>(DB_NAME, 'drafts')
 const uiStateStore = createIdbStore<AgentUiState>(DB_NAME, 'ui_state')
+const documentSessionsStore = createIdbStore<AgentDocumentSessionRecord>(DB_NAME, 'document_sessions')
 
 export function createAgentConversationId() {
   return nanoid()
@@ -104,4 +105,22 @@ export async function saveAgentUiState(key: string, value: string) {
 export async function getAgentUiState(key: string) {
   const record = await uiStateStore.get(key)
   return record?.value ?? null
+}
+
+export async function saveAgentDocumentSession(record: AgentDocumentSessionRecord) {
+  return documentSessionsStore.set(record.conversationId, record)
+}
+
+export async function getAgentDocumentSession(conversationId: string) {
+  return documentSessionsStore.get(conversationId)
+}
+
+export async function deleteAgentDocumentSession(conversationId: string) {
+  return documentSessionsStore.remove(conversationId)
+}
+
+export async function listAgentDocumentSessions() {
+  return (await documentSessionsStore.getAll())
+    .map((entry) => entry.value)
+    .sort((left, right) => right.updatedAt - left.updatedAt)
 }

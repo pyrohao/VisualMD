@@ -5,9 +5,106 @@ import { findNearestText, splitParagraphs, tokenScore } from './text'
 export interface AgentToolDefinition {
   name: string
   description: string
-  parameters: string
-  execute: (args: Record<string, unknown>, context: AgentToolContext) => Promise<AgentToolResult> | AgentToolResult
+  argumentsSchema: AgentToolJsonSchema
 }
+
+export type AgentToolExecutor = (
+  args: Record<string, unknown>,
+  context: AgentToolContext
+) => Promise<AgentToolResult> | AgentToolResult
+
+export interface AgentTool extends AgentToolDefinition {
+  execute: AgentToolExecutor
+}
+
+export interface AgentToolValidationError {
+  code: 'invalid-arguments' | 'missing-required' | 'unexpected-property' | 'invalid-type'
+  field?: string
+  expectedType?: AgentToolJsonSchemaProperty['type']
+  actualType?: string
+  extraFields?: string[]
+}
+
+export interface AgentToolValidationResult {
+  ok: boolean
+  error?: AgentToolValidationError
+}
+
+export interface AgentToolJsonSchema {
+  type: 'object'
+  description: string
+  additionalProperties: boolean
+  properties: Record<string, AgentToolJsonSchemaProperty>
+  required: string[]
+}
+
+export interface AgentToolJsonSchemaProperty {
+  type: 'string' | 'number' | 'integer' | 'boolean' | 'object' | 'array'
+  description: string
+}
+
+export const defaultAgentToolDefinitions: AgentToolDefinition[] = [
+  {
+    name: 'apply_tool',
+    description: 'Edit the current document by replacing one exact text fragment.',
+    argumentsSchema: {
+      type: 'object',
+      description: 'Arguments for an exact replacement in the current Markdown document.',
+      additionalProperties: false,
+      properties: {
+        oldString: {
+          type: 'string',
+          description: 'Required. Copy the exact source text from the current document. Use the smallest complete fragment that satisfies the request, and preserve literal Markdown such as image syntax unless the user explicitly asks to change it.',
+        },
+        newString: {
+          type: 'string',
+          description: 'Required. Replacement text only. Keep unchanged Markdown content verbatim when the edit touches surrounding text.',
+        },
+      },
+      required: ['oldString', 'newString'],
+    },
+  },
+  {
+    name: 'semantic_tool',
+    description: 'Locate the most likely nearby paragraph when exact replacement fails.',
+    argumentsSchema: {
+      type: 'object',
+      description: 'Arguments for semantic recovery after an apply_tool failure.',
+      additionalProperties: false,
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Required. Describe the target paragraph or the meaning of the content that should be found.',
+        },
+        nearText: {
+          type: 'string',
+          description: 'Optional. Nearby failed text or local context used to bias the search toward the intended region.',
+        },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'generate_document_tool',
+    description: 'Create and save a new Markdown file only when the user explicitly asks for a new document or file.',
+    argumentsSchema: {
+      type: 'object',
+      description: 'Arguments for generating a brand-new Markdown document.',
+      additionalProperties: false,
+      properties: {
+        fileName: {
+          type: 'string',
+          description: 'Required. Target Markdown file name. It must include the `.md` suffix.',
+        },
+        prompt: {
+          type: 'string',
+          description: 'Required. The document-generation instruction used to create the new file content. Use this tool only for brand-new files, not for normal chat or edits to the current document.',
+        },
+      },
+      required: ['fileName', 'prompt'],
+    },
+  },
+]
 
 export async function executeApplyTool(args: Record<string, unknown>, context: AgentToolContext): Promise<AgentToolResult> {
   const oldString = typeof args.oldString === 'string' ? args.oldString : ''
@@ -85,9 +182,9 @@ export async function executeGenerateDocumentTool(args: Record<string, unknown>,
   }
 
   const service = new AIService(context.providerConfig)
-  const targetFileName = fileName || `AI生成文档-${new Date().toISOString().slice(0, 10)}.md`
+  const targetFileName = normalizeMarkdownFileName(fileName || `AI生成文档-${new Date().toISOString().slice(0, 10)}`)
   const toolCallId = context.toolCallId || ''
-  context.onGeneratedDocumentEvent?.({ type: 'start', toolCallId, fileName: targetFileName })
+  await context.onGeneratedDocumentEvent?.({ type: 'start', toolCallId, fileName: targetFileName })
 
   try {
     const content = await service.chatMessagesStream({
@@ -115,7 +212,7 @@ export async function executeGenerateDocumentTool(args: Record<string, unknown>,
       },
     })
 
-    context.onGeneratedDocumentEvent?.({ type: 'done', toolCallId, fileName: targetFileName, content })
+    await context.onGeneratedDocumentEvent?.({ type: 'done', toolCallId, fileName: targetFileName, content })
     return {
       ok: true,
       message: 'generate_document succeeded',
@@ -131,32 +228,152 @@ export async function executeGenerateDocumentTool(args: Record<string, unknown>,
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'generate_document failed'
-    context.onGeneratedDocumentEvent?.({ type: 'error', toolCallId, fileName: targetFileName, error: message })
+    await context.onGeneratedDocumentEvent?.({ type: 'error', toolCallId, fileName: targetFileName, error: message })
     return { ok: false, message }
   }
 }
 
-export function createDefaultAgentTools() {
-  const tools: AgentToolDefinition[] = [
-    {
-      name: 'apply_tool',
-      description: 'Replace exact oldString with newString in the current document.',
-      parameters: '{"oldString":"string","newString":"string"}',
-      execute: executeApplyTool,
-    },
-    {
-      name: 'semantic_tool',
-      description: 'Find a nearby semantic paragraph candidate for a failed replacement.',
-      parameters: '{"query":"string","nearText?":"string"}',
-      execute: executeSemanticTool,
-    },
-    {
-      name: 'generate_document_tool',
-      description: 'Create and save a NEW Markdown file only when the user explicitly asks to create/generate/save a new document or new file. Never use for normal chat, Q&A, summaries, explanations, or edits to the current document.',
-      parameters: '{"fileName":"string","prompt":"string"}',
-      execute: executeGenerateDocumentTool,
-    },
-  ]
+function normalizeMarkdownFileName(fileName: string) {
+  const trimmed = fileName.trim()
+  if (!trimmed) return 'AI生成文档.md'
+  if (/\.(md|markdown)$/i.test(trimmed)) return trimmed
+  return `${trimmed}.md`
+}
 
-  return tools
+const defaultAgentToolExecutors: Record<string, AgentToolExecutor> = {
+  apply_tool: executeApplyTool,
+  semantic_tool: executeSemanticTool,
+  generate_document_tool: executeGenerateDocumentTool,
+}
+
+export function createDefaultAgentTools(): AgentTool[] {
+  return defaultAgentToolDefinitions.map((definition) => {
+    const execute = defaultAgentToolExecutors[definition.name]
+    if (!execute) {
+      throw new Error(`Missing executor for tool: ${definition.name}`)
+    }
+
+    return {
+      ...definition,
+      execute,
+    }
+  })
+}
+
+export function validateToolArguments(
+  tool: AgentToolDefinition,
+  args: Record<string, unknown>
+): AgentToolValidationResult {
+  if (!args || typeof args !== 'object' || Array.isArray(args)) {
+    return {
+      ok: false,
+      error: {
+        code: 'invalid-arguments',
+        actualType: getValueType(args),
+      },
+    }
+  }
+
+  for (const field of tool.argumentsSchema.required) {
+    if (!(field in args)) {
+      return {
+        ok: false,
+        error: {
+          code: 'missing-required',
+          field,
+        },
+      }
+    }
+  }
+
+  const knownFields = new Set(Object.keys(tool.argumentsSchema.properties))
+  const actualFields = Object.keys(args)
+
+  if (!tool.argumentsSchema.additionalProperties) {
+    const extraFields = actualFields.filter((field) => !knownFields.has(field))
+    if (extraFields.length) {
+      return {
+        ok: false,
+        error: {
+          code: 'unexpected-property',
+          extraFields,
+        },
+      }
+    }
+  }
+
+  for (const [field, value] of Object.entries(args)) {
+    const property = tool.argumentsSchema.properties[field]
+    if (!property) continue
+
+    if (!matchesSchemaType(property.type, value)) {
+      return {
+        ok: false,
+        error: {
+          code: 'invalid-type',
+          field,
+          expectedType: property.type,
+          actualType: getValueType(value),
+        },
+      }
+    }
+  }
+
+  return { ok: true }
+}
+
+export function buildInvalidToolArgumentsResult(
+  tool: AgentToolDefinition,
+  validation: AgentToolValidationResult
+): AgentToolResult {
+  const error = validation.error
+  if (!error) {
+    return { ok: false, message: `Invalid arguments for ${tool.name}` }
+  }
+
+  if (error.code === 'invalid-arguments') {
+    return {
+      ok: false,
+      message: `Invalid arguments for ${tool.name}: arguments must be a JSON object.`,
+      metadata: { validationError: error },
+    }
+  }
+
+  if (error.code === 'missing-required') {
+    return {
+      ok: false,
+      message: `Invalid arguments for ${tool.name}: missing required field "${error.field}".`,
+      metadata: { validationError: error },
+    }
+  }
+
+  if (error.code === 'unexpected-property') {
+    return {
+      ok: false,
+      message: `Invalid arguments for ${tool.name}: unexpected field(s) ${error.extraFields?.map((field) => `"${field}"`).join(', ')}.`,
+      metadata: { validationError: error },
+    }
+  }
+
+  return {
+    ok: false,
+    message: `Invalid arguments for ${tool.name}: field "${error.field}" must be ${error.expectedType}, got ${error.actualType}.`,
+    metadata: { validationError: error },
+  }
+}
+
+function matchesSchemaType(expectedType: AgentToolJsonSchemaProperty['type'], value: unknown) {
+  if (expectedType === 'string') return typeof value === 'string'
+  if (expectedType === 'number') return typeof value === 'number' && Number.isFinite(value)
+  if (expectedType === 'integer') return typeof value === 'number' && Number.isInteger(value)
+  if (expectedType === 'boolean') return typeof value === 'boolean'
+  if (expectedType === 'array') return Array.isArray(value)
+  if (expectedType === 'object') return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+  return false
+}
+
+function getValueType(value: unknown) {
+  if (Array.isArray(value)) return 'array'
+  if (value === null) return 'null'
+  return typeof value
 }

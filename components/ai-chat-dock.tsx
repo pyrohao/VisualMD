@@ -20,6 +20,7 @@ import { useTranslation } from '@/stores/languageStore'
 import { useSidebarStore } from '@/stores/sidebarStore'
 import { useAiChatStore } from '@/stores/aiChatStore'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { useGitStore } from '@/stores/gitStore'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
@@ -76,6 +77,7 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
     visibleMessagesByConversation,
     toolUndoStackByConversation,
     referencesByConversation,
+    generatedDocumentSessionsByConversation,
     draftInput,
     selectedReferenceIds,
     isLoading,
@@ -98,9 +100,11 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
     setChatTemperature,
     setChatMaxTokens,
     setChatHistoryRounds,
+    chooseGeneratedDocumentSaveTarget,
     undoLastToolApply,
     dismissLastToolApply,
   } = useAiChatStore()
+  const gitConnected = useGitStore((state) => state.connected)
 
   const themeConfig = getThemeConfig()
   const connectedProviders = useMemo(
@@ -122,6 +126,9 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
     ? [...(toolUndoStackByConversation[currentConversationId] || [])].reverse().find((record) => record.state === 'available') || null
     : null
   const currentConversation = conversations.find((conversation) => conversation.id === currentConversationId) || null
+  const currentGeneratedDocumentSession = currentConversationId
+    ? generatedDocumentSessionsByConversation[currentConversationId] || null
+    : null
   const selectedReferences = useMemo(
     () => {
       const currentReferences = currentConversationId ? referencesByConversation[currentConversationId] || [] : []
@@ -528,6 +535,56 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
                   onClick={() => dismissLastToolApply()}
                   style={{ color: themeConfig.textMuted, backgroundColor: 'transparent' }}
                   title={currentLanguage === 'zh' ? '关闭提示' : 'Dismiss'}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {currentConversationId && currentGeneratedDocumentSession && gitConnected && (
+            <div
+              className="mb-3 flex min-w-0 items-center justify-between gap-2 rounded-xl border px-3 py-2 text-xs"
+              style={{
+                borderColor: themeConfig.border,
+                backgroundColor: themeConfig.background,
+                color: themeConfig.textMuted,
+              }}
+            >
+              <span className="min-w-0 truncate">
+                {currentLanguage === 'zh'
+                  ? `已生成 ${currentGeneratedDocumentSession.fileName}，请选择保存位置`
+                  : `Generated ${currentGeneratedDocumentSession.fileName}. Choose where to save.`}
+              </span>
+              <div className="flex shrink-0 items-center gap-1">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 rounded-md px-2 hover:bg-transparent focus-visible:ring-0"
+                  onClick={() => void chooseGeneratedDocumentSaveTarget(currentConversationId, 'local')}
+                  style={{ color: themeConfig.primary, backgroundColor: `${themeConfig.primary}12` }}
+                >
+                  {currentLanguage === 'zh' ? '本地保存' : 'Save local'}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 rounded-md px-2 hover:bg-transparent focus-visible:ring-0"
+                  onClick={() => void chooseGeneratedDocumentSaveTarget(currentConversationId, 'git')}
+                  style={{ color: themeConfig.primary, backgroundColor: `${themeConfig.primary}12` }}
+                >
+                  {currentLanguage === 'zh' ? '保存到 Git' : 'Save to Git'}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 rounded-md hover:bg-transparent focus-visible:ring-0"
+                  onClick={() => void chooseGeneratedDocumentSaveTarget(currentConversationId, 'local')}
+                  style={{ color: themeConfig.textMuted, backgroundColor: 'transparent' }}
+                  title={currentLanguage === 'zh' ? '保存到本地' : 'Save local'}
                 >
                   <X className="h-3.5 w-3.5" />
                 </Button>

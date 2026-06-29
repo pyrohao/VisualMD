@@ -54,6 +54,20 @@ export interface AgentUiState {
   updatedAt: number
 }
 
+export interface AgentDocumentSessionRecord {
+  conversationId: string
+  toolCallId: string
+  fileName: string
+  content: string
+  tempFileId: string | null
+  tempTabId: string | null
+  gitTargetDirectory: string | null
+  status: 'streaming' | 'ready' | 'failed'
+  error: string | null
+  createdAt: number
+  updatedAt: number
+}
+
 export interface AgentToolCall {
   id: string
   name: string
@@ -83,7 +97,7 @@ export interface AgentToolContext {
   providerConfig?: import('@/stores/settingsStore').ProviderConfig
   signal?: AbortSignal
   toolCallId?: string
-  onGeneratedDocumentEvent?: (event: AgentGeneratedDocumentEvent) => void
+  onGeneratedDocumentEvent?: (event: AgentGeneratedDocumentEvent) => void | Promise<void>
 }
 
 export interface AgentReferenceContext {

@@ -58,6 +58,11 @@ function isLivePreviewLayout(value: string | null): value is LivePreviewLayout {
  */
 function getThemeStyles(theme: ThemeMode): string {
   const config = themeConfigs[theme]
+  const selectionColor = theme === 'dark'
+    ? 'rgba(58, 96, 130, 0.48)'
+    : theme === 'reading'
+      ? 'rgba(177, 139, 74, 0.26)'
+      : 'rgba(86, 156, 214, 0.34)'
   
   return `
     .markdown-body {
@@ -196,24 +201,26 @@ function getThemeStyles(theme: ThemeMode): string {
       border-collapse: collapse;
       margin: 1.5rem 0;
     }
-    .markdown-body .visualmd-reference-highlight {
-      position: relative;
-      border-radius: 0.75rem;
-      outline: 2px solid ${config.primary}73;
-      background-color: ${config.primary}14;
-      box-shadow: 0 0 0 6px ${config.primary}0f;
+    .markdown-body span.visualmd-reference-highlight {
+      border-radius: 0.22rem;
+      padding: 0.04rem 0.12rem;
+      background-color: ${selectionColor};
+      box-shadow: none;
+      -webkit-box-decoration-break: clone;
+      box-decoration-break: clone;
     }
-    .markdown-body li.visualmd-reference-highlight,
-    .markdown-body p.visualmd-reference-highlight,
-    .markdown-body h1.visualmd-reference-highlight,
-    .markdown-body h2.visualmd-reference-highlight,
-    .markdown-body h3.visualmd-reference-highlight,
-    .markdown-body h4.visualmd-reference-highlight,
-    .markdown-body h5.visualmd-reference-highlight,
-    .markdown-body h6.visualmd-reference-highlight,
+    .markdown-body pre.visualmd-reference-highlight,
+    .markdown-body code.visualmd-reference-highlight,
+    .markdown-body img.visualmd-reference-highlight,
+    .markdown-body table.visualmd-reference-highlight {
+      border-radius: 0.28rem;
+      outline: none;
+      background-color: ${selectionColor};
+      box-shadow: none;
+    }
     .markdown-body pre.visualmd-reference-highlight,
     .markdown-body table.visualmd-reference-highlight {
-      padding: 0.35rem 0.55rem;
+      padding: 0.45rem 0.65rem;
     }
     .markdown-body th,
     .markdown-body td {

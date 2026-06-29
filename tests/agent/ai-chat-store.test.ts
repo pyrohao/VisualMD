@@ -8,6 +8,7 @@ const storage = vi.hoisted(() => ({
   drafts: new Map<string, AgentDraft>(),
   references: new Map<string, any[]>(),
   ui: new Map<string, string>(),
+  documentSessions: new Map<string, any>(),
   documentMarkdown: '# Doc\n\nSelected text.',
   applyExternalMarkdown: vi.fn((markdown: string) => {
     storage.documentMarkdown = markdown
@@ -15,13 +16,21 @@ const storage = vi.hoisted(() => ({
   }),
   markAsSaved: vi.fn(),
   importFile: vi.fn(),
+  loadDocument: vi.fn(),
   saveFile: vi.fn(),
   saveFileContent: vi.fn(),
   openFileInTab: vi.fn(),
   updateTabContent: vi.fn(),
   markTabAsModified: vi.fn(),
   markTabAsSaved: vi.fn(),
+  openGitFileInTab: vi.fn(),
+  createGitFile: vi.fn(),
+  updateDraftContent: vi.fn(),
   currentFileId: null as string | null,
+  files: [] as Array<{ id: string; name: string }>,
+  gitConnected: false,
+  currentGitDocumentId: null as string | null,
+  gitDrafts: {} as Record<string, any>,
 }))
 
 const providerConfig: ProviderConfig = {
@@ -91,6 +100,15 @@ vi.mock('@/lib/agent', async (importOriginal) => {
     saveAgentUiState: vi.fn(async (key: string, value: string) => {
       storage.ui.set(key, value)
       return true
+    }),
+    saveAgentDocumentSession: vi.fn(async (session: any) => {
+      storage.documentSessions.set(session.conversationId, session)
+      return true
+    }),
+    getAgentDocumentSession: vi.fn(async (conversationId: string) => storage.documentSessions.get(conversationId) || null),
+    listAgentDocumentSessions: vi.fn(async () => Array.from(storage.documentSessions.values())),
+    deleteAgentDocumentSession: vi.fn(async (conversationId: string) => {
+      storage.documentSessions.delete(conversationId)
     }),
     runAgentReActLoop: vi.fn(async (options: {
       messages: AgentMessage[]
@@ -164,6 +182,7 @@ vi.mock('@/stores/documentStore', () => ({
       getCurrentMarkdown: () => storage.documentMarkdown,
       applyExternalMarkdown: storage.applyExternalMarkdown,
       markAsSaved: storage.markAsSaved,
+      loadDocument: storage.loadDocument,
     }),
   },
 }))
@@ -173,6 +192,7 @@ vi.mock('@/stores/tabsStore', () => ({
     getState: () => ({
       getActiveTab: () => ({ id: 'tab-1', fileId: 'file-1', sourceType: 'local' }),
       openFileInTab: storage.openFileInTab,
+      openGitFileInTab: storage.openGitFileInTab,
       updateTabContent: storage.updateTabContent,
       markTabAsModified: storage.markTabAsModified,
       markTabAsSaved: storage.markTabAsSaved,
@@ -195,7 +215,17 @@ vi.mock('@/stores/fileSystemStore', () => ({
 vi.mock('@/stores/gitStore', () => ({
   useGitStore: {
     getState: () => ({
-      updateDraftContent: vi.fn(),
+      connected: storage.gitConnected,
+      config: {
+        provider: 'github',
+        ownerOrNamespace: 'owner',
+        repo: 'repo',
+        branch: 'main',
+      },
+      currentDocumentId: storage.currentGitDocumentId,
+      drafts: storage.gitDrafts,
+      createFile: storage.createGitFile,
+      updateDraftContent: storage.updateDraftContent,
     }),
   },
 }))
@@ -229,21 +259,56 @@ describe('ai chat store hook adapter', () => {
     storage.drafts.clear()
     storage.references.clear()
     storage.ui.clear()
+    storage.documentSessions.clear()
     storage.documentMarkdown = '# Doc\n\nSelected text.'
     storage.applyExternalMarkdown.mockClear()
     storage.markAsSaved.mockClear()
     storage.currentFileId = null
+    storage.files = []
     storage.importFile.mockClear()
+    storage.loadDocument.mockClear()
     storage.saveFile.mockClear()
     storage.saveFileContent.mockClear()
     storage.openFileInTab.mockClear()
     storage.updateTabContent.mockClear()
     storage.markTabAsModified.mockClear()
     storage.markTabAsSaved.mockClear()
-    storage.importFile.mockImplementation(() => {
+    storage.openGitFileInTab.mockClear()
+    storage.createGitFile.mockClear()
+    storage.updateDraftContent.mockClear()
+    storage.gitConnected = false
+    storage.currentGitDocumentId = null
+    storage.gitDrafts = {}
+    storage.importFile.mockImplementation((name: string) => {
       storage.currentFileId = 'generated-file-1'
+      storage.files = [...storage.files, { id: 'generated-file-1', name }]
     })
     storage.openFileInTab.mockReturnValue('generated-tab-1')
+    storage.openGitFileInTab.mockReturnValue('generated-git-tab-1')
+    storage.createGitFile.mockImplementation(async (path: string, content: string) => {
+      storage.currentGitDocumentId = `git:github:owner/repo:main:${path}`
+      storage.gitDrafts[storage.currentGitDocumentId] = {
+        documentId: storage.currentGitDocumentId,
+        path,
+        name: path.split('/').pop() || path,
+        provider: 'github',
+        ownerOrNamespace: 'owner',
+        repo: 'repo',
+        branch: 'main',
+        draftContent: content,
+        originalContent: '',
+        isDirty: Boolean(content),
+        isNew: true,
+      }
+    })
+    storage.updateDraftContent.mockImplementation((documentId: string, content: string) => {
+      storage.gitDrafts[documentId] = {
+        ...storage.gitDrafts[documentId],
+        draftContent: content,
+        content,
+        isDirty: true,
+      }
+    })
     vi.resetModules()
   })
 
@@ -453,7 +518,6 @@ describe('ai chat store hook adapter', () => {
       previousMarkdown: '# Doc\n\nSelected text.',
       appliedToolCallIds: [],
       appliedTools: [],
-      generatedFiles: [{ toolCallId: 'tool-call-generate', fileName: 'Generated.md', content: '# Generated' }],
       stoppedBecause: 'assistant-text',
     })
 
@@ -462,21 +526,146 @@ describe('ai chat store hook adapter', () => {
     await useAiChatStore.getState().setDraftInput('生成文档')
     await useAiChatStore.getState().sendMessage()
 
-    expect(storage.importFile).toHaveBeenCalledWith('Generated.md', '# Generated', null)
+    expect(storage.importFile).not.toHaveBeenCalled()
+    expect(storage.loadDocument).not.toHaveBeenCalled()
+    expect(useAiChatStore.getState().generatedDocumentSessionsByConversation['conversation-1']).toBeUndefined()
   })
 
-  it('streams generated document tool output into a new file and tab', async () => {
+  it('streams generated documents into a temp local file and opens them immediately', async () => {
     const agent = await import('@/lib/agent')
+    vi.mocked(agent.runAgentReActLoop).mockClear()
     vi.mocked(agent.runAgentReActLoop).mockImplementationOnce(async (options: any) => {
-      options.onGeneratedDocumentEvent?.({ type: 'start', toolCallId: 'tool-call-generate', fileName: 'Live.md' })
-      options.onGeneratedDocumentEvent?.({
+      await options.onGeneratedDocumentEvent?.({ type: 'start', toolCallId: 'tool-call-generate', fileName: 'Live.md' })
+      await options.onGeneratedDocumentEvent?.({
         type: 'delta',
         toolCallId: 'tool-call-generate',
         fileName: 'Live.md',
         delta: '# Live',
         content: '# Live',
       })
-      options.onGeneratedDocumentEvent?.({
+      await options.onGeneratedDocumentEvent?.({
+        type: 'done',
+        toolCallId: 'tool-call-generate',
+        fileName: 'Live.md',
+        content: '# Live',
+      })
+      return {
+        messages: [
+          ...options.messages,
+          {
+            id: 'assistant-1',
+            conversationId: 'conversation-1',
+            role: 'assistant',
+            message: '已生成',
+            createdAt: 2,
+            state: 'done',
+          },
+        ],
+        appliedMarkdown: '# Doc\n\nSelected text.',
+        previousMarkdown: '# Doc\n\nSelected text.',
+        appliedToolCallIds: [],
+        appliedTools: [],
+        stoppedBecause: 'assistant-text',
+      }
+    })
+    const { useAiChatStore } = await import('@/stores/aiChatStore')
+
+    await useAiChatStore.getState().createConversation()
+    await useAiChatStore.getState().setDraftInput('生成文档')
+    await useAiChatStore.getState().sendMessage()
+
+    expect(storage.importFile).toHaveBeenCalledWith('Live.md', '', null)
+    expect(storage.loadDocument).toHaveBeenCalledWith('', 'Live.md', 'generated-file-1')
+    expect(storage.saveFileContent).toHaveBeenCalledWith('generated-file-1', '# Live')
+    expect(useAiChatStore.getState().generatedDocumentSessionsByConversation['conversation-1']).toBeUndefined()
+  })
+
+  it('offers a post-generation git save choice when git is connected', async () => {
+    storage.gitConnected = true
+    const agent = await import('@/lib/agent')
+    vi.mocked(agent.runAgentReActLoop).mockClear()
+    vi.mocked(agent.runAgentReActLoop).mockImplementationOnce(async (options: any) => {
+      await options.onGeneratedDocumentEvent?.({ type: 'start', toolCallId: 'tool-call-generate', fileName: 'GitDoc.md' })
+      await options.onGeneratedDocumentEvent?.({
+        type: 'done',
+        toolCallId: 'tool-call-generate',
+        fileName: 'GitDoc.md',
+        content: '# Git Doc',
+      })
+      return {
+        messages: [
+          ...options.messages,
+          {
+            id: 'assistant-1',
+            conversationId: 'conversation-1',
+            role: 'assistant',
+            message: '已生成',
+            createdAt: 2,
+            state: 'done',
+          },
+        ],
+        appliedMarkdown: '# Doc\n\nSelected text.',
+        previousMarkdown: '# Doc\n\nSelected text.',
+        appliedToolCallIds: [],
+        appliedTools: [],
+        stoppedBecause: 'assistant-text',
+      }
+    })
+
+    const { useAiChatStore } = await import('@/stores/aiChatStore')
+    await useAiChatStore.getState().createConversation()
+    await useAiChatStore.getState().setDraftInput('生成文档')
+    await useAiChatStore.getState().sendMessage()
+
+    expect(useAiChatStore.getState().generatedDocumentSessionsByConversation['conversation-1']).toEqual(
+      expect.objectContaining({
+        fileName: 'GitDoc.md',
+        status: 'ready',
+        content: '# Git Doc',
+      })
+    )
+    await useAiChatStore.getState().chooseGeneratedDocumentSaveTarget('conversation-1', 'git')
+    expect(storage.createGitFile).toHaveBeenCalledWith('GitDoc.md', '# Git Doc', 'Create GitDoc.md')
+  })
+
+  it('restores a generated document session after reinitialization', async () => {
+    storage.documentSessions.set('conversation-1', {
+      conversationId: 'conversation-1',
+      toolCallId: 'tool-call-generate',
+      fileName: 'Restore.md',
+      content: '# Restore',
+      tempFileId: 'generated-file-1',
+      tempTabId: 'generated-tab-1',
+      gitTargetDirectory: null,
+      status: 'ready',
+      error: null,
+      createdAt: 1,
+      updatedAt: 2,
+    })
+
+    const { useAiChatStore } = await import('@/stores/aiChatStore')
+    await useAiChatStore.getState().initialize()
+
+    expect(useAiChatStore.getState().generatedDocumentSessionsByConversation['conversation-1']).toEqual(
+      expect.objectContaining({
+        fileName: 'Restore.md',
+        status: 'ready',
+      })
+    )
+  })
+
+  it('streams generated document tool output into a new file and tab', async () => {
+    const agent = await import('@/lib/agent')
+    vi.mocked(agent.runAgentReActLoop).mockImplementationOnce(async (options: any) => {
+      await options.onGeneratedDocumentEvent?.({ type: 'start', toolCallId: 'tool-call-generate', fileName: 'Live.md' })
+      await options.onGeneratedDocumentEvent?.({
+        type: 'delta',
+        toolCallId: 'tool-call-generate',
+        fileName: 'Live.md',
+        delta: '# Live',
+        content: '# Live',
+      })
+      await options.onGeneratedDocumentEvent?.({
         type: 'done',
         toolCallId: 'tool-call-generate',
         fileName: 'Live.md',

@@ -43,7 +43,7 @@ describe('markdown-preview-highlight', () => {
     ])
   })
 
-  it('marks the rendered markdown block that overlaps a reference range', async () => {
+  it('marks only the rendered text segment that overlaps a reference range', async () => {
     const markdown = '# Title\n\nFirst target paragraph.\n\nSecond paragraph.'
     const startOffset = markdown.indexOf('target')
     const html = await renderMarkdownWithHighlight(markdown, [
@@ -54,6 +54,22 @@ describe('markdown-preview-highlight', () => {
     ])
 
     expect(html).toContain(`class="${MARKDOWN_REFERENCE_HIGHLIGHT_CLASS}"`)
-    expect(html).toContain(`<p class="${MARKDOWN_REFERENCE_HIGHLIGHT_CLASS}">First target paragraph.</p>`)
+    expect(html).toContain(`<p>First <span class="${MARKDOWN_REFERENCE_HIGHLIGHT_CLASS}">target</span> paragraph.</p>`)
+  })
+
+  it('marks visible text across a heading and list from source offsets', async () => {
+    const markdown = '#### 使用说明\n\n1. xxxx\n2. xxxx\n3. xxxx\n\n#### 参与贡献'
+    const startOffset = 0
+    const endOffset = markdown.indexOf('\n\n#### 参与贡献')
+    const html = await renderMarkdownWithHighlight(markdown, [
+      {
+        startOffset,
+        endOffset,
+      },
+    ])
+
+    expect(html).toContain(`<h4><span class="${MARKDOWN_REFERENCE_HIGHLIGHT_CLASS}">使用说明</span></h4>`)
+    expect(html).toContain(`<li><span class="${MARKDOWN_REFERENCE_HIGHLIGHT_CLASS}">xxxx</span></li>`)
+    expect(html).toContain('<h4>参与贡献</h4>')
   })
 })

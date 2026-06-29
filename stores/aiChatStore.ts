@@ -7,13 +7,17 @@ import {
   createDefaultAgentTools,
   deleteAgentConversation,
   deleteAgentReference,
+  deleteAgentDocumentSession,
   getAgentDraft,
+  getAgentDocumentSession,
   getAgentUiState,
   listAgentConversations,
+  listAgentDocumentSessions,
   listAgentMessages,
   listAgentReferences,
   runAgentReActLoop,
   saveAgentConversation,
+  saveAgentDocumentSession,
   saveAgentDraft,
   saveAgentMessage,
   saveAgentMessages,
@@ -21,6 +25,7 @@ import {
   saveAgentUiState,
   splitAssistantThinking,
   type AgentConversation,
+  type AgentDocumentSessionRecord,
   type AgentDraft,
   type AgentMessage,
 } from '@/lib/agent'
@@ -38,6 +43,7 @@ import { useHistoryStore } from './historyStore'
 import { useSettingsStore } from './settingsStore'
 import { useTabsStore } from './tabsStore'
 import { saveDirtyEditors } from './unsavedChangesStore'
+import { getGitFileName, joinGitPath, normalizeGitPath } from '@/lib/git/utils'
 
 export type AiReferenceRecord = AiDocReferenceSnapshot & {
   id: string
@@ -46,6 +52,24 @@ export type AiReferenceRecord = AiDocReferenceSnapshot & {
   tabId: string | null
   stale: boolean
   createdAt: number
+}
+
+export type AiDocumentCreateTarget = 'local' | 'git'
+
+type GeneratedDocumentStatus = 'streaming' | 'ready' | 'failed'
+
+type GeneratedDocumentSession = {
+  conversationId: string
+  toolCallId: string
+  fileName: string
+  content: string
+  tempFileId: string | null
+  tempTabId: string | null
+  gitTargetDirectory: string | null
+  status: GeneratedDocumentStatus
+  error: string | null
+  createdAt: number
+  updatedAt: number
 }
 
 type UiConversationRecord = AgentConversation & {
@@ -82,6 +106,7 @@ interface AiChatStore {
   toolUndoStackByConversation: Record<string, ToolUndoRecord[]>
   referencesByConversation: Record<string, AiReferenceRecord[]>
   draftsByConversation: Record<string, AgentDraft>
+  generatedDocumentSessionsByConversation: Record<string, GeneratedDocumentSession>
   taskType: AiDocTaskType
   selectionCandidate: AiDocReferenceSnapshot | null
   draftInput: string
@@ -116,12 +141,19 @@ interface AiChatStore {
   setChatTemperature: (value: number) => Promise<void>
   setChatMaxTokens: (value: number) => Promise<void>
   setChatHistoryRounds: (value: number) => Promise<void>
+  chooseGeneratedDocumentSaveTarget: (conversationId: string, target: AiDocumentCreateTarget) => Promise<boolean>
+  clearGeneratedDocumentSession: (conversationId: string) => void
   undoLastToolApply: () => Promise<boolean>
   dismissLastToolApply: () => void
   syncToolUndoStackWithMarkdown: (markdown: string) => void
 }
 
 let activeAbortController: AbortController | null = null
+
+function isGitCreationAvailable() {
+  const gitState = useGitStore.getState()
+  return Boolean(gitState.connected && gitState.config.repo && gitState.config.branch)
+}
 
 function getCurrentDocumentIdentity() {
   const activeTab = useTabsStore.getState().getActiveTab()
@@ -338,6 +370,167 @@ async function syncCurrentDraft(store: Pick<AiChatStore, 'currentConversationId'
   await saveAgentDraft(buildDraftRecord(store.currentConversationId, store.taskType, store.draftInput, store.selectedReferenceIds))
 }
 
+function uniqueGeneratedFileName(fileName: string) {
+  const fileSystemStore = useFileSystemStore.getState()
+  const existingFiles = Array.isArray((fileSystemStore as { files?: { name: string }[] }).files)
+    ? (fileSystemStore as { files?: { name: string }[] }).files || []
+    : []
+  const existingNames = new Set(existingFiles.map((file) => file.name))
+  if (!existingNames.has(fileName)) return fileName
+
+  const dotIndex = fileName.lastIndexOf('.')
+  const baseName = dotIndex > 0 ? fileName.slice(0, dotIndex) : fileName
+  const extension = dotIndex > 0 ? fileName.slice(dotIndex) : ''
+
+  let suffix = 1
+  let nextName = `${baseName} (${suffix})${extension}`
+  while (existingNames.has(nextName)) {
+    suffix += 1
+    nextName = `${baseName} (${suffix})${extension}`
+  }
+
+  return nextName
+}
+
+function normalizeGeneratedFileName(fileName: string) {
+  const trimmed = fileName.trim()
+  if (!trimmed) return 'AI生成文档.md'
+  if (/\.(md|markdown)$/i.test(trimmed)) return trimmed
+  return `${trimmed}.md`
+}
+
+function toGeneratedDocumentRecord(session: GeneratedDocumentSession) {
+  return {
+    conversationId: session.conversationId,
+    toolCallId: session.toolCallId,
+    fileName: session.fileName,
+    content: session.content,
+    tempFileId: session.tempFileId,
+    tempTabId: session.tempTabId,
+    gitTargetDirectory: session.gitTargetDirectory,
+    status: session.status,
+    error: session.error,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+  } satisfies AgentDocumentSessionRecord
+}
+
+function fromGeneratedDocumentRecord(record: AgentDocumentSessionRecord): GeneratedDocumentSession {
+  return {
+    ...record,
+  }
+}
+
+async function createGeneratedLocalTempFile(fileName: string, content: string) {
+  const fileSystemStore = useFileSystemStore.getState()
+  const tabsStore = useTabsStore.getState()
+  const documentStore = useDocumentStore.getState()
+  const normalizedName = uniqueGeneratedFileName(normalizeGeneratedFileName(fileName))
+
+  fileSystemStore.importFile(normalizedName, content, null)
+  const fileId = useFileSystemStore.getState().currentFileId
+  if (!fileId) return null
+
+  const tabId = tabsStore.openFileInTab(normalizedName, content, fileId)
+  documentStore.loadDocument(content, normalizedName, fileId)
+  return { fileId, tabId, fileName: normalizedName }
+}
+
+async function syncGeneratedDocumentToTempFile(args: {
+  conversationId: string
+  toolCallId: string
+  fileName: string
+  content: string
+  tempFileId?: string | null
+  tempTabId?: string | null
+}) {
+  const tabsStore = useTabsStore.getState()
+  const documentStore = useDocumentStore.getState()
+  const activeTab = tabsStore.getActiveTab()
+  const shouldSyncPreview = activeTab?.id === args.tempTabId
+
+  let tempFileId = args.tempFileId || null
+  let tempTabId = args.tempTabId || null
+
+  if (!tempFileId || !tempTabId) {
+    const created = await createGeneratedLocalTempFile(args.fileName, args.content)
+    if (!created) {
+      throw new Error('无法创建临时文档')
+    }
+    tempFileId = created.fileId
+    tempTabId = created.tabId
+  } else {
+    useFileSystemStore.getState().saveFile(tempFileId, args.content)
+    tabsStore.updateTabContent(tempTabId, args.content)
+    tabsStore.markTabAsModified(tempTabId, true)
+  }
+
+  if (shouldSyncPreview || activeTab?.id === tempTabId) {
+    documentStore.applyExternalMarkdown(args.content)
+  }
+
+  return { tempFileId, tempTabId, fileName: args.fileName, content: args.content }
+}
+
+async function finalizeGeneratedDocumentAsLocal(session: GeneratedDocumentSession) {
+  const fileSystemStore = useFileSystemStore.getState()
+  const tabsStore = useTabsStore.getState()
+
+  if (session.tempFileId) {
+    fileSystemStore.saveFileContent(session.tempFileId, session.content)
+    if (session.tempTabId) {
+      tabsStore.markTabAsSaved(session.tempTabId, session.fileName)
+    }
+  }
+}
+
+async function persistGeneratedDocumentSession(session: GeneratedDocumentSession | null) {
+  if (!session) return
+  await saveAgentDocumentSession(toGeneratedDocumentRecord(session))
+}
+
+async function removeGeneratedDocumentSession(conversationId: string) {
+  await deleteAgentDocumentSession(conversationId)
+}
+
+async function moveGeneratedDocumentToGit(session: GeneratedDocumentSession) {
+  const gitStore = useGitStore.getState()
+  const tabsStore = useTabsStore.getState()
+  const fileSystemStore = useFileSystemStore.getState()
+  const normalizedPath = normalizeGitPath(joinGitPath(session.gitTargetDirectory || '', session.fileName))
+
+  await gitStore.createFile(normalizedPath, session.content, `Create ${normalizedPath}`)
+  const nextGitState = useGitStore.getState()
+  const draft = nextGitState.currentDocumentId ? nextGitState.drafts[nextGitState.currentDocumentId] : null
+  if (draft) {
+    tabsStore.openGitFileInTab({
+      fileName: draft.name || getGitFileName(normalizedPath),
+      content: draft.draftContent,
+      savedContent: draft.originalContent,
+      isModified: draft.isDirty || Boolean(draft.isNew),
+      isNew: draft.isNew,
+      fileId: draft.documentId,
+      sourceType: 'git',
+      gitMeta: {
+        provider: draft.provider,
+        ownerOrNamespace: draft.ownerOrNamespace,
+        repo: draft.repo,
+        branch: draft.branch,
+        path: draft.path,
+        sha: draft.sha,
+        fileKind: 'text',
+      },
+    })
+  }
+
+  if (session.tempFileId) {
+    fileSystemStore.deleteFile(session.tempFileId)
+  }
+  if (session.tempTabId) {
+    tabsStore.closeTab(session.tempTabId)
+  }
+}
+
 async function syncMarkdownToActiveSource(
   nextMarkdown: string,
   nextFileName?: string,
@@ -404,6 +597,25 @@ async function applyMarkdownTransaction(
   return committedMarkdown
 }
 
+function getGitTargetDirectory() {
+  const activeTab = useTabsStore.getState().getActiveTab()
+  if (activeTab?.sourceType === 'git' && activeTab.gitMeta?.path) {
+    return normalizeGitPath(activeTab.gitMeta.path.split('/').slice(0, -1).join('/'))
+  }
+
+  const gitStore = useGitStore.getState()
+  const currentDraft = gitStore.currentDocumentId ? gitStore.drafts[gitStore.currentDocumentId] : null
+  if (currentDraft?.path) {
+    return normalizeGitPath(currentDraft.path.split('/').slice(0, -1).join('/'))
+  }
+
+  return ''
+}
+
+function buildGeneratedGitPath(fileName: string) {
+  return joinGitPath(getGitTargetDirectory(), fileName)
+}
+
 export const useAiChatStore = create<AiChatStore>((set, get) => ({
   conversations: [],
   currentConversationId: null,
@@ -412,6 +624,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
   toolUndoStackByConversation: {},
   referencesByConversation: {},
   draftsByConversation: {},
+  generatedDocumentSessionsByConversation: {},
   taskType: 'ask',
   selectionCandidate: null,
   draftInput: '',
@@ -428,8 +641,9 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
   initialize: async () => {
     set({ isLoading: true, error: null })
     try {
-      const [agentConversations, lastOpenConversationId, chatTemperature, chatMaxTokens, chatHistoryRounds] = await Promise.all([
+      const [agentConversations, documentSessions, lastOpenConversationId, chatTemperature, chatMaxTokens, chatHistoryRounds] = await Promise.all([
         listAgentConversations(),
+        listAgentDocumentSessions(),
         getAgentUiState('last_open_conversation_id'),
         getAgentUiState('chat_temperature'),
         getAgentUiState('chat_max_tokens'),
@@ -445,6 +659,10 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       const visibleMessagesByConversation: Record<string, VisibleAgentMessage[]> = {}
       const referencesByConversation: Record<string, AiReferenceRecord[]> = {}
       const draftsByConversation: Record<string, AgentDraft> = {}
+      const generatedDocumentSessionsByConversation: Record<string, GeneratedDocumentSession> = {}
+      for (const session of documentSessions) {
+        generatedDocumentSessionsByConversation[session.conversationId] = fromGeneratedDocumentRecord(session)
+      }
       if (currentConversationId) {
         const messages = await listAgentMessages(currentConversationId)
         messagesByConversation[currentConversationId] = messages
@@ -465,6 +683,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         toolUndoStackByConversation: {},
         draftsByConversation,
         referencesByConversation,
+        generatedDocumentSessionsByConversation,
         taskType: (currentDraft?.taskType as AiDocTaskType) || 'ask',
         draftInput: currentDraft?.inputText || '',
         selectedReferenceIds: currentDraft?.selectedReferenceIds?.slice(-1) || [],
@@ -485,6 +704,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
     const messages = await listAgentMessages(conversationId)
     const references = (await listAgentReferences(conversationId)) as AiReferenceRecord[]
     const draft = await getAgentDraft(conversationId)
+    const session = await getAgentDocumentSession(conversationId)
     set((state) => ({
       currentConversationId: conversationId,
       messagesByConversation: {
@@ -513,6 +733,12 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
             [conversationId]: draft,
           }
         : state.draftsByConversation,
+      generatedDocumentSessionsByConversation: session
+        ? {
+            ...state.generatedDocumentSessionsByConversation,
+            [conversationId]: fromGeneratedDocumentRecord(session),
+          }
+        : state.generatedDocumentSessionsByConversation,
       draftInput: draft?.inputText || '',
       selectedReferenceIds: draft?.selectedReferenceIds?.slice(-1) || [],
       taskType: (draft?.taskType as AiDocTaskType) || 'ask',
@@ -574,6 +800,8 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       delete nextReferences[conversationId]
       const nextDrafts = { ...state.draftsByConversation }
       delete nextDrafts[conversationId]
+      const nextGeneratedDocumentSessions = { ...state.generatedDocumentSessionsByConversation }
+      delete nextGeneratedDocumentSessions[conversationId]
       const conversations = state.conversations.filter((item) => item.id !== conversationId)
       const currentConversationId = state.currentConversationId === conversationId ? conversations[0]?.id || null : state.currentConversationId
       return {
@@ -584,6 +812,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         toolUndoStackByConversation: nextToolUndoStack,
         referencesByConversation: nextReferences,
         draftsByConversation: nextDrafts,
+        generatedDocumentSessionsByConversation: nextGeneratedDocumentSessions,
         draftInput: currentConversationId ? nextDrafts[currentConversationId]?.inputText || '' : '',
         selectedReferenceIds: currentConversationId ? nextDrafts[currentConversationId]?.selectedReferenceIds?.slice(-1) || [] : [],
         selectionCandidate: null,
@@ -639,6 +868,43 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
     const nextValue = Math.max(1, Math.min(100, Math.round(value)))
     set({ chatHistoryRounds: nextValue })
     await saveAgentUiState('chat_history_rounds', String(nextValue))
+  },
+
+  chooseGeneratedDocumentSaveTarget: async (conversationId, target) => {
+    const session = get().generatedDocumentSessionsByConversation[conversationId]
+    if (!session) return false
+
+    try {
+      if (target === 'git') {
+        await moveGeneratedDocumentToGit(session)
+      } else {
+        await finalizeGeneratedDocumentAsLocal(session)
+      }
+    } catch (error) {
+      await finalizeGeneratedDocumentAsLocal(session)
+    } finally {
+      await removeGeneratedDocumentSession(conversationId)
+      set((state) => {
+        const nextSessions = { ...state.generatedDocumentSessionsByConversation }
+        delete nextSessions[conversationId]
+        return {
+          generatedDocumentSessionsByConversation: nextSessions,
+        }
+      })
+    }
+
+    return true
+  },
+
+  clearGeneratedDocumentSession: (conversationId) => {
+    set((state) => {
+      const nextSessions = { ...state.generatedDocumentSessionsByConversation }
+      delete nextSessions[conversationId]
+      return {
+        generatedDocumentSessionsByConversation: nextSessions,
+      }
+    })
+    void removeGeneratedDocumentSession(conversationId)
   },
 
   addEditorSelectionReference: async (selectionStart, selectionEnd, markdownOverride, versionOverride) => {
@@ -731,6 +997,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
   sendMessage: async () => {
     let conversationId = get().currentConversationId
     let messages: AgentMessage[] = []
+    const generatedDocuments = new Map<string, GeneratedDocumentSession>()
 
     try {
       await saveDirtyEditors()
@@ -755,6 +1022,14 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
 
       conversationId = conversationId || (await get().createConversation())
       if (!conversationId) return
+
+      set((state) => {
+        const nextSessions = { ...state.generatedDocumentSessionsByConversation }
+        delete nextSessions[conversationId]
+        return {
+          generatedDocumentSessionsByConversation: nextSessions,
+        }
+      })
 
       const selectedReferenceId = get().selectedReferenceIds.at(-1)
       const references = (get().referencesByConversation[conversationId] || []).filter((reference) =>
@@ -816,7 +1091,6 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       }))
 
       activeAbortController = new AbortController()
-      const streamingGeneratedFiles = new Map<string, { fileId: string; tabId: string; fileName: string }>()
       const result = await runAgentReActLoop({
         providerConfig: {
           ...providerConfig,
@@ -830,32 +1104,121 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         markdown: documentStore.getCurrentMarkdown(),
         maxTurns: 5,
         signal: activeAbortController.signal,
-        onGeneratedDocumentEvent: (event) => {
-          const fileSystemStore = useFileSystemStore.getState()
-          const tabsStore = useTabsStore.getState()
-
+        onGeneratedDocumentEvent: async (event) => {
           if (event.type === 'start') {
-            fileSystemStore.importFile(event.fileName, '', null)
-            const fileId = useFileSystemStore.getState().currentFileId
-            if (!fileId) return
-            const tabId = tabsStore.openFileInTab(event.fileName, '', fileId)
-            streamingGeneratedFiles.set(event.toolCallId, { fileId, tabId, fileName: event.fileName })
+            const created = await createGeneratedLocalTempFile(event.fileName, '')
+            if (!created) return
+            const startedSession: GeneratedDocumentSession = {
+              conversationId,
+              toolCallId: event.toolCallId,
+              fileName: created.fileName,
+              content: '',
+              tempFileId: created.fileId,
+              tempTabId: created.tabId,
+              gitTargetDirectory: isGitCreationAvailable() ? getGitTargetDirectory() : null,
+              status: 'streaming',
+              error: null,
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+            }
+            generatedDocuments.set(event.toolCallId, startedSession)
+            await persistGeneratedDocumentSession(startedSession)
             set({ sendingStatus: '正在生成新文档...' })
             return
           }
 
-          const target = streamingGeneratedFiles.get(event.toolCallId)
-          if (!target || event.type === 'error') return
+          const session = generatedDocuments.get(event.toolCallId)
+          if (!session) return
 
           if (event.type === 'delta') {
+            const nextSession = await syncGeneratedDocumentToTempFile({
+              conversationId,
+              toolCallId: event.toolCallId,
+              fileName: session.fileName,
+              content: event.content,
+              tempFileId: session.tempFileId,
+              tempTabId: session.tempTabId,
+            })
+            generatedDocuments.set(event.toolCallId, {
+              ...session,
+              ...nextSession,
+              content: event.content,
+              status: 'streaming',
+              updatedAt: Date.now(),
+            })
+            await persistGeneratedDocumentSession({
+              ...session,
+              ...nextSession,
+              content: event.content,
+              status: 'streaming',
+              updatedAt: Date.now(),
+            })
             set({ sendingStatus: '正在生成新文档...' })
             return
           }
 
-          fileSystemStore.saveFileContent(target.fileId, event.content)
-          tabsStore.updateTabContent(target.tabId, event.content)
-          tabsStore.markTabAsSaved(target.tabId, target.fileName)
-          set({ sendingStatus: '正在写入新文档...' })
+          if (event.type === 'error') {
+            const failedSession: GeneratedDocumentSession = {
+              ...session,
+              content: session.content || '',
+              status: 'failed',
+              error: event.error,
+              updatedAt: Date.now(),
+            }
+            generatedDocuments.set(event.toolCallId, failedSession)
+            await finalizeGeneratedDocumentAsLocal(failedSession)
+            await persistGeneratedDocumentSession(failedSession)
+            set((state) => {
+              const nextSessions = { ...state.generatedDocumentSessionsByConversation }
+              delete nextSessions[conversationId]
+              return {
+                sendingStatus: null,
+                generatedDocumentSessionsByConversation: nextSessions,
+              }
+            })
+            return
+          }
+
+          const finalSession = await syncGeneratedDocumentToTempFile({
+            conversationId,
+            toolCallId: event.toolCallId,
+            fileName: session.fileName,
+            content: event.content,
+            tempFileId: session.tempFileId,
+            tempTabId: session.tempTabId,
+          })
+          const nextSession: GeneratedDocumentSession = {
+            ...session,
+            ...finalSession,
+            content: event.content,
+            status: 'ready',
+            error: null,
+            updatedAt: Date.now(),
+          }
+          generatedDocuments.set(event.toolCallId, nextSession)
+          await persistGeneratedDocumentSession(nextSession)
+
+          if (isGitCreationAvailable()) {
+            set({
+              sendingStatus: null,
+              generatedDocumentSessionsByConversation: {
+                ...get().generatedDocumentSessionsByConversation,
+                [conversationId]: nextSession,
+              },
+            })
+            return
+          }
+
+          await finalizeGeneratedDocumentAsLocal(nextSession)
+          await removeGeneratedDocumentSession(conversationId)
+          set((state) => {
+            const nextSessions = { ...state.generatedDocumentSessionsByConversation }
+            delete nextSessions[conversationId]
+            return {
+              sendingStatus: null,
+              generatedDocumentSessionsByConversation: nextSessions,
+            }
+          })
         },
         onAssistantTextDelta: (text) => {
           set((state) => ({
@@ -904,10 +1267,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         }
       }
 
-      result.generatedFiles.forEach((file) => {
-        if (streamingGeneratedFiles.has(file.toolCallId)) return
-        useFileSystemStore.getState().importFile(file.fileName, file.content, null)
-      })
+      // Generated documents are handled through the streamed session state above.
 
       const now = Date.now()
       const conversation = get().conversations.find((item) => item.id === conversationId)

@@ -22,19 +22,6 @@ If you need a tool, return JSON only using this schema:
 
 Do not wrap actual JSON tool calls in markdown fences.
 
-## Tool Rules
+## Notes
 
-- Use tools only when the user explicitly requests a document change, recovery search, or new file creation.
-- For normal chat, explanation, analysis, Q&A, or discussion, return plain text and do not call any tool.
-- If the user asks to edit, rewrite, polish, improve, replace, or otherwise change selected/current document text, you MUST call apply_tool. Do not claim the document was changed in plain text.
-- After an apply_tool result succeeds, return only a brief plain-text completion message. Do not restate the full replacement content.
-- Only call generate_document_tool when the user clearly asks to create, generate, or save a NEW Markdown document/file.
-- Do not call generate_document_tool for ordinary answers, summaries, rewrites of the current document, or conversational help.
-- When calling generate_document_tool, put arguments.fileName first, then arguments.prompt.
-- For generate_document_tool, return only the JSON object. Do not add phrases like "好的" or any explanation before or after JSON.
-- For apply_tool, oldString must be copied exactly from the selected/current document text. Use the smallest complete selected region that satisfies the user request. newString must contain the replacement text only.
-- Treat Markdown image syntax such as `![alt](path)` as literal document content. Preserve the complete image syntax, alt text, and path exactly unless the user explicitly asks to edit that image. If an edit touches surrounding text, keep unchanged image markdown verbatim in newString.
-
-## Available Tools
-
-{{tools}}
+This prompt is the base conversation policy. Tool instructions are assembled separately at runtime.

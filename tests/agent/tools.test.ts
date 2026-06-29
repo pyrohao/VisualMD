@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import { AIService } from '@/lib/ai-service'
-import { executeApplyTool, executeGenerateDocumentTool, executeSemanticTool } from '@/lib/agent'
+import {
+  buildInvalidToolArgumentsResult,
+  defaultAgentToolDefinitions,
+  executeApplyTool,
+  executeGenerateDocumentTool,
+  executeSemanticTool,
+  validateToolArguments,
+} from '@/lib/agent'
 
 describe('agent tools', () => {
   it('applies exact single-match replacements', async () => {
@@ -79,5 +86,34 @@ describe('agent tools', () => {
     expect(result.generatedFile?.fileName).toBe('Generated.md')
     expect(result.generatedFile?.content).toBe('# Generated')
     expect(events.map((event) => event.type)).toEqual(['start', 'delta', 'delta', 'done'])
+  })
+
+  it('validates required fields and rejects extra arguments from schema', () => {
+    const applyTool = defaultAgentToolDefinitions.find((tool) => tool.name === 'apply_tool')
+
+    expect(applyTool).toBeTruthy()
+    if (!applyTool) return
+
+    const missing = validateToolArguments(applyTool, { oldString: 'a' })
+    expect(missing.ok).toBe(false)
+    expect(missing.error?.code).toBe('missing-required')
+    expect(buildInvalidToolArgumentsResult(applyTool, missing).message).toContain('missing required field "newString"')
+
+    const extra = validateToolArguments(applyTool, { oldString: 'a', newString: 'b', extra: 1 })
+    expect(extra.ok).toBe(false)
+    expect(extra.error?.code).toBe('unexpected-property')
+    expect(buildInvalidToolArgumentsResult(applyTool, extra).message).toContain('"extra"')
+  })
+
+  it('validates field types from schema', () => {
+    const generateTool = defaultAgentToolDefinitions.find((tool) => tool.name === 'generate_document_tool')
+
+    expect(generateTool).toBeTruthy()
+    if (!generateTool) return
+
+    const invalid = validateToolArguments(generateTool, { fileName: 123, prompt: 'make a doc' } as any)
+    expect(invalid.ok).toBe(false)
+    expect(invalid.error?.code).toBe('invalid-type')
+    expect(buildInvalidToolArgumentsResult(generateTool, invalid).message).toContain('field "fileName" must be string')
   })
 })

@@ -15,6 +15,8 @@ export interface MarkdownReferenceRangeSource {
 
 interface NodeWithPosition {
   type?: string
+  value?: string
+  children?: NodeWithPosition[]
   position?: {
     start?: {
       offset?: number
@@ -26,6 +28,13 @@ interface NodeWithPosition {
   data?: {
     hProperties?: Record<string, unknown>
   }
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
 }
 
 export function getPreviewMarkdownBody(markdown: string) {
@@ -98,10 +107,6 @@ function rangesOverlap(left: MarkdownHighlightRange, right: MarkdownHighlightRan
   return left.startOffset < right.endOffset && left.endOffset > right.startOffset
 }
 
-function isHighlightableMarkdownNode(node: NodeWithPosition) {
-  return ['heading', 'paragraph', 'code', 'html', 'table', 'thematicBreak'].includes(node.type || '')
-}
-
 function appendClassName(value: unknown, className: string) {
   if (Array.isArray(value)) {
     return value.includes(className) ? value : [...value, className]
@@ -114,27 +119,139 @@ function appendClassName(value: unknown, className: string) {
   return className
 }
 
+function getNodeRange(node: NodeWithPosition): MarkdownHighlightRange | null {
+  const startOffset = node.position?.start?.offset
+  const endOffset = node.position?.end?.offset
+  if (typeof startOffset !== 'number' || typeof endOffset !== 'number' || endOffset <= startOffset) {
+    return null
+  }
+
+  return { startOffset, endOffset }
+}
+
+function addNodeClass(node: NodeWithPosition, className: string) {
+  node.data = node.data || {}
+  node.data.hProperties = node.data.hProperties || {}
+  node.data.hProperties.className = appendClassName(node.data.hProperties.className, className)
+}
+
+function mergeHighlightSegments(segments: MarkdownHighlightRange[]) {
+  const sorted = segments
+    .filter((segment) => segment.endOffset > segment.startOffset)
+    .sort((left, right) => left.startOffset - right.startOffset)
+
+  return sorted.reduce<MarkdownHighlightRange[]>((merged, segment) => {
+    const previous = merged.at(-1)
+    if (!previous || segment.startOffset > previous.endOffset) {
+      merged.push({ ...segment })
+      return merged
+    }
+
+    previous.endOffset = Math.max(previous.endOffset, segment.endOffset)
+    return merged
+  }, [])
+}
+
+function buildHighlightedTextNodes(node: NodeWithPosition, ranges: MarkdownHighlightRange[]) {
+  const nodeRange = getNodeRange(node)
+  const value = node.value || ''
+  if (!nodeRange || !value) return null
+
+  const sourceLength = nodeRange.endOffset - nodeRange.startOffset
+  const sourceMapsToValue = sourceLength === value.length
+  const overlappingRanges = ranges.filter((range) => rangesOverlap(nodeRange, range))
+  if (!overlappingRanges.length) return null
+
+  if (!sourceMapsToValue) {
+    const coversWholeNode = overlappingRanges.some(
+      (range) => range.startOffset <= nodeRange.startOffset && range.endOffset >= nodeRange.endOffset
+    )
+    if (!coversWholeNode) return null
+
+    return [
+      {
+        type: 'html',
+        value: `<span class="${MARKDOWN_REFERENCE_HIGHLIGHT_CLASS}">${escapeHtml(value)}</span>`,
+      },
+    ] satisfies NodeWithPosition[]
+  }
+
+  const highlightSegments = mergeHighlightSegments(
+    overlappingRanges.map((range) => ({
+      startOffset: Math.max(0, range.startOffset - nodeRange.startOffset),
+      endOffset: Math.min(value.length, range.endOffset - nodeRange.startOffset),
+    }))
+  )
+
+  if (!highlightSegments.length) return null
+
+  const nextNodes: NodeWithPosition[] = []
+  let cursor = 0
+
+  for (const segment of highlightSegments) {
+    if (segment.startOffset > cursor) {
+      nextNodes.push({
+        type: 'text',
+        value: value.slice(cursor, segment.startOffset),
+      })
+    }
+
+    nextNodes.push({
+      type: 'html',
+      value: `<span class="${MARKDOWN_REFERENCE_HIGHLIGHT_CLASS}">${escapeHtml(
+        value.slice(segment.startOffset, segment.endOffset)
+      )}</span>`,
+    })
+    cursor = segment.endOffset
+  }
+
+  if (cursor < value.length) {
+    nextNodes.push({
+      type: 'text',
+      value: value.slice(cursor),
+    })
+  }
+
+  return nextNodes
+}
+
+function applyInlineHighlights(node: NodeWithPosition, ranges: MarkdownHighlightRange[]) {
+  if (!node.children?.length) return
+
+  for (let index = 0; index < node.children.length; index += 1) {
+    const child = node.children[index]
+
+    if (child.type === 'text') {
+      const replacement = buildHighlightedTextNodes(child, ranges)
+      if (replacement) {
+        node.children.splice(index, 1, ...replacement)
+        index += replacement.length - 1
+      }
+      continue
+    }
+
+    applyInlineHighlights(child, ranges)
+  }
+}
+
+function isAtomicHighlightNode(node: NodeWithPosition) {
+  return ['code', 'inlineCode', 'image'].includes(node.type || '')
+}
+
 export function createMarkdownReferenceHighlightPlugin(ranges: MarkdownHighlightRange[]) {
   return function markdownReferenceHighlightPlugin() {
     return function transform(tree: unknown) {
       if (ranges.length === 0) return
 
+      applyInlineHighlights(tree as NodeWithPosition, ranges)
+
       visit(tree as Parameters<typeof visit>[0], (node: NodeWithPosition) => {
-        if (!isHighlightableMarkdownNode(node)) return
-
-        const startOffset = node.position?.start?.offset
-        const endOffset = node.position?.end?.offset
-        if (typeof startOffset !== 'number' || typeof endOffset !== 'number') return
-
-        const nodeRange = { startOffset, endOffset }
+        if (!isAtomicHighlightNode(node)) return
+        const nodeRange = getNodeRange(node)
+        if (!nodeRange) return
         if (!ranges.some((range) => rangesOverlap(nodeRange, range))) return
 
-        node.data = node.data || {}
-        node.data.hProperties = node.data.hProperties || {}
-        node.data.hProperties.className = appendClassName(
-          node.data.hProperties.className,
-          MARKDOWN_REFERENCE_HIGHLIGHT_CLASS
-        )
+        addNodeClass(node, MARKDOWN_REFERENCE_HIGHLIGHT_CLASS)
       })
     }
   }

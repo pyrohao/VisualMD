@@ -3,19 +3,19 @@ import type { ProviderConfig } from '@/stores/settingsStore'
 import { createAIService } from '@/lib/ai-service'
 import { buildAgentTranscript } from './model'
 import { parseAgentModelResponse } from './json'
-import { buildAgentSystemPrompt } from './prompt'
+import { buildAgentSystemPrompt, buildAgentToolsPrompt } from './prompt'
 import type { AgentGeneratedDocumentEvent, AgentMessage, AgentToolContext, AgentToolResult } from './types'
-import type { AgentToolDefinition } from './tools'
+import { buildInvalidToolArgumentsResult, validateToolArguments, type AgentTool } from './tools'
 
 export interface AgentRuntimeTurnOptions {
   providerConfig: ProviderConfig
   apiKey: string
   messages: AgentMessage[]
-  tools: AgentToolDefinition[]
+  tools: AgentTool[]
   markdown: string
   maxTurns?: number
   onAssistantTextDelta?: (text: string) => void
-  onGeneratedDocumentEvent?: (event: AgentGeneratedDocumentEvent) => void
+  onGeneratedDocumentEvent?: (event: AgentGeneratedDocumentEvent) => void | Promise<void>
   signal?: AbortSignal
 }
 
@@ -29,13 +29,22 @@ export interface AgentRuntimeTurnResult {
   stoppedBecause: 'assistant-text' | 'tool-limit' | 'invalid-tool'
 }
 
-function buildToolSystemPrompt(tools: AgentToolDefinition[]) {
-  return buildAgentSystemPrompt(tools.map((tool) => `${tool.name}: ${tool.description} params=${tool.parameters}`))
+function buildToolSystemPrompt(tools: AgentTool[]) {
+  return [
+    buildAgentSystemPrompt([]),
+    '',
+    buildAgentToolsPrompt(tools),
+  ].join('\n').trim()
 }
 
-async function runTool(tool: AgentToolDefinition | undefined, args: Record<string, unknown>, context: AgentToolContext) {
+async function runTool(tool: AgentTool | undefined, args: Record<string, unknown>, context: AgentToolContext) {
   if (!tool) {
     return { ok: false, message: 'Unknown tool' } satisfies AgentToolResult
+  }
+
+  const validation = validateToolArguments(tool, args)
+  if (!validation.ok) {
+    return buildInvalidToolArgumentsResult(tool, validation)
   }
 
   return tool.execute(args, context)

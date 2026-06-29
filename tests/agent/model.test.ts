@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildAgentSystemPrompt, buildAgentTranscript, parseAgentModelResponse, splitAssistantThinking, type AgentMessage } from '@/lib/agent'
+import { buildAgentSystemPrompt, buildAgentToolsPrompt, buildAgentTranscript, parseAgentModelResponse, splitAssistantThinking, type AgentMessage } from '@/lib/agent'
 
 describe('agent model', () => {
   it('renders messages as role XML in order', () => {
@@ -61,24 +61,49 @@ describe('agent model', () => {
   })
 
   it('limits new document generation tool usage to explicit new file requests', () => {
-    const prompt = buildAgentSystemPrompt([
-      'generate_document_tool: Create and save a NEW Markdown file only when explicitly requested.',
-    ], {
+    const prompt = buildAgentSystemPrompt([], {
       operatingSystem: 'Windows',
       browser: 'Chrome',
       timezone: 'Asia/Shanghai',
       language: 'zh-CN',
       today: '2026-06-18',
     })
+    const toolsPrompt = buildAgentToolsPrompt([
+      {
+        name: 'generate_document_tool',
+        description: 'Create and save a NEW Markdown file only when explicitly requested.',
+        argumentsSchema: {
+          type: 'object',
+          description: 'Arguments for generating a brand-new Markdown document.',
+          additionalProperties: false,
+          properties: {
+            fileName: {
+              type: 'string',
+              description: 'Required. Target Markdown file name. It must include the `.md` suffix.',
+            },
+            prompt: {
+              type: 'string',
+              description: 'Required. The instruction used to generate the new file content.',
+            },
+          },
+          required: ['fileName', 'prompt'],
+        },
+        execute: async () => ({ ok: true, message: 'ok' }),
+      },
+    ])
 
     expect(prompt).toContain('Operating system: Windows')
     expect(prompt).toContain('Browser: Chrome')
     expect(prompt).toContain('Timezone: Asia/Shanghai')
     expect(prompt).toContain('Language: zh-CN')
     expect(prompt).toContain('Today: 2026-06-18')
-    expect(prompt).toContain('For normal chat')
-    expect(prompt).toContain('Only call generate_document_tool')
-    expect(prompt).toContain('NEW Markdown document/file')
-    expect(prompt).toContain('arguments.fileName first')
+    expect(prompt).toContain('base conversation policy')
+    expect(toolsPrompt).toContain('For normal chat')
+    expect(toolsPrompt).toContain('return only one JSON object')
+    expect(toolsPrompt).toContain('Tool Definitions JSON')
+    expect(toolsPrompt).toContain('"name": "generate_document_tool"')
+    expect(toolsPrompt).toContain('"argumentsSchema"')
+    expect(toolsPrompt).toContain('"fileName"')
+    expect(toolsPrompt).toContain('must include the `.md` suffix')
   })
 })
