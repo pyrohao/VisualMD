@@ -291,6 +291,10 @@ export function GitPanel() {
 
   const activeTab = getActiveTab()
   const currentDraft = currentDocumentId ? drafts[currentDocumentId] : null
+  const conflictedDrafts = useMemo(
+    () => Object.values(drafts).filter((draft) => draft.status === 'conflict'),
+    [drafts]
+  )
   const currentPath = currentDraft?.path || activeTab?.gitMeta?.path || null
   const stagedCurrentDraftChange = currentDraft
     ? stagedChanges.find((item) => item.kind === 'git-draft' && item.documentId === currentDraft.documentId)
@@ -307,6 +311,7 @@ export function GitPanel() {
     : []
   const hasPendingStageItems = Boolean(pendingDraft) || currentDraftPendingAssets.length > 0
   const hasCommitCandidates = Boolean(currentDraft?.isDirty) || stagedChanges.length > 0
+  const hasUnresolvedConflicts = conflictedDrafts.length > 0
   const pendingSummary = useMemo(() => {
     if (pendingDraft) {
       return `${pendingDraft.path} - ${t('git.uncommitted')}`
@@ -452,12 +457,14 @@ export function GitPanel() {
       await loadTree('')
 
       if (currentDocumentId) {
-        const refreshedDraft = await fetchRemoteFile(currentDocumentId)
+        const refreshedDraft = await fetchRemoteFile(currentDocumentId, {
+          reconcileLocalChanges: true,
+        })
         const latestActiveTab = useTabsStore.getState().getActiveTab()
 
         if (refreshedDraft && latestActiveTab?.fileId === currentDocumentId) {
           useTabsStore.getState().updateTabContent(latestActiveTab.id, refreshedDraft.draftContent)
-          if (refreshedDraft.isDirty || refreshedDraft.isNew) {
+          if (refreshedDraft.hasConflict || refreshedDraft.isDirty || refreshedDraft.isNew) {
             useTabsStore.getState().markTabAsModified(latestActiveTab.id, true)
           } else {
             useTabsStore.getState().markTabAsSaved(latestActiveTab.id, refreshedDraft.name)
@@ -792,6 +799,35 @@ export function GitPanel() {
             )}
           </div>
 
+          {hasUnresolvedConflicts ? (
+            <div>
+              <div className="text-sm font-medium" style={{ color: themeConfig.text }}>
+                {t('git.conflictDetected')}
+              </div>
+              <div className="mt-2 max-h-[140px] space-y-2 overflow-y-auto rounded-md border p-2" style={{ borderColor: themeConfig.border }}>
+                {conflictedDrafts.map((draft) => (
+                  <button
+                    key={draft.documentId}
+                    type="button"
+                    className="flex w-full items-center justify-between rounded-md border px-2 py-2 text-left transition-colors"
+                    style={{
+                      borderColor: themeConfig.border,
+                      backgroundColor: currentDraft?.documentId === draft.documentId ? `${themeConfig.danger}10` : themeConfig.background,
+                    }}
+                    onClick={() => void handleOpenFile(draft.path)}
+                  >
+                    <span className="min-w-0 flex-1 truncate text-sm" style={{ color: themeConfig.text }}>
+                      {draft.name}
+                    </span>
+                    <span className="ml-2 shrink-0 text-[11px]" style={{ color: themeConfig.danger }}>
+                      {t('git.mergeNeedsReview')}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
           <div>
             <div className="text-sm font-medium" style={{ color: themeConfig.text }}>
               {t('git.pendingChanges')}
@@ -897,15 +933,15 @@ export function GitPanel() {
 
           <Button
             onClick={handleCommit}
-            disabled={!hasCommitCandidates || !commitMessage.trim() || isCommitting}
+            disabled={!hasCommitCandidates || !commitMessage.trim() || isCommitting || hasUnresolvedConflicts}
             className="w-full"
             style={{
               backgroundColor:
-                hasCommitCandidates && commitMessage.trim() && !isCommitting
+                hasCommitCandidates && commitMessage.trim() && !isCommitting && !hasUnresolvedConflicts
                   ? themeConfig.primary
                   : themeConfig.border,
               color:
-                hasCommitCandidates && commitMessage.trim() && !isCommitting
+                hasCommitCandidates && commitMessage.trim() && !isCommitting && !hasUnresolvedConflicts
                   ? themeConfig.buttonText || '#fff'
                   : themeConfig.muted,
             }}

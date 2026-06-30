@@ -7,7 +7,7 @@
  * 布局：Obsidian 风格（图标栏 | 功能面板 | 可视化画布 | 预览）
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { EditorToolbar } from './editor-toolbar'
 import { IconSidebar } from './sidebar/icon-sidebar'
 import { PanelContainer } from './sidebar/panel-container'
@@ -446,8 +446,38 @@ export function MarkdownEditor() {
       ? drafts[activeTabFileId] || null
       : null
   const activeGitConflict = Boolean(activeGitDraft?.hasConflict)
+  const conflictedDrafts = useMemo(
+    () => Object.values(drafts).filter((draft) => draft.status === 'conflict'),
+    [drafts]
+  )
   const isActiveBinaryGitTab =
     activeTabSourceType === 'git' && isGitBinaryFileKind(activeGitFileKind)
+
+  const openGitDraftByDocumentId = useCallback((documentId: string) => {
+    const targetDraft = useGitStore.getState().drafts[documentId]
+    if (!targetDraft) return
+
+    useTabsStore.getState().openGitFileInTab({
+      fileName: targetDraft.name,
+      content: targetDraft.draftContent,
+      savedContent: targetDraft.draftContent,
+      isModified: true,
+      isNew: false,
+      fileId: targetDraft.documentId,
+      sourceType: 'git',
+      gitMeta: {
+        provider: targetDraft.provider,
+        ownerOrNamespace: targetDraft.ownerOrNamespace,
+        repo: targetDraft.repo,
+        branch: targetDraft.branch,
+        path: targetDraft.path,
+        sha: targetDraft.sha,
+        fileKind: 'text',
+      },
+    })
+    setCurrentDocumentId(targetDraft.documentId)
+    loadDocument(targetDraft.draftContent, targetDraft.name, targetDraft.documentId)
+  }, [loadDocument, setCurrentDocumentId])
 
   const continuePendingGitCommit = useCallback(async (documentId: string, fallbackFileName: string) => {
     const commitMessage = useGitStore.getState().pendingCommitMessage
@@ -457,8 +487,14 @@ export function MarkdownEditor() {
 
     const latestState = useGitStore.getState()
     const latestDraft = latestState.drafts[documentId]
+    const nextConflictDraft = Object.values(latestState.drafts).find((draft) => draft.status === 'conflict')
     const hasDraftChange = Boolean(latestDraft?.isDirty || latestDraft?.isNew)
     const hasStagedChanges = latestState.stagedChanges.length > 0
+
+    if (nextConflictDraft) {
+      openGitDraftByDocumentId(nextConflictDraft.documentId)
+      return
+    }
 
     if (!hasDraftChange && !hasStagedChanges) {
       clearPendingCommit()
@@ -481,9 +517,13 @@ export function MarkdownEditor() {
       clearPendingCommit()
       toast({ title: t('git.commitSuccess') })
     } catch {
+      const latestConflictDraft = Object.values(useGitStore.getState().drafts).find((draft) => draft.status === 'conflict')
+      if (latestConflictDraft) {
+        openGitDraftByDocumentId(latestConflictDraft.documentId)
+      }
       // handled by store
     }
-  }, [activeTabId, clearPendingCommit, commitCurrentFile, t])
+  }, [activeTabId, clearPendingCommit, commitCurrentFile, openGitDraftByDocumentId, t])
 
   // 使用 ref 保存当前文件 ID，避免自动保存时的闭包问题
   const currentFileIdRef = useRef(currentFileId)
@@ -1150,6 +1190,7 @@ export function MarkdownEditor() {
             ) : activeGitConflict && activeGitDraft ? (
               <GitConflictView
                 draft={activeGitDraft}
+                pendingConflictCount={conflictedDrafts.length}
                 onUseLocal={async () => {
                   acceptLocalVersion(activeGitDraft.documentId)
                   const latestDraft = useGitStore.getState().drafts[activeGitDraft.documentId]

@@ -11,6 +11,7 @@ import type { GitDraftFile } from '@/lib/git/types'
 
 type GitConflictViewProps = {
   draft: GitDraftFile
+  pendingConflictCount?: number
   onUseLocal: () => void | Promise<void>
   onUseRemote: () => void | Promise<void>
   onApplyMerged: (content: string) => void | Promise<void>
@@ -20,6 +21,7 @@ type PaneKey = 'local' | 'merged' | 'remote'
 
 export function GitConflictView({
   draft,
+  pendingConflictCount = 1,
   onUseLocal,
   onUseRemote,
   onApplyMerged,
@@ -27,16 +29,22 @@ export function GitConflictView({
   const { t } = useTranslation()
   const { getThemeConfig } = useThemeStore()
   const themeConfig = getThemeConfig() || themeConfigs.light
-  const baseContent = draft.originalContent || ''
-  const localContent = draft.draftContent || ''
-  const remoteContent = draft.remoteContent || ''
+  const snapshot = draft.conflictSnapshot ?? {
+    baseContent: draft.originalContent || '',
+    localContent: draft.draftContent || '',
+    remoteContent: draft.remoteContent || '',
+    resolvedContent: draft.conflictResolvedContent,
+  }
+  const baseContent = snapshot.baseContent || ''
+  const localContent = snapshot.localContent || ''
+  const remoteContent = snapshot.remoteContent || ''
   const mergeResult = useMemo(
     () => mergeGitText(baseContent, localContent, remoteContent),
     [baseContent, localContent, remoteContent]
   )
   const initialMergedContent = useMemo(
-    () => draft.conflictResolvedContent ?? mergeResult.mergedText,
-    [draft.conflictResolvedContent, mergeResult.mergedText]
+    () => snapshot.resolvedContent ?? mergeResult.mergedText,
+    [mergeResult.mergedText, snapshot.resolvedContent]
   )
 
   const [mergedContent, setMergedContent] = useState(initialMergedContent)
@@ -176,7 +184,9 @@ export function GitConflictView({
             {draft.name}
           </div>
           <div className="mt-1 text-xs" style={{ color: themeConfig.muted }}>
-            {mergeResult.hasConflicts
+            {pendingConflictCount > 1
+              ? `${pendingConflictCount} ${t('git.mergeNeedsReview')}`
+              : mergeResult.hasConflicts
               ? t('git.mergeConflictHint')
               : t('git.mergeAutoResolvedHint')}
           </div>

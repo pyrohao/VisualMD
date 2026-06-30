@@ -6,6 +6,13 @@ export type GitSourceType = 'local' | 'git'
 
 export type GitFileKind = 'text' | 'image' | 'audio' | 'video' | 'pdf' | 'binary'
 
+export type GitDraftStatus =
+  | 'clean'
+  | 'dirty'
+  | 'auto-merged'
+  | 'conflict'
+  | 'resolved-pending-commit'
+
 export interface GitProviderConfig {
   provider: GitProvider
   token: string
@@ -48,16 +55,27 @@ export interface GitFileRef {
   branch: string
 }
 
+export interface GitConflictSnapshot {
+  baseContent: string
+  baseSha?: string
+  localContent: string
+  remoteContent: string
+  remoteSha?: string
+  resolvedContent?: string
+}
+
 export interface GitDraftFile extends GitFileRef {
   originalContent: string
   draftContent: string
   isDirty: boolean
   isNew?: boolean
+  status?: GitDraftStatus
   remoteContent?: string
   remoteSha?: string
   hasRemoteUpdates?: boolean
   hasConflict?: boolean
   conflictResolvedContent?: string
+  conflictSnapshot?: GitConflictSnapshot
   lastCheckedAt?: number
 }
 
