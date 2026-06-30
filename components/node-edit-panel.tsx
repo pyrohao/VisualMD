@@ -33,6 +33,10 @@ function getNodeDraftSignature(node: TreeNode | null | undefined) {
   return `${node.id}\u0000${node.title}\u0000${node.content || ''}`
 }
 
+function createNodeDraftSignature(nodeId: string, title: string, content?: string) {
+  return `${nodeId}\u0000${title}\u0000${content || ''}`
+}
+
 function normalizeNodeContent(content: string) {
   return content || undefined
 }
@@ -43,17 +47,15 @@ export function NodeEditPanel() {
     document,
     selectedNodeId,
     selectNode,
-    updateNode,
     deleteNode,
     deleteNodeOnly,
     updateMetadata,
     updateFileName,
-    getCurrentMarkdown,
   } = useDocumentStore()
 
   const { getThemeConfig } = useThemeStore()
   const themeConfig = getThemeConfig()
-  const { currentFileId, saveFileContent, renameFile, files, markFileAsModified } = useFileSystemStore()
+  const { currentFileId, renameFile, files, markFileAsModified } = useFileSystemStore()
   const { currentDocumentId: currentGitDocumentId } = useGitStore()
   const { editingTemplateId } = useSidebarStore()
   const activeTabId = useTabsStore((state) => state.activeTabId)
@@ -76,6 +78,7 @@ export function NodeEditPanel() {
   const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const isFirstRender = useRef(true)
   const lastSavedContentRef = useRef<string>('')
+  const loadedNodeIdRef = useRef<string | null>(null)
   
   // 使用 ref 存储最新值，避免循环依赖
   const documentRef = useRef(document)
@@ -105,24 +108,36 @@ export function NodeEditPanel() {
     [selectedNode]
   )
 
+  const localDraftSignature = useMemo(() => {
+    if (!selectedNode || isVirtualRoot) {
+      return null
+    }
+
+    return createNodeDraftSignature(selectedNode.id, title, normalizeNodeContent(content))
+  }, [content, isVirtualRoot, selectedNode, title])
+
   useEffect(() => {
     if (selectedNode) {
-      setTitle(selectedNode.title)
-      setContent(selectedNode.content || '')
-      setDraftSourceSignature(selectedNodeDraftSignature)
+      if (loadedNodeIdRef.current !== selectedNode.id) {
+        loadedNodeIdRef.current = selectedNode.id
+        setTitle(selectedNode.title)
+        setContent(selectedNode.content || '')
+        setDraftSourceSignature(selectedNodeDraftSignature)
+      }
       return
     }
 
+    loadedNodeIdRef.current = null
     setTitle('')
     setContent('')
     setDraftSourceSignature(null)
-  }, [selectedNode, selectedNodeDraftSignature])
+  }, [selectedNode?.id, selectedNodeDraftSignature, selectedNode])
 
   const hasPendingNodeChanges = Boolean(
     selectedNode &&
       !isVirtualRoot &&
-      selectedNodeDraftSignature === draftSourceSignature &&
-      (title !== selectedNode.title || content !== (selectedNode.content || ''))
+      draftSourceSignature !== null &&
+      localDraftSignature !== draftSourceSignature
   )
 
   const getPendingNodePersistState = useCallback(() => {
@@ -186,7 +201,19 @@ export function NodeEditPanel() {
     useGitStore.getState().updateDraftContent(activeTab.fileId, latestMarkdown)
     useTabsStore.getState().updateTabContent(activeTab.id, latestMarkdown)
     useTabsStore.getState().markTabAsModified(activeTab.id, true)
+    setDraftSourceSignature(createNodeDraftSignature(selNodeId, nextTitle, nextNodeContent))
+    lastSavedContentRef.current = latestMarkdown
     useUnsavedChangesStore.getState().setEditorDirty('node-edit-panel', false)
+  }, [])
+
+  const handleTitleChange = useCallback((nextTitle: string) => {
+    titleRef.current = nextTitle
+    setTitle(nextTitle)
+  }, [])
+
+  const handleContentChange = useCallback((nextContent: string) => {
+    contentRef.current = nextContent
+    setContent(nextContent)
   }, [])
 
   useEffect(() => {
@@ -203,7 +230,7 @@ export function NodeEditPanel() {
     }
   }, [activeTabId, currentFileId, currentGitDocumentId, hasPendingNodeChanges, markFileAsModified])
 
-  // ========== 自动保存逻辑（仅保存，不重新解析）==========
+  // ========== 自动保存逻辑（保存并刷新节点图）==========
   const doAutoSave = useCallback(() => {
     const doc = documentRef.current
     const currFileId = currentFileIdRef.current
@@ -220,22 +247,32 @@ export function NodeEditPanel() {
       return
     }
 
-    // 1. 更新数据到 documentStore（仅更新当前节点，不重新解析）
+    // 1. 更新数据到 documentStore
     useDocumentStore.getState().updateNode(pendingNodeState.selNodeId, {
       title: pendingNodeState.nextTitle,
       content: pendingNodeState.nextContent,
     })
 
-    // 2. 获取最新 Markdown 内容
+    // 2. 刷新节点结构，让节点图跟随自动保存更新
+    useDocumentStore.getState().refreshNodeStructure(pendingNodeState.selNodeId)
+
+    // 3. 获取最新 Markdown 内容
     const latestContent = useDocumentStore.getState().getCurrentMarkdown()
 
-    // 3. 避免重复保存
+    // 4. 避免重复保存
     if (latestContent === lastSavedContentRef.current) {
+      setDraftSourceSignature(
+        createNodeDraftSignature(
+          pendingNodeState.selNodeId,
+          pendingNodeState.nextTitle,
+          pendingNodeState.nextContent
+        )
+      )
       return
     }
     lastSavedContentRef.current = latestContent
 
-    // 4. 同步文件名到 fileSystemStore（如果发生变化）
+    // 5. 同步文件名到 fileSystemStore（如果发生变化）
     if (currFileId && doc.fileName) {
       const currentFile = currFiles.find(f => f.id === currFileId)
       if (currentFile && currentFile.name !== doc.fileName) {
@@ -243,7 +280,7 @@ export function NodeEditPanel() {
       }
     }
 
-    // 5. 保存到文件系统或模板
+    // 6. 保存到文件系统或模板
     const activeTab = useTabsStore.getState().getActiveTab()
     const activeGitDocumentId = activeTab?.sourceType === 'git' ? activeTab.fileId || null : null
 
@@ -288,6 +325,13 @@ export function NodeEditPanel() {
         }))
       }
     }
+    setDraftSourceSignature(
+      createNodeDraftSignature(
+        pendingNodeState.selNodeId,
+        pendingNodeState.nextTitle,
+        pendingNodeState.nextContent
+      )
+    )
     useUnsavedChangesStore.getState().setEditorDirty('node-edit-panel', false)
   }, [getPendingNodePersistState])
 
@@ -326,6 +370,15 @@ export function NodeEditPanel() {
 
     // 3. 避免重复保存
     if (latestContent === lastSavedContentRef.current) {
+      if (pendingNodeState) {
+        setDraftSourceSignature(
+          createNodeDraftSignature(
+            pendingNodeState.selNodeId,
+            pendingNodeState.nextTitle,
+            pendingNodeState.nextContent
+          )
+        )
+      }
       return
     }
     lastSavedContentRef.current = latestContent
@@ -368,6 +421,15 @@ export function NodeEditPanel() {
         ),
         isTemplateModified: false,
       }))
+    }
+    if (pendingNodeState) {
+      setDraftSourceSignature(
+        createNodeDraftSignature(
+          pendingNodeState.selNodeId,
+          pendingNodeState.nextTitle,
+          pendingNodeState.nextContent
+        )
+      )
     }
     useUnsavedChangesStore.getState().setEditorDirty('node-edit-panel', false)
   }, [getPendingNodePersistState])
@@ -424,7 +486,7 @@ export function NodeEditPanel() {
       clearTimeout(autoSaveTimeoutRef.current)
     }
 
-    // 设置自动保存定时器（0.8秒后保存）- 仅保存，不重新解析
+    // 设置自动保存定时器（0.8秒后保存）
     autoSaveTimeoutRef.current = setTimeout(() => {
       doAutoSave()
     }, 800)
@@ -437,21 +499,14 @@ export function NodeEditPanel() {
   }, [title, content, selectedNodeId, hasPendingNodeChanges, doAutoSave])
 
   // ========== 组件卸载时保存 ==========
-  useEffect(() => {
-    return () => {
-      if (autoSaveTimeoutRef.current) {
-        clearTimeout(autoSaveTimeoutRef.current)
+    useEffect(() => {
+      return () => {
+        if (autoSaveTimeoutRef.current) {
+          clearTimeout(autoSaveTimeoutRef.current)
+        }
+        doSaveAndReparse()
       }
-      const pendingNodeState = getPendingNodePersistState()
-      if (pendingNodeState) {
-        useDocumentStore.getState().updateNode(pendingNodeState.selNodeId, {
-          title: pendingNodeState.nextTitle,
-          content: pendingNodeState.nextContent,
-        })
-        useDocumentStore.getState().refreshNodeStructure(pendingNodeState.selNodeId)
-      }
-    }
-  }, [getPendingNodePersistState])
+    }, [doSaveAndReparse])
 
   // ========== 事件处理 ==========
   const handleSave = useCallback(() => {
@@ -639,8 +694,8 @@ export function NodeEditPanel() {
                 muted: themeConfig.muted,
                 accent: themeConfig.accent,
               }}
-              onTitleChange={setTitle}
-              onContentChange={setContent}
+              onTitleChange={handleTitleChange}
+              onContentChange={handleContentChange}
               onAfterGitPaste={syncGitNodeContentImmediately}
             />
           )}

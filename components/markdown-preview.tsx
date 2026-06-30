@@ -11,8 +11,11 @@
  */
 
 import { useDocumentStore } from '@/stores/documentStore'
+import { useFileSystemStore } from '@/stores/fileSystemStore'
+import { useSidebarStore } from '@/stores/sidebarStore'
 import { useTabsStore, type Tab } from '@/stores/tabsStore'
 import { useGitStore } from '@/stores/gitStore'
+import { useUnsavedChangesStore } from '@/stores/unsavedChangesStore'
 import { useThemeStore, themeConfigs, type ThemeMode } from '@/stores/themeStore'
 import { useTranslation } from '@/stores/languageStore'
 import { useAiChatStore } from '@/stores/aiChatStore'
@@ -48,9 +51,14 @@ type PreviewMode = 'preview' | 'edit' | 'live'
 type LivePreviewLayout = 'side-by-side' | 'stacked'
 
 const LIVE_PREVIEW_LAYOUT_STORAGE_KEY = 'visualmd-live-preview-layout'
+const PREVIEW_MODE_STORAGE_KEY = 'visualmd-preview-mode'
 
 function isLivePreviewLayout(value: string | null): value is LivePreviewLayout {
   return value === 'side-by-side' || value === 'stacked'
+}
+
+function isPreviewMode(value: string | null): value is PreviewMode {
+  return value === 'preview' || value === 'edit' || value === 'live'
 }
 
 /**
@@ -430,20 +438,28 @@ export function MarkdownPreview() {
   const [liveLayout, setLiveLayout] = useState<LivePreviewLayout>('side-by-side')
   const [html, setHtml] = useState('')
   const [editContent, setEditContent] = useState('')
+  const [persistedEditContent, setPersistedEditContent] = useState('')
   const editTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const liveEditorRef = useRef<HTMLTextAreaElement | null>(null)
   const livePreviewRef = useRef<HTMLDivElement | null>(null)
   const selectionTimerRef = useRef<number | null>(null)
+  const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const isSyncingLiveScrollRef = useRef(false)
   const previousDocumentKeyRef = useRef<string>('')
   const skipLiveSyncRef = useRef(false)
   const gitImageCacheRef = useRef<Map<string, string>>(new Map())
+  const editContentRef = useRef(editContent)
+  const persistedEditContentRef = useRef(persistedEditContent)
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
   const { t, currentLanguage } = useTranslation()
 
   useEffect(() => {
     setMounted(true)
+    const storedMode = window.localStorage.getItem(PREVIEW_MODE_STORAGE_KEY)
     const storedLayout = window.localStorage.getItem(LIVE_PREVIEW_LAYOUT_STORAGE_KEY)
+    if (isPreviewMode(storedMode)) {
+      setMode(storedMode)
+    }
     if (isLivePreviewLayout(storedLayout)) {
       setLiveLayout(storedLayout)
     }
@@ -475,6 +491,7 @@ export function MarkdownPreview() {
   const latestExternalRevisionRef = useRef(externalRevision)
   const isEditingMode = mode === 'edit' || mode === 'live'
   const renderMarkdown = mode === 'live' ? editContent : markdown
+  const hasPendingEditorChanges = isEditingMode && editContent !== persistedEditContent
   const documentKey = `${activeTabId || ''}\u0000${document?.fileId || ''}\u0000${document?.fileName || ''}`
   const activeReferences = useMemo(() => {
     if (!currentConversationId || selectedReferenceIds.length === 0) {
@@ -487,6 +504,11 @@ export function MarkdownPreview() {
     )
   }, [currentConversationId, referencesByConversation, selectedReferenceIds])
 
+  useEffect(() => {
+    editContentRef.current = editContent
+    persistedEditContentRef.current = persistedEditContent
+  }, [editContent, persistedEditContent])
+
   // 当 markdown 变化时，更新编辑内容
   useEffect(() => {
     if (externalRevision !== latestExternalRevisionRef.current) {
@@ -494,6 +516,7 @@ export function MarkdownPreview() {
       latestMarkdownRef.current = markdown
       skipLiveSyncRef.current = true
       setEditContent(markdown)
+      setPersistedEditContent(markdown)
       return
     }
 
@@ -511,9 +534,101 @@ export function MarkdownPreview() {
 
     previousDocumentKeyRef.current = documentKey
     skipLiveSyncRef.current = true
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current)
+      autoSaveTimeoutRef.current = null
+    }
     setEditContent(latestMarkdownRef.current)
+    setPersistedEditContent(latestMarkdownRef.current)
     clearSelectionCandidate()
   }, [clearSelectionCandidate, documentKey])
+
+  const syncDraftToDocument = useCallback((nextMarkdown: string) => {
+    const documentStore = useDocumentStore.getState()
+    const currentMarkdown = documentStore.getCurrentMarkdown()
+
+    if (nextMarkdown === currentMarkdown) {
+      return true
+    }
+
+    return documentStore.updateFromMarkdown(nextMarkdown)
+  }, [])
+
+  const persistEditorDraft = useCallback(() => {
+    const nextMarkdown = editContentRef.current
+    const activeTab = useTabsStore.getState().getActiveTab()
+    const editingTemplateId = useSidebarStore.getState().editingTemplateId
+
+    if (!document || !nextMarkdown || !syncDraftToDocument(nextMarkdown)) {
+      return false
+    }
+
+    const documentStore = useDocumentStore.getState()
+    const latestMarkdown = documentStore.getCurrentMarkdown()
+    const latestFileName = documentStore.document?.fileName
+    const tabsStore = useTabsStore.getState()
+
+    if (editingTemplateId) {
+      useSidebarStore.setState((state) => ({
+        templates: state.templates.map((template) =>
+          template.id === editingTemplateId
+            ? { ...template, content: latestMarkdown, updatedAt: Date.now() }
+            : template
+        ),
+        isTemplateModified: false,
+      }))
+
+      if (activeTab) {
+        useTabsStore.setState((state) => ({
+          tabs: state.tabs.map((tab) =>
+            tab.id === activeTab.id
+              ? {
+                  ...tab,
+                  fileName: latestFileName || tab.fileName,
+                  content: latestMarkdown,
+                  savedContent: latestMarkdown,
+                  isModified: false,
+                }
+              : tab
+          ),
+        }))
+      }
+
+      documentStore.markAsSaved()
+      setPersistedEditContent(latestMarkdown)
+      useUnsavedChangesStore.getState().setEditorDirty('markdown-preview', false)
+      return true
+    }
+
+    if (activeTab?.sourceType === 'git' && activeTab.fileId) {
+      useGitStore.getState().updateDraftContent(activeTab.fileId, latestMarkdown)
+      tabsStore.updateTabContent(activeTab.id, latestMarkdown)
+      tabsStore.markTabAsModified(activeTab.id, true)
+      documentStore.markAsSaved()
+      setPersistedEditContent(latestMarkdown)
+      useUnsavedChangesStore.getState().setEditorDirty('markdown-preview', false)
+      return true
+    }
+
+    if (activeTab?.fileId) {
+      const fileStore = useFileSystemStore.getState()
+      const currentFile = fileStore.files.find((item) => item.id === activeTab.fileId)
+
+      if (latestFileName && currentFile && currentFile.name !== latestFileName) {
+        fileStore.renameFile(activeTab.fileId, latestFileName)
+      }
+
+      fileStore.saveFileContent(activeTab.fileId, latestMarkdown)
+      tabsStore.updateTabContent(activeTab.id, latestMarkdown)
+      tabsStore.markTabAsSaved(activeTab.id, latestFileName)
+      documentStore.markAsSaved()
+      setPersistedEditContent(latestMarkdown)
+      useUnsavedChangesStore.getState().setEditorDirty('markdown-preview', false)
+      return true
+    }
+
+    return false
+  }, [document, syncDraftToDocument])
 
   const gitAssets = useMemo(
     () => collectGitAssetMap(stagedChanges, pendingAssetChanges),
@@ -587,7 +702,7 @@ export function MarkdownPreview() {
 
     const leavingEditingToPreview = (mode === 'edit' || mode === 'live') && newMode === 'preview'
     if (leavingEditingToPreview) {
-      updateFromMarkdown(editContent)
+      persistEditorDraft()
     }
 
     const enteringEditing = mode === 'preview' && (newMode === 'edit' || newMode === 'live')
@@ -596,12 +711,98 @@ export function MarkdownPreview() {
     }
 
     setMode(newMode)
-  }, [mode, editContent, markdown, updateFromMarkdown])
+    window.localStorage.setItem(PREVIEW_MODE_STORAGE_KEY, newMode)
+  }, [mode, markdown, persistEditorDraft])
 
   // 处理编辑内容变化
   const handleEditChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setEditContent(e.target.value)
   }, [])
+
+  useEffect(() => {
+    useUnsavedChangesStore.getState().registerEditor('markdown-preview', {
+      save: () => {
+        if (autoSaveTimeoutRef.current) {
+          clearTimeout(autoSaveTimeoutRef.current)
+          autoSaveTimeoutRef.current = null
+        }
+        persistEditorDraft()
+      },
+      discard: () => {
+        if (autoSaveTimeoutRef.current) {
+          clearTimeout(autoSaveTimeoutRef.current)
+          autoSaveTimeoutRef.current = null
+        }
+
+        const activeTab = useTabsStore.getState().getActiveTab()
+        const discardContent = activeTab?.savedContent ?? activeTab?.content ?? useDocumentStore.getState().getCurrentMarkdown()
+        editContentRef.current = discardContent
+        setEditContent(discardContent)
+        setPersistedEditContent(discardContent)
+        useUnsavedChangesStore.getState().setEditorDirty('markdown-preview', false)
+      },
+    })
+
+    return () => {
+      useUnsavedChangesStore.getState().unregisterEditor('markdown-preview')
+    }
+  }, [persistEditorDraft])
+
+  useEffect(() => {
+    const unsavedStore = useUnsavedChangesStore.getState()
+    const currentDirty = unsavedStore.editors['markdown-preview']?.dirty ?? false
+    if (currentDirty !== hasPendingEditorChanges) {
+      unsavedStore.setEditorDirty('markdown-preview', hasPendingEditorChanges)
+    }
+
+    if (!hasPendingEditorChanges || !activeTab) {
+      return
+    }
+
+    if (!activeTab.isModified) {
+      useTabsStore.getState().markTabAsModified(activeTab.id, true)
+    }
+
+    if (activeTab.isTemplate || useSidebarStore.getState().editingTemplateId) {
+      if (!useSidebarStore.getState().isTemplateModified) {
+        useSidebarStore.getState().markTemplateAsModified()
+      }
+      return
+    }
+
+    if (activeTab.sourceType === 'git') {
+      return
+    }
+
+    if (activeTab.fileId) {
+      const currentFile = useFileSystemStore.getState().files.find((item) => item.id === activeTab.fileId)
+      if (currentFile && !currentFile.isModified) {
+        useFileSystemStore.getState().markFileAsModified(activeTab.fileId)
+      }
+    }
+  }, [activeTab, hasPendingEditorChanges])
+
+  useEffect(() => {
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current)
+      autoSaveTimeoutRef.current = null
+    }
+
+    if (!hasPendingEditorChanges) {
+      return
+    }
+
+    autoSaveTimeoutRef.current = setTimeout(() => {
+      persistEditorDraft()
+    }, 800)
+
+    return () => {
+      if (autoSaveTimeoutRef.current) {
+        clearTimeout(autoSaveTimeoutRef.current)
+        autoSaveTimeoutRef.current = null
+      }
+    }
+  }, [editContent, hasPendingEditorChanges, persistEditorDraft])
 
   const handleAddTextareaSelection = useCallback((textarea: HTMLTextAreaElement | null, delay = 0) => {
     if (!textarea) return

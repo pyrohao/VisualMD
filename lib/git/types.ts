@@ -57,6 +57,7 @@ export interface GitDraftFile extends GitFileRef {
   remoteSha?: string
   hasRemoteUpdates?: boolean
   hasConflict?: boolean
+  conflictResolvedContent?: string
   lastCheckedAt?: number
 }
 

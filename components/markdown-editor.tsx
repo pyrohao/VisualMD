@@ -16,6 +16,7 @@ import { AiChatDock } from './ai-chat-dock'
 import { NodeEditPanel } from './node-edit-panel'
 import { SearchDialog } from './search-dialog'
 import { UnsavedChangesDialog } from './unsaved-changes-dialog'
+import { GitConflictView } from './git-conflict-view'
 import { Button } from './ui/button'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { toast } from '@/hooks/use-toast'
@@ -403,7 +404,7 @@ export function MarkdownEditor() {
   // 获取Store
   const { loadDocument, document, selectedNodeId } = useDocumentStore()
   const { currentFileId, openFile } = useFileSystemStore()
-  const { setCurrentDocumentId } = useGitStore()
+  const { setCurrentDocumentId, drafts, resolveConflictUsingContent, acceptRemoteVersion, acceptLocalVersion } = useGitStore()
   const {
     isOpen: isAiDockOpen,
     width: aiDockWidth,
@@ -431,6 +432,11 @@ export function MarkdownEditor() {
     activeTabSourceType === 'git' && activeTabGitPath
       ? activeTabGitFileKind || inferGitFileKind(activeTabGitPath)
       : 'text'
+  const activeGitDraft =
+    activeTabSourceType === 'git' && activeTabFileId
+      ? drafts[activeTabFileId] || null
+      : null
+  const activeGitConflict = Boolean(activeGitDraft?.hasConflict)
   const isActiveBinaryGitTab =
     activeTabSourceType === 'git' && isGitBinaryFileKind(activeGitFileKind)
 
@@ -1096,6 +1102,34 @@ export function MarkdownEditor() {
             const showEmptyView = !activeTabId || (!isActiveBinaryGitTab && activeTab?.isNew && !activeTab?.content?.trim())
             return showEmptyView ? (
               <EmptyTabView tabId={activeTabId || 'blank'} onOpenSearch={() => setSearchDialogOpen(true)} />
+            ) : activeGitConflict && activeGitDraft ? (
+              <GitConflictView
+                draft={activeGitDraft}
+                onUseLocal={() => {
+                  acceptLocalVersion(activeGitDraft.documentId)
+                  if (activeTabId) {
+                    useTabsStore.getState().updateTabContent(activeTabId, activeGitDraft.draftContent)
+                    useTabsStore.getState().markTabAsModified(activeTabId, true)
+                  }
+                  loadDocument(activeGitDraft.draftContent, activeGitDraft.name, activeGitDraft.documentId)
+                }}
+                onUseRemote={() => {
+                  acceptRemoteVersion(activeGitDraft.documentId)
+                  if (activeTabId) {
+                    useTabsStore.getState().updateTabContent(activeTabId, activeGitDraft.remoteContent || '')
+                    useTabsStore.getState().markTabAsSaved(activeTabId, activeGitDraft.name)
+                  }
+                  loadDocument(activeGitDraft.remoteContent || '', activeGitDraft.name, activeGitDraft.documentId)
+                }}
+                onApplyMerged={(content) => {
+                  resolveConflictUsingContent(activeGitDraft.documentId, content)
+                  if (activeTabId) {
+                    useTabsStore.getState().updateTabContent(activeTabId, content)
+                    useTabsStore.getState().markTabAsModified(activeTabId, true)
+                  }
+                  loadDocument(content, activeGitDraft.name, activeGitDraft.documentId)
+                }}
+              />
             ) : isActiveBinaryGitTab ? (
               <BinaryGitCanvasPlaceholder fileName={activeTab?.fileName || 'Binary File'} themeConfig={safeThemeConfig} />
             ) : (
