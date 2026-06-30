@@ -42,9 +42,31 @@ export function createIndexedDbPersistStorage<T>({
   legacyStorageKey,
 }: IndexedDbPersistStorageOptions): PersistStorage<T> {
   let dbPromise: Promise<IDBDatabase | null> | null = null
+  let indexedDbAvailable = true
+
+  function resetDatabaseConnection(database?: IDBDatabase | null) {
+    try {
+      database?.close()
+    } catch {
+      // Ignore close errors from already-closing connections.
+    }
+    dbPromise = null
+  }
+
+  function isDatabaseClosingError(error: unknown) {
+    if (!(error instanceof Error)) {
+      return false
+    }
+
+    return (
+      error.name === 'InvalidStateError' ||
+      error.message.includes('connection is closing') ||
+      error.message.includes('The database connection is closing')
+    )
+  }
 
   function canUseIndexedDb() {
-    return typeof window !== 'undefined' && typeof window.indexedDB !== 'undefined'
+    return indexedDbAvailable && typeof window !== 'undefined' && typeof window.indexedDB !== 'undefined'
   }
 
   function openDatabase(): Promise<IDBDatabase | null> {
@@ -69,8 +91,10 @@ export function createIndexedDbPersistStorage<T>({
       request.onsuccess = () => {
         const database = request.result
         database.onversionchange = () => {
-          database.close()
-          dbPromise = null
+          resetDatabaseConnection(database)
+        }
+        database.onclose = () => {
+          resetDatabaseConnection(database)
         }
         resolve(database)
       }
@@ -81,6 +105,7 @@ export function createIndexedDbPersistStorage<T>({
       }
 
       request.onblocked = () => {
+        dbPromise = null
         reject(new Error(`IndexedDB database is blocked: ${dbName}`))
       }
     })
@@ -89,63 +114,95 @@ export function createIndexedDbPersistStorage<T>({
   }
 
   async function readRawValue(key: string) {
-    const database = await openDatabase()
-    if (!database) {
-      return null
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const database = await openDatabase()
+      if (!database) {
+        return null
+      }
+
+      try {
+        return await new Promise<string | null>((resolve, reject) => {
+          const transaction = database.transaction(storeName, 'readonly')
+          const store = transaction.objectStore(storeName)
+          const request = store.get(key)
+
+          request.onsuccess = () => {
+            const entry = request.result as IndexedDbPersistEntry | undefined
+            resolve(typeof entry?.value === 'string' ? entry.value : null)
+          }
+
+          request.onerror = () => {
+            reject(request.error || new Error(`Failed to read persisted state: ${key}`))
+          }
+        })
+      } catch (error) {
+        if (!isDatabaseClosingError(error) || attempt === 1) {
+          throw error
+        }
+        resetDatabaseConnection(database)
+      }
     }
 
-    return new Promise<string | null>((resolve, reject) => {
-      const transaction = database.transaction(storeName, 'readonly')
-      const store = transaction.objectStore(storeName)
-      const request = store.get(key)
-
-      request.onsuccess = () => {
-        const entry = request.result as IndexedDbPersistEntry | undefined
-        resolve(typeof entry?.value === 'string' ? entry.value : null)
-      }
-
-      request.onerror = () => {
-        reject(request.error || new Error(`Failed to read persisted state: ${key}`))
-      }
-    })
+    return null
   }
 
   async function writeRawValue(key: string, value: string) {
-    const database = await openDatabase()
-    if (!database) {
-      return false
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const database = await openDatabase()
+      if (!database) {
+        return false
+      }
+
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const transaction = database.transaction(storeName, 'readwrite')
+          const store = transaction.objectStore(storeName)
+          const request = store.put({
+            key,
+            value,
+            updatedAt: Date.now(),
+          } satisfies IndexedDbPersistEntry)
+
+          request.onsuccess = () => resolve()
+          request.onerror = () => reject(request.error || new Error(`Failed to persist state: ${key}`))
+        })
+
+        return true
+      } catch (error) {
+        if (!isDatabaseClosingError(error) || attempt === 1) {
+          throw error
+        }
+        resetDatabaseConnection(database)
+      }
     }
 
-    await new Promise<void>((resolve, reject) => {
-      const transaction = database.transaction(storeName, 'readwrite')
-      const store = transaction.objectStore(storeName)
-      const request = store.put({
-        key,
-        value,
-        updatedAt: Date.now(),
-      } satisfies IndexedDbPersistEntry)
-
-      request.onsuccess = () => resolve()
-      request.onerror = () => reject(request.error || new Error(`Failed to persist state: ${key}`))
-    })
-
-    return true
+    return false
   }
 
   async function removeRawValue(key: string) {
-    const database = await openDatabase()
-    if (!database) {
-      return
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const database = await openDatabase()
+      if (!database) {
+        return
+      }
+
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const transaction = database.transaction(storeName, 'readwrite')
+          const store = transaction.objectStore(storeName)
+          const request = store.delete(key)
+
+          request.onsuccess = () => resolve()
+          request.onerror = () => reject(request.error || new Error(`Failed to remove persisted state: ${key}`))
+        })
+        return
+      } catch (error) {
+        if (!isDatabaseClosingError(error) || attempt === 1) {
+          throw error
+        }
+        resetDatabaseConnection(database)
+      }
     }
-
-    await new Promise<void>((resolve, reject) => {
-      const transaction = database.transaction(storeName, 'readwrite')
-      const store = transaction.objectStore(storeName)
-      const request = store.delete(key)
-
-      request.onsuccess = () => resolve()
-      request.onerror = () => reject(request.error || new Error(`Failed to remove persisted state: ${key}`))
-    })
   }
 
   async function readLegacyValue(key: string) {
@@ -175,12 +232,23 @@ export function createIndexedDbPersistStorage<T>({
     storage.removeItem(key)
   }
 
+  function disableIndexedDb() {
+    indexedDbAvailable = false
+    resetDatabaseConnection()
+  }
+
   return {
     getItem: async (name) => {
       const activeKey = legacyStorageKey || name
-      const indexedDbValue = await readRawValue(activeKey)
-      if (indexedDbValue !== null) {
-        return parseStorageValue<T>(indexedDbValue)
+      if (canUseIndexedDb()) {
+        try {
+          const indexedDbValue = await readRawValue(activeKey)
+          if (indexedDbValue !== null) {
+            return parseStorageValue<T>(indexedDbValue)
+          }
+        } catch {
+          disableIndexedDb()
+        }
       }
 
       const legacyValue = await readLegacyValue(activeKey)
@@ -202,7 +270,15 @@ export function createIndexedDbPersistStorage<T>({
     setItem: async (name, value) => {
       const activeKey = legacyStorageKey || name
       const serializedValue = JSON.stringify(value)
-      const wroteToIndexedDb = await writeRawValue(activeKey, serializedValue)
+      let wroteToIndexedDb = false
+
+      if (canUseIndexedDb()) {
+        try {
+          wroteToIndexedDb = await writeRawValue(activeKey, serializedValue)
+        } catch {
+          disableIndexedDb()
+        }
+      }
 
       if (wroteToIndexedDb) {
         await removeLegacyValue(activeKey)
@@ -213,7 +289,13 @@ export function createIndexedDbPersistStorage<T>({
     },
     removeItem: async (name) => {
       const activeKey = legacyStorageKey || name
-      await removeRawValue(activeKey)
+      if (canUseIndexedDb()) {
+        try {
+          await removeRawValue(activeKey)
+        } catch {
+          disableIndexedDb()
+        }
+      }
       await removeLegacyValue(activeKey)
     },
   }

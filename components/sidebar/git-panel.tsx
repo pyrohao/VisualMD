@@ -280,6 +280,7 @@ export function GitPanel() {
     unstageChange,
     restagePendingAsset,
     syncRemoteStatus,
+    fetchRemoteFile,
     commitCurrentFile,
     createFile,
     renameFile,
@@ -423,11 +424,20 @@ export function GitPanel() {
     if (!commitMessage.trim() || !hasCommitCandidates) return
 
     try {
+      const activeTab = getActiveTab()
+      const activeDocumentId = currentDraft?.documentId || (activeTab?.sourceType === 'git' ? activeTab.fileId : null)
+
       await commitCurrentFile(commitMessage.trim())
 
-      const activeTab = getActiveTab()
-      if (currentDraft && activeTab?.fileId === currentDraft.documentId && activeTabId) {
-        useTabsStore.getState().markTabAsSaved(activeTabId, currentDraft.name)
+      if (activeDocumentId) {
+        const latestDraft = useGitStore.getState().drafts[activeDocumentId]
+        const latestActiveTab = useTabsStore.getState().getActiveTab()
+
+        if (latestDraft && latestActiveTab?.fileId === activeDocumentId) {
+          useTabsStore.getState().updateTabContent(latestActiveTab.id, latestDraft.draftContent)
+          useTabsStore.getState().markTabAsSaved(latestActiveTab.id, latestDraft.name)
+          loadDocument(latestDraft.draftContent, latestDraft.name, latestDraft.documentId)
+        }
       }
 
       setCommitMessage('')
@@ -440,6 +450,22 @@ export function GitPanel() {
   const handleRefreshTree = async () => {
     try {
       await loadTree('')
+
+      if (currentDocumentId) {
+        const refreshedDraft = await fetchRemoteFile(currentDocumentId)
+        const latestActiveTab = useTabsStore.getState().getActiveTab()
+
+        if (refreshedDraft && latestActiveTab?.fileId === currentDocumentId) {
+          useTabsStore.getState().updateTabContent(latestActiveTab.id, refreshedDraft.draftContent)
+          if (refreshedDraft.isDirty || refreshedDraft.isNew) {
+            useTabsStore.getState().markTabAsModified(latestActiveTab.id, true)
+          } else {
+            useTabsStore.getState().markTabAsSaved(latestActiveTab.id, refreshedDraft.name)
+          }
+          loadDocument(refreshedDraft.draftContent, refreshedDraft.name, refreshedDraft.documentId)
+        }
+      }
+
       toast({
         title: t('git.refreshTree'),
         description: t('git.reposLoaded'),
@@ -849,18 +875,6 @@ export function GitPanel() {
             >
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <span>{t('git.conflictDetected')} - {t('git.localChangesPreserved')}</span>
-            </div>
-          ) : currentDraft?.hasRemoteUpdates ? (
-            <div
-              className="flex items-start gap-2 rounded-md border px-3 py-2 text-xs"
-              style={{
-                borderColor: `${themeConfig.warning}40`,
-                backgroundColor: `${themeConfig.warning}10`,
-                color: themeConfig.warning,
-              }}
-            >
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              <span>{t('git.remoteUpdated')}</span>
             </div>
           ) : null}
 

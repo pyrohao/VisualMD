@@ -277,6 +277,23 @@ export interface Translations {
     remoteUpToDate: string
     conflictDetected: string
     localChangesPreserved: string
+    acceptLocal: string
+    acceptRemote: string
+    applyMerged: string
+    remoteDiff: string
+    baseVersion: string
+    localVersion: string
+    remoteVersion: string
+    mergeResult: string
+    remoteContentUnavailable: string
+    mergeNeedsReview: string
+    mergeAutoResolved: string
+    mergeConflictHint: string
+    mergeAutoResolvedHint: string
+    mergeStrategyTitle: string
+    mergeStrategyConflict: string
+    mergeStrategyClean: string
+    noMeaningfulDiff: string
     lastFetched: string
     createFile: string
     createFolder: string
@@ -610,8 +627,19 @@ export const translations: Record<Language, Translations> = {
       acceptRemote: '采用远程',
       applyMerged: '应用合并结果',
       remoteDiff: '远端差异',
+      baseVersion: '基础版本',
       localVersion: '本地版本',
+      remoteVersion: '远程版本',
       mergeResult: '合并结果',
+      remoteContentUnavailable: '未获取到远程内容',
+      mergeNeedsReview: '存在冲突，需人工确认',
+      mergeAutoResolved: '已自动合并',
+      mergeConflictHint: '检测到同一区域存在差异，请检查并确认最终内容。',
+      mergeAutoResolvedHint: '当前变更已按三方结果自动合并，可直接应用或继续微调。',
+      mergeStrategyTitle: '合并说明',
+      mergeStrategyConflict: '保留了本地草稿，并将无法自动统一的行写入冲突标记。你可以直接编辑左侧结果后应用。',
+      mergeStrategyClean: '基础版本、本地草稿与远程版本已完成自动整合。建议快速检查后再应用。',
+      noMeaningfulDiff: '没有有效差异',
       lastFetched: '上次获取',
       createFile: '创建 Git 文件',
       createFolder: '创建 Git 文件夹',
@@ -941,8 +969,19 @@ export const translations: Record<Language, Translations> = {
       acceptRemote: 'Use Remote',
       applyMerged: 'Apply Merge Result',
       remoteDiff: 'Remote Diff',
+      baseVersion: 'Base Version',
       localVersion: 'Local Version',
+      remoteVersion: 'Remote Version',
       mergeResult: 'Merge Result',
+      remoteContentUnavailable: 'Remote content unavailable',
+      mergeNeedsReview: 'Manual review required',
+      mergeAutoResolved: 'Auto-merged',
+      mergeConflictHint: 'Changes overlap in the same area. Review the merged result before applying it.',
+      mergeAutoResolvedHint: 'The three versions were merged automatically. You can apply it directly or make final edits.',
+      mergeStrategyTitle: 'Merge Notes',
+      mergeStrategyConflict: 'Your local draft was preserved, and unresolved lines were written with conflict markers for manual cleanup.',
+      mergeStrategyClean: 'Base, local, and remote content were merged automatically. A quick review is still recommended before applying.',
+      noMeaningfulDiff: 'No meaningful diff',
       lastFetched: 'Last fetched',
       createFile: 'Create Git File',
       createFolder: 'Create Git Folder',

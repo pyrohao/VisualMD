@@ -404,7 +404,16 @@ export function MarkdownEditor() {
   // 获取Store
   const { loadDocument, document, selectedNodeId } = useDocumentStore()
   const { currentFileId, openFile } = useFileSystemStore()
-  const { setCurrentDocumentId, drafts, resolveConflictUsingContent, acceptRemoteVersion, acceptLocalVersion } = useGitStore()
+  const {
+    setCurrentDocumentId,
+    drafts,
+    resolveConflictUsingContent,
+    acceptRemoteVersion,
+    acceptLocalVersion,
+    commitCurrentFile,
+    pendingCommitMessage,
+    clearPendingCommit,
+  } = useGitStore()
   const {
     isOpen: isAiDockOpen,
     width: aiDockWidth,
@@ -439,6 +448,42 @@ export function MarkdownEditor() {
   const activeGitConflict = Boolean(activeGitDraft?.hasConflict)
   const isActiveBinaryGitTab =
     activeTabSourceType === 'git' && isGitBinaryFileKind(activeGitFileKind)
+
+  const continuePendingGitCommit = useCallback(async (documentId: string, fallbackFileName: string) => {
+    const commitMessage = useGitStore.getState().pendingCommitMessage
+    if (!commitMessage) {
+      return
+    }
+
+    const latestState = useGitStore.getState()
+    const latestDraft = latestState.drafts[documentId]
+    const hasDraftChange = Boolean(latestDraft?.isDirty || latestDraft?.isNew)
+    const hasStagedChanges = latestState.stagedChanges.length > 0
+
+    if (!hasDraftChange && !hasStagedChanges) {
+      clearPendingCommit()
+      if (activeTabId) {
+        useTabsStore.getState().markTabAsSaved(activeTabId, latestDraft?.name || fallbackFileName)
+      }
+      return
+    }
+
+    try {
+      await commitCurrentFile(commitMessage)
+      const nextDraft = useGitStore.getState().drafts[documentId]
+      if (activeTabId) {
+        if (nextDraft) {
+          useTabsStore.getState().updateTabContent(activeTabId, nextDraft.draftContent)
+          loadDocument(nextDraft.draftContent, nextDraft.name, nextDraft.documentId)
+        }
+        useTabsStore.getState().markTabAsSaved(activeTabId, nextDraft?.name || fallbackFileName)
+      }
+      clearPendingCommit()
+      toast({ title: t('git.commitSuccess') })
+    } catch {
+      // handled by store
+    }
+  }, [activeTabId, clearPendingCommit, commitCurrentFile, t])
 
   // 使用 ref 保存当前文件 ID，避免自动保存时的闭包问题
   const currentFileIdRef = useRef(currentFileId)
@@ -1105,29 +1150,40 @@ export function MarkdownEditor() {
             ) : activeGitConflict && activeGitDraft ? (
               <GitConflictView
                 draft={activeGitDraft}
-                onUseLocal={() => {
+                onUseLocal={async () => {
                   acceptLocalVersion(activeGitDraft.documentId)
+                  const latestDraft = useGitStore.getState().drafts[activeGitDraft.documentId]
+                  const nextContent = latestDraft?.draftContent || activeGitDraft.draftContent
                   if (activeTabId) {
-                    useTabsStore.getState().updateTabContent(activeTabId, activeGitDraft.draftContent)
+                    useTabsStore.getState().updateTabContent(activeTabId, nextContent)
                     useTabsStore.getState().markTabAsModified(activeTabId, true)
                   }
-                  loadDocument(activeGitDraft.draftContent, activeGitDraft.name, activeGitDraft.documentId)
+                  loadDocument(nextContent, activeGitDraft.name, activeGitDraft.documentId)
+                  await continuePendingGitCommit(activeGitDraft.documentId, activeGitDraft.name)
                 }}
-                onUseRemote={() => {
+                onUseRemote={async () => {
                   acceptRemoteVersion(activeGitDraft.documentId)
+                  const latestDraft = useGitStore.getState().drafts[activeGitDraft.documentId]
+                  const nextContent = latestDraft?.draftContent || activeGitDraft.remoteContent || ''
                   if (activeTabId) {
-                    useTabsStore.getState().updateTabContent(activeTabId, activeGitDraft.remoteContent || '')
-                    useTabsStore.getState().markTabAsSaved(activeTabId, activeGitDraft.name)
+                    useTabsStore.getState().updateTabContent(activeTabId, nextContent)
+                    if (pendingCommitMessage) {
+                      useTabsStore.getState().markTabAsModified(activeTabId, true)
+                    } else {
+                      useTabsStore.getState().markTabAsSaved(activeTabId, activeGitDraft.name)
+                    }
                   }
-                  loadDocument(activeGitDraft.remoteContent || '', activeGitDraft.name, activeGitDraft.documentId)
+                  loadDocument(nextContent, activeGitDraft.name, activeGitDraft.documentId)
+                  await continuePendingGitCommit(activeGitDraft.documentId, activeGitDraft.name)
                 }}
-                onApplyMerged={(content) => {
+                onApplyMerged={async (content) => {
                   resolveConflictUsingContent(activeGitDraft.documentId, content)
                   if (activeTabId) {
                     useTabsStore.getState().updateTabContent(activeTabId, content)
                     useTabsStore.getState().markTabAsModified(activeTabId, true)
                   }
                   loadDocument(content, activeGitDraft.name, activeGitDraft.documentId)
+                  await continuePendingGitCommit(activeGitDraft.documentId, activeGitDraft.name)
                 }}
               />
             ) : isActiveBinaryGitTab ? (

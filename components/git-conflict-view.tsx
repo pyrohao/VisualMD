@@ -1,22 +1,22 @@
 'use client'
 
-import { useMemo, useState } from 'react'
-import { createTwoFilesPatch } from 'diff'
-import { Diff, Hunk, parseDiff } from 'react-diff-view'
-import 'react-diff-view/style/index.css'
-import { AlertTriangle } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { AlertTriangle, CheckCheck, GitCompareArrows } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { useTranslation } from '@/stores/languageStore'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
+import { mergeGitText } from '@/lib/git/merge'
 import type { GitDraftFile } from '@/lib/git/types'
 
 type GitConflictViewProps = {
   draft: GitDraftFile
-  onUseLocal: () => void
-  onUseRemote: () => void
-  onApplyMerged: (content: string) => void
+  onUseLocal: () => void | Promise<void>
+  onUseRemote: () => void | Promise<void>
+  onApplyMerged: (content: string) => void | Promise<void>
 }
+
+type PaneKey = 'local' | 'merged' | 'remote'
 
 export function GitConflictView({
   draft,
@@ -30,160 +30,214 @@ export function GitConflictView({
   const baseContent = draft.originalContent || ''
   const localContent = draft.draftContent || ''
   const remoteContent = draft.remoteContent || ''
-  const initialMergedContent = useMemo(() => {
-    if (draft.conflictResolvedContent !== undefined) {
-      return draft.conflictResolvedContent
-    }
+  const mergeResult = useMemo(
+    () => mergeGitText(baseContent, localContent, remoteContent),
+    [baseContent, localContent, remoteContent]
+  )
+  const initialMergedContent = useMemo(
+    () => draft.conflictResolvedContent ?? mergeResult.mergedText,
+    [draft.conflictResolvedContent, mergeResult.mergedText]
+  )
 
-    if (!remoteContent || remoteContent === baseContent) {
-      return localContent
-    }
-
-    if (localContent === baseContent) {
-      return remoteContent
-    }
-
-    return `<<<<<<< LOCAL
-${localContent}
-=======
-${remoteContent}
->>>>>>> REMOTE`
-  }, [baseContent, draft.conflictResolvedContent, localContent, remoteContent])
   const [mergedContent, setMergedContent] = useState(initialMergedContent)
+  const localRef = useRef<HTMLTextAreaElement | null>(null)
+  const mergedRef = useRef<HTMLTextAreaElement | null>(null)
+  const remoteRef = useRef<HTMLTextAreaElement | null>(null)
+  const syncingScrollRef = useRef(false)
 
-  const diffFiles = useMemo(() => {
-    const patch = createTwoFilesPatch(
-      `${draft.name} (base)`,
-      `${draft.name} (remote)`,
-      baseContent,
-      remoteContent,
-      'base',
-      'remote',
-      { context: 3 }
-    )
+  useEffect(() => {
+    setMergedContent(initialMergedContent)
+  }, [draft.documentId, initialMergedContent])
 
-    try {
-      const parsed = parseDiff(patch, { nearbySequences: 'zip' })
-      return Array.isArray(parsed)
-        ? parsed.filter((file) => Array.isArray(file?.hunks))
-        : []
-    } catch {
-      return []
+  const getPaneRef = useCallback((key: PaneKey) => {
+    if (key === 'local') return localRef
+    if (key === 'merged') return mergedRef
+    return remoteRef
+  }, [])
+
+  const syncPaneScroll = useCallback((sourceKey: PaneKey) => {
+    if (syncingScrollRef.current) {
+      return
     }
-  }, [baseContent, draft.name, remoteContent])
+
+    const source = getPaneRef(sourceKey).current
+    if (!source) {
+      return
+    }
+
+    syncingScrollRef.current = true
+    const nextTop = source.scrollTop
+    const nextLeft = source.scrollLeft
+
+    ;(['local', 'merged', 'remote'] as PaneKey[]).forEach((paneKey) => {
+      if (paneKey === sourceKey) {
+        return
+      }
+
+      const target = getPaneRef(paneKey).current
+      if (!target) {
+        return
+      }
+
+      target.scrollTop = nextTop
+      target.scrollLeft = nextLeft
+    })
+
+    requestAnimationFrame(() => {
+      syncingScrollRef.current = false
+    })
+  }, [getPaneRef])
 
   const hasRemoteVersion = remoteContent.length > 0 || draft.remoteSha !== undefined
+  const mergedConflictCount = mergeResult.conflictBlocks.length
+
+  const paneClassName =
+    'h-full min-h-0 w-full resize-none rounded-none border-0 bg-transparent px-4 py-4 font-mono text-[13px] leading-6 shadow-none focus-visible:ring-0'
+
+  const renderPane = (
+    key: PaneKey,
+    title: string,
+    value: string,
+    options?: {
+      readOnly?: boolean
+      subtitle?: string
+      emptyText?: string
+      onChange?: (value: string) => void
+    }
+  ) => {
+    const paneRef = getPaneRef(key)
+    return (
+      <section
+        className="flex min-h-0 min-w-0 flex-col overflow-hidden border-r last:border-r-0"
+        style={{ borderColor: themeConfig.border, backgroundColor: themeConfig.card }}
+      >
+        <div
+          className="flex items-center justify-between gap-3 border-b px-4 py-3"
+          style={{ borderColor: themeConfig.border }}
+        >
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold" style={{ color: themeConfig.heading }}>
+              {title}
+            </div>
+            {options?.subtitle ? (
+              <div className="mt-1 text-xs" style={{ color: themeConfig.muted }}>
+                {options.subtitle}
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-hidden" style={{ backgroundColor: themeConfig.background }}>
+          <Textarea
+            ref={paneRef}
+            value={value || options?.emptyText || ''}
+            readOnly={options?.readOnly ?? false}
+            spellCheck={false}
+            wrap="off"
+            onScroll={() => syncPaneScroll(key)}
+            onChange={(event) => options?.onChange?.(event.target.value)}
+            className={paneClassName}
+            style={{
+              color: themeConfig.text,
+              caretColor: options?.readOnly ? 'transparent' : themeConfig.text,
+            }}
+          />
+        </div>
+      </section>
+    )
+  }
 
   return (
     <div
-      className="flex h-full flex-col overflow-hidden"
+      className="flex h-full min-h-0 flex-col overflow-hidden"
       style={{ backgroundColor: themeConfig.background }}
     >
       <div
-        className="border-b px-5 py-4"
+        className="flex shrink-0 items-center justify-between gap-4 border-b px-4 py-3"
         style={{ borderColor: themeConfig.border, backgroundColor: themeConfig.card }}
       >
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 text-sm font-semibold" style={{ color: themeConfig.heading }}>
-              <AlertTriangle className="h-4 w-4" style={{ color: themeConfig.danger }} />
-              <span>{t('git.conflictDetected')}</span>
-            </div>
-            <div className="mt-1 text-sm" style={{ color: themeConfig.text }}>
-              {draft.name}
-            </div>
-            <div className="mt-1 text-xs" style={{ color: themeConfig.muted }}>
-              {t('git.localChangesPreserved')}
-            </div>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <GitCompareArrows className="h-4 w-4" style={{ color: themeConfig.warning }} />
+            <span className="text-sm font-semibold" style={{ color: themeConfig.heading }}>
+              {t('git.conflictDetected')}
+            </span>
+            <span
+              className="rounded-full px-2 py-0.5 text-xs"
+              style={{
+                color: mergeResult.hasConflicts ? themeConfig.danger : themeConfig.success,
+                backgroundColor: `${mergeResult.hasConflicts ? themeConfig.danger : themeConfig.success}15`,
+              }}
+            >
+              {mergeResult.hasConflicts ? t('git.mergeNeedsReview') : t('git.mergeAutoResolved')}
+            </span>
           </div>
+          <div className="mt-1 truncate text-sm" style={{ color: themeConfig.text }}>
+            {draft.name}
+          </div>
+          <div className="mt-1 text-xs" style={{ color: themeConfig.muted }}>
+            {mergeResult.hasConflicts
+              ? t('git.mergeConflictHint')
+              : t('git.mergeAutoResolvedHint')}
+          </div>
+        </div>
 
-          <div className="flex shrink-0 items-center gap-2">
-            <Button variant="outline" size="sm" onClick={onUseRemote}>
-              {t('git.acceptRemote')}
-            </Button>
-            <Button variant="outline" size="sm" onClick={onUseLocal}>
-              {t('git.acceptLocal')}
-            </Button>
-            <Button size="sm" onClick={() => onApplyMerged(mergedContent)}>
-              {t('git.applyMerged')}
-            </Button>
-          </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => setMergedContent(mergeResult.mergedText)}>
+            {t('git.mergeAutoResolved')}
+          </Button>
+          <Button variant="outline" size="sm" onClick={onUseLocal}>
+            {t('git.acceptLocal')}
+          </Button>
+          <Button variant="outline" size="sm" onClick={onUseRemote}>
+            {t('git.acceptRemote')}
+          </Button>
+          <Button size="sm" onClick={() => onApplyMerged(mergedContent)}>
+            {t('git.applyMerged')}
+          </Button>
         </div>
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-2 gap-0">
-        <div
-          className="min-h-0 overflow-auto border-r"
-          style={{ borderColor: themeConfig.border, backgroundColor: themeConfig.card }}
-        >
-          <div className="border-b px-4 py-3 text-sm font-medium" style={{ borderColor: themeConfig.border, color: themeConfig.heading }}>
-            {t('git.remoteDiff')}
-          </div>
-          <div className="p-4">
-            {diffFiles.length ? diffFiles.map((file) => (
-              <Diff
-                key={`${file.oldRevision}-${file.newRevision}`}
-                viewType="split"
-                diffType={file.type}
-                hunks={file.hunks}
-              >
-                {(hunks) => hunks.map((hunk) => (
-                  <Hunk key={hunk.content} hunk={hunk} />
-                ))}
-              </Diff>
-            )) : (
-              <div className="text-sm" style={{ color: themeConfig.muted }}>
-                {t('git.remoteUpToDate')}
-              </div>
-            )}
+      <div
+        className="grid min-h-0 flex-1 grid-cols-1 divide-y xl:grid-cols-3 xl:divide-x xl:divide-y-0"
+        style={{ borderColor: themeConfig.border }}
+      >
+        {renderPane('local', t('git.localVersion'), localContent, {
+          readOnly: true,
+          subtitle: t('git.localChangesPreserved'),
+          emptyText: t('git.noMeaningfulDiff'),
+        })}
 
-            <div className="mt-4 rounded-md border p-3" style={{ borderColor: themeConfig.border, backgroundColor: themeConfig.background }}>
-              <div className="mb-2 text-xs font-medium" style={{ color: themeConfig.muted }}>
-                Remote
-              </div>
-              <div className="max-h-[320px] overflow-auto whitespace-pre-wrap text-sm" style={{ color: themeConfig.text }}>
-                {hasRemoteVersion ? remoteContent : 'Remote content unavailable'}
-              </div>
-            </div>
-          </div>
+        {renderPane('merged', t('git.mergeResult'), mergedContent, {
+          subtitle: mergeResult.hasConflicts
+            ? `${mergedConflictCount} ${t('git.mergeNeedsReview')}`
+            : t('git.mergeAutoResolved'),
+          onChange: setMergedContent,
+        })}
+
+        {renderPane('remote', t('git.remoteVersion'), hasRemoteVersion ? remoteContent : '', {
+          readOnly: true,
+          subtitle: hasRemoteVersion ? t('git.remoteUpdated') : t('git.remoteContentUnavailable'),
+          emptyText: t('git.remoteContentUnavailable'),
+        })}
+      </div>
+
+      <div
+        className="flex shrink-0 items-center justify-between gap-3 border-t px-4 py-2 text-xs"
+        style={{ borderColor: themeConfig.border, backgroundColor: themeConfig.card, color: themeConfig.muted }}
+      >
+        <div className="flex items-center gap-2">
+          <CheckCheck className="h-3.5 w-3.5" />
+          <span>{t('git.mergeStrategyTitle')}</span>
         </div>
-
-        <div className="min-h-0 overflow-hidden" style={{ backgroundColor: themeConfig.card }}>
-          <div className="border-b px-4 py-3 text-sm font-medium" style={{ borderColor: themeConfig.border, color: themeConfig.heading }}>
-            {t('git.mergeResult')}
-          </div>
-          <div className="grid h-[calc(100%-49px)] min-h-0 grid-rows-[1fr_1fr]">
-            <div className="min-h-0 border-b p-3" style={{ borderColor: themeConfig.border }}>
-              <div className="mb-2 text-xs font-medium" style={{ color: themeConfig.muted }}>
-                {t('git.localVersion')}
-              </div>
-              <div
-                className="h-full overflow-auto rounded-md border p-3 text-sm whitespace-pre-wrap"
-                style={{
-                  borderColor: themeConfig.border,
-                  backgroundColor: themeConfig.background,
-                  color: themeConfig.text,
-                }}
-              >
-                {localContent}
-              </div>
-            </div>
-            <div className="min-h-0 p-3">
-              <div className="mb-2 text-xs font-medium" style={{ color: themeConfig.muted }}>
-                {t('git.mergeResult')}
-              </div>
-              <Textarea
-                value={mergedContent}
-                onChange={(event) => setMergedContent(event.target.value)}
-                className="h-[calc(100%-24px)] resize-none"
-                style={{
-                  backgroundColor: themeConfig.background,
-                  borderColor: themeConfig.border,
-                  color: themeConfig.text,
-                }}
-              />
-            </div>
-          </div>
+        <div className="flex items-center gap-2">
+          <AlertTriangle
+            className="h-3.5 w-3.5"
+            style={{ color: mergeResult.hasConflicts ? themeConfig.danger : themeConfig.success }}
+          />
+          <span>
+            {mergeResult.hasConflicts ? t('git.mergeStrategyConflict') : t('git.mergeStrategyClean')}
+          </span>
         </div>
       </div>
     </div>
