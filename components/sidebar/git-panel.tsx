@@ -273,13 +273,13 @@ export function GitPanel() {
     clearError,
     validateAndLoad,
     loadTree,
+    refreshRepositoryFromRemote,
     toggleExpandedPath,
     openFile,
     setCurrentDocumentId,
     stageGitDraft,
     unstageChange,
     restagePendingAsset,
-    syncRemoteStatus,
     fetchRemoteFile,
     commitCurrentFile,
     createFile,
@@ -327,23 +327,13 @@ export function GitPanel() {
   }, [])
 
   useEffect(() => {
-    if (!connected || !currentDocumentId) return
-
-    const timer = window.setInterval(() => {
-      void syncRemoteStatus()
-    }, 60_000)
-
-    return () => window.clearInterval(timer)
-  }, [connected, currentDocumentId, syncRemoteStatus])
-
-  useEffect(() => {
     if (!connected || isConnecting || isLoadingTree) return
     if (Object.prototype.hasOwnProperty.call(treeByPath, '')) return
 
-    void loadTree('').catch(() => {
+    void refreshRepositoryFromRemote().catch(() => {
       // handled by store
     })
-  }, [connected, isConnecting, isLoadingTree, loadTree, treeByPath])
+  }, [connected, isConnecting, isLoadingTree, refreshRepositoryFromRemote, treeByPath])
 
   useEffect(() => {
     if (!error) return
@@ -453,13 +443,20 @@ export function GitPanel() {
   }
 
   const handleRefreshTree = async () => {
+    if (hasUnresolvedConflicts) {
+      toast({
+        title: t('common.error'),
+        description: 'Resolve all conflicted files before refreshing repository content',
+        variant: 'destructive',
+      })
+      return
+    }
+
     try {
-      await loadTree('')
+      const result = await refreshRepositoryFromRemote()
 
       if (currentDocumentId) {
-        const refreshedDraft = await fetchRemoteFile(currentDocumentId, {
-          reconcileLocalChanges: true,
-        })
+        const refreshedDraft = useGitStore.getState().drafts[currentDocumentId]
         const latestActiveTab = useTabsStore.getState().getActiveTab()
 
         if (refreshedDraft && latestActiveTab?.fileId === currentDocumentId) {
@@ -475,7 +472,10 @@ export function GitPanel() {
 
       toast({
         title: t('git.refreshTree'),
-        description: t('git.reposLoaded'),
+        description:
+          result.addedPaths.length || result.deletedPaths.length || result.updatedPaths.length
+            ? t('git.reposLoaded')
+            : t('git.noStagedChanges'),
       })
     } catch {
       // handled by store

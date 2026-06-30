@@ -61,6 +61,7 @@ export interface GitConflictSnapshot {
   localContent: string
   remoteContent: string
   remoteSha?: string
+  remoteMissing?: boolean
   resolvedContent?: string
 }
 
@@ -72,6 +73,7 @@ export interface GitDraftFile extends GitFileRef {
   status?: GitDraftStatus
   remoteContent?: string
   remoteSha?: string
+  remoteMissing?: boolean
   hasRemoteUpdates?: boolean
   hasConflict?: boolean
   conflictResolvedContent?: string

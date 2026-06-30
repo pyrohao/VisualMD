@@ -17,6 +17,7 @@ interface GitStore {
   repos: GitRepoRef[]
   branches: GitBranchRef[]
   treeByPath: Record<string, GitTreeItem[]>
+  baseTreeMap: Record<string, string>
   expandedPaths: string[]
   drafts: Record<string, GitDraftFile>
   stagedChanges: StagedGitChange[]
@@ -39,6 +40,12 @@ interface GitStore {
   loadRepos: () => Promise<void>
   loadBranches: () => Promise<void>
   loadTree: (path?: string) => Promise<void>
+  refreshRepositoryFromRemote: () => Promise<{
+    addedPaths: string[]
+    deletedPaths: string[]
+    updatedPaths: string[]
+    conflictedDocumentIds: string[]
+  }>
   toggleExpandedPath: (path: string) => Promise<void>
   openFile: (path: string) => Promise<GitDraftFile>
   setCurrentDocumentId: (documentId: string | null) => void
@@ -55,6 +62,7 @@ interface GitStore {
     documentId?: string,
     options?: {
       reconcileLocalChanges?: boolean
+      blockOnAnyConflict?: boolean
     }
   ) => Promise<GitDraftFile | null>
   syncRemoteStatus: () => Promise<void>
@@ -76,6 +84,7 @@ type GitWorkspaceState = {
   currentDocumentId: string | null
   expandedPaths: string[]
   pendingCommitMessage: string | null
+  baseTreeMap: Record<string, string>
 }
 
 type GitStorePersistedState = {
@@ -88,6 +97,7 @@ type GitStorePersistedState = {
   currentDocumentId: string | null
   expandedPaths: string[]
   pendingCommitMessage: string | null
+  baseTreeMap: Record<string, string>
   workspaceStateByKey: Record<string, GitWorkspaceState>
 }
 
@@ -152,8 +162,13 @@ function getFolderPlaceholderPath(path: string) {
 }
 
 function resolveDraftAgainstRemoteBase(draft: GitDraftFile, nextContent: string): GitDraftFile {
-  const nextBaseContent = draft.remoteContent ?? draft.originalContent
-  const nextSha = draft.remoteSha ?? draft.sha
+  const remoteMissing = draft.remoteMissing === true
+  const nextBaseContent = remoteMissing
+    ? ''
+    : (draft.remoteContent ?? draft.originalContent)
+  const nextSha = remoteMissing
+    ? undefined
+    : (draft.remoteSha ?? draft.sha)
   const isDirty = hasMeaningfulLocalGitChange(nextContent, nextBaseContent)
   const status = isDirty ? 'resolved-pending-commit' : 'clean'
 
@@ -165,6 +180,7 @@ function resolveDraftAgainstRemoteBase(draft: GitDraftFile, nextContent: string)
     draftContent: nextContent,
     remoteContent: nextBaseContent,
     remoteSha: nextSha,
+    remoteMissing,
     conflictResolvedContent: nextContent,
     conflictSnapshot: undefined,
     isDirty,
@@ -178,7 +194,8 @@ function createConflictSnapshot(
   draft: Pick<GitDraftFile, 'originalContent' | 'draftContent' | 'remoteContent' | 'sha' | 'remoteSha'>,
   remoteContent: string,
   remoteSha?: string,
-  resolvedContent?: string
+  resolvedContent?: string,
+  remoteMissing = false
 ): GitConflictSnapshot {
   return {
     baseContent: draft.originalContent,
@@ -186,6 +203,7 @@ function createConflictSnapshot(
     localContent: draft.draftContent,
     remoteContent,
     remoteSha: remoteSha ?? draft.remoteSha,
+    remoteMissing,
     resolvedContent,
   }
 }
@@ -197,6 +215,7 @@ function getDraftConflictSnapshot(draft: GitDraftFile) {
     localContent: draft.draftContent,
     remoteContent: draft.remoteContent ?? draft.originalContent,
     remoteSha: draft.remoteSha,
+    remoteMissing: draft.remoteMissing ?? false,
     resolvedContent: draft.conflictResolvedContent,
   }
 }
@@ -231,13 +250,18 @@ function getFirstConflictDocumentId(drafts: Record<string, GitDraftFile>) {
   return getConflictDocumentIds(drafts)[0] || null
 }
 
+function hasAnyConflictDraft(drafts: Record<string, GitDraftFile>) {
+  return getConflictDocumentIds(drafts).length > 0
+}
+
 function applyConflictState(
   draft: GitDraftFile,
   remoteContent: string,
   remoteSha: string | undefined,
-  resolvedContent: string
+  resolvedContent: string,
+  remoteMissing = false
 ): GitDraftFile {
-  const snapshot = createConflictSnapshot(draft, remoteContent, remoteSha, resolvedContent)
+  const snapshot = createConflictSnapshot(draft, remoteContent, remoteSha, resolvedContent, remoteMissing)
 
   return {
     ...draft,
@@ -245,6 +269,7 @@ function applyConflictState(
     draftContent: snapshot.localContent,
     remoteContent: snapshot.remoteContent,
     remoteSha: snapshot.remoteSha,
+    remoteMissing,
     status: 'conflict',
     hasConflict: true,
     hasRemoteUpdates: true,
@@ -384,6 +409,94 @@ function buildTreeItemsForPath(
   return sortGitTreeItems(Array.from(itemMap.values()))
 }
 
+function buildTreeShaMap(items: GitTreeItem[]) {
+  return Object.fromEntries(
+    items
+      .filter((item) => item.type === 'file')
+      .map((item) => [normalizeGitPath(item.path), item.sha || ''])
+  )
+}
+
+function diffTreeShaMaps(baseTreeMap: Record<string, string>, remoteTreeMap: Record<string, string>) {
+  const deletedPaths = Object.keys(baseTreeMap).filter((path) => !(path in remoteTreeMap))
+  const addedPaths = Object.keys(remoteTreeMap).filter((path) => !(path in baseTreeMap))
+  const updatedPaths = Object.keys(remoteTreeMap).filter((path) => {
+    if (!(path in baseTreeMap)) {
+      return false
+    }
+
+    return remoteTreeMap[path] !== baseTreeMap[path]
+  })
+
+  return {
+    deletedPaths,
+    addedPaths,
+    updatedPaths,
+  }
+}
+
+async function loadCompleteRemoteTree(
+  client: ReturnType<typeof getGitProviderClient>,
+  config: GitProviderConfig
+) {
+  const treeByPath: Record<string, GitTreeItem[]> = {}
+  const fileItems: GitTreeItem[] = []
+  const queue = ['']
+  const visited = new Set<string>()
+
+  while (queue.length > 0) {
+    const currentPath = normalizeGitPath(queue.shift() || '')
+    if (visited.has(currentPath)) {
+      continue
+    }
+    visited.add(currentPath)
+
+    const items = await client.listTree(config, currentPath)
+    treeByPath[currentPath] = sortGitTreeItems(items.filter((item) => item.name !== '.gitkeep'))
+
+    items.forEach((item) => {
+      if (item.name === '.gitkeep') {
+        return
+      }
+
+      if (item.type === 'dir') {
+        queue.push(normalizeGitPath(item.path))
+        return
+      }
+
+      fileItems.push({
+        ...item,
+        path: normalizeGitPath(item.path),
+      })
+    })
+  }
+
+  return {
+    treeByPath,
+    treeMap: buildTreeShaMap(fileItems),
+  }
+}
+
+function syncOpenGitTabFromDraft(documentId: string, draft: GitDraftFile | undefined) {
+  if (!draft) {
+    return
+  }
+
+  const tabsStore = useTabsStore.getState()
+  const tab = tabsStore.findTabByFileId(documentId)
+  if (!tab) {
+    return
+  }
+
+  tabsStore.updateTabContent(tab.id, draft.draftContent)
+  if (draft.hasConflict || draft.isDirty || draft.isNew) {
+    tabsStore.markTabAsModified(tab.id, true)
+    return
+  }
+
+  tabsStore.markTabAsSaved(tab.id, draft.name)
+}
+
 function ensureTreePath(
   treeByPath: Record<string, GitTreeItem[]>,
   path: string,
@@ -480,6 +593,7 @@ function createEmptyGitWorkspaceState(): GitWorkspaceState {
     currentDocumentId: null,
     expandedPaths: [],
     pendingCommitMessage: null,
+    baseTreeMap: {},
   }
 }
 
@@ -502,6 +616,10 @@ function sanitizePersistedWorkspaceState(input: unknown): GitWorkspaceState {
     currentDocumentId,
     expandedPaths: sanitizePersistedExpandedPaths(state.expandedPaths),
     pendingCommitMessage: typeof state.pendingCommitMessage === 'string' ? state.pendingCommitMessage : null,
+    baseTreeMap:
+      state.baseTreeMap && typeof state.baseTreeMap === 'object'
+        ? state.baseTreeMap as Record<string, string>
+        : {},
   }
 }
 
@@ -533,7 +651,7 @@ function buildGitWorkspaceKey(config: Pick<GitProviderConfig, 'provider' | 'owne
 }
 
 function captureGitWorkspaceState(
-  state: Pick<GitStore, 'drafts' | 'stagedChanges' | 'pendingAssetChanges' | 'currentDocumentId' | 'expandedPaths' | 'pendingCommitMessage'>
+  state: Pick<GitStore, 'drafts' | 'stagedChanges' | 'pendingAssetChanges' | 'currentDocumentId' | 'expandedPaths' | 'pendingCommitMessage' | 'baseTreeMap'>
 ): GitWorkspaceState {
   return {
     drafts: state.drafts,
@@ -545,6 +663,7 @@ function captureGitWorkspaceState(
         : null,
     expandedPaths: state.expandedPaths,
     pendingCommitMessage: state.pendingCommitMessage || null,
+    baseTreeMap: state.baseTreeMap,
   }
 }
 
@@ -575,7 +694,7 @@ function getWorkspaceStateForConfig(
 }
 
 function resolveGitWorkspaceTransition(
-  state: Pick<GitStore, 'config' | 'drafts' | 'stagedChanges' | 'pendingAssetChanges' | 'currentDocumentId' | 'expandedPaths' | 'pendingCommitMessage' | 'workspaceStateByKey'>,
+  state: Pick<GitStore, 'config' | 'drafts' | 'stagedChanges' | 'pendingAssetChanges' | 'currentDocumentId' | 'expandedPaths' | 'pendingCommitMessage' | 'baseTreeMap' | 'workspaceStateByKey'>,
   nextConfig: GitProviderConfig
 ) {
   const currentWorkspaceKey = buildGitWorkspaceKey(state.config)
@@ -632,6 +751,7 @@ export function migrateGitStorePersistedState(
     currentDocumentId: state.currentDocumentId,
     expandedPaths: state.expandedPaths,
     pendingCommitMessage: state.pendingCommitMessage,
+    baseTreeMap: state.baseTreeMap,
   })
   const migratedWorkspaceStateByKey = fromVersion < 3
     ? upsertWorkspaceStateForConfig(normalizedWorkspaceStateByKey, normalizedConfig, legacyWorkspaceState)
@@ -653,6 +773,7 @@ export function migrateGitStorePersistedState(
       currentDocumentId: currentWorkspaceState.currentDocumentId,
       expandedPaths: currentWorkspaceState.expandedPaths,
       pendingCommitMessage: currentWorkspaceState.pendingCommitMessage,
+      baseTreeMap: currentWorkspaceState.baseTreeMap,
       workspaceStateByKey: migratedWorkspaceStateByKey,
     }
   }
@@ -668,6 +789,7 @@ export function migrateGitStorePersistedState(
     currentDocumentId: currentWorkspaceState.currentDocumentId,
     expandedPaths: currentWorkspaceState.expandedPaths,
     pendingCommitMessage: currentWorkspaceState.pendingCommitMessage,
+    baseTreeMap: currentWorkspaceState.baseTreeMap,
     workspaceStateByKey: migratedWorkspaceStateByKey,
   }
 }
@@ -681,6 +803,7 @@ export const useGitStore = create<GitStore>()(
         repos: [],
         branches: [],
         treeByPath: {},
+        baseTreeMap: {},
         expandedPaths: [],
         drafts: {},
         stagedChanges: [],
@@ -721,6 +844,7 @@ export const useGitStore = create<GitStore>()(
               repos: configChanged ? [] : state.repos,
               branches: configChanged ? [] : state.branches,
               treeByPath: configChanged ? {} : state.treeByPath,
+              baseTreeMap: configChanged ? {} : state.baseTreeMap,
               expandedPaths: nextWorkspace.expandedPaths,
             }
           })
@@ -756,6 +880,7 @@ export const useGitStore = create<GitStore>()(
                 connected: true,
                 lastConnectedConfigSignature: buildConfigSignature(nextConfig),
                 treeByPath: {},
+                baseTreeMap: nextWorkspace.baseTreeMap,
                 workspaceStateByKey: nextWorkspace.workspaceStateByKey,
                 drafts: nextWorkspace.drafts,
                 stagedChanges: nextWorkspace.stagedChanges,
@@ -764,7 +889,7 @@ export const useGitStore = create<GitStore>()(
                 expandedPaths: nextWorkspace.expandedPaths,
               }
             })
-            await get().loadTree('')
+            await get().refreshRepositoryFromRemote()
           } catch (error) {
             const message = error instanceof Error ? error.message : 'Failed to connect'
             set({ error: message, connected: false })
@@ -865,6 +990,7 @@ export const useGitStore = create<GitStore>()(
             status: 'clean',
             remoteContent: file.content,
             remoteSha: file.sha,
+            remoteMissing: false,
             hasRemoteUpdates: false,
             hasConflict: false,
             lastCheckedAt: Date.now(),
@@ -1304,8 +1430,8 @@ export const useGitStore = create<GitStore>()(
         refreshCurrentFile: async () => {
           const { currentDocumentId, drafts } = get()
           if (!currentDocumentId || !drafts[currentDocumentId]) return
-          if (isDraftConflictLocked(drafts[currentDocumentId])) {
-            throw new Error('Conflict must be resolved before refreshing this file')
+          if (hasAnyConflictDraft(drafts)) {
+            throw new Error('Resolve all conflicted files before refreshing repository content')
           }
           await get().fetchRemoteFile(currentDocumentId)
         },
@@ -1320,10 +1446,12 @@ export const useGitStore = create<GitStore>()(
           if (draft.isNew) {
             return draft
           }
-          if (isDraftConflictLocked(draft)) {
-            if (options?.reconcileLocalChanges) {
-              throw new Error('Conflict must be resolved before refreshing this file')
+          if (hasAnyConflictDraft(drafts)) {
+            if (options?.reconcileLocalChanges || options?.blockOnAnyConflict !== false) {
+              throw new Error('Resolve all conflicted files before refreshing repository content')
             }
+          }
+          if (isDraftConflictLocked(draft)) {
             return draft
           }
 
@@ -1392,6 +1520,7 @@ export const useGitStore = create<GitStore>()(
                 name: remoteFile.name || currentDraft.name,
                 remoteSha: remoteFile.sha,
                 remoteContent: remoteFile.content,
+                remoteMissing: false,
                 lastCheckedAt: checkedAt,
                 hasRemoteUpdates: remoteChanged,
                 hasConflict: false,
@@ -1437,7 +1566,7 @@ export const useGitStore = create<GitStore>()(
         syncRemoteStatus: async () => {
           const { currentDocumentId, drafts } = get()
           if (!currentDocumentId || !drafts[currentDocumentId]) return
-          if (isDraftConflictLocked(drafts[currentDocumentId])) return
+          if (hasAnyConflictDraft(drafts)) return
           await get().fetchRemoteFile(currentDocumentId)
         },
 
@@ -1452,6 +1581,7 @@ export const useGitStore = create<GitStore>()(
               sha: snapshot.baseSha,
               remoteContent: snapshot.remoteContent,
               remoteSha: snapshot.remoteSha,
+              remoteMissing: snapshot.remoteMissing,
             }, content)
 
             return {
@@ -1475,6 +1605,29 @@ export const useGitStore = create<GitStore>()(
           const draft = get().drafts[documentId]
           if (!draft) return
           const snapshot = getDraftConflictSnapshot(draft)
+          if (snapshot.remoteMissing) {
+            const tab = useTabsStore.getState().findTabByFileId(documentId)
+            const parentPath = getParentGitPath(draft.path)
+            set((state) => {
+              const nextDrafts = { ...state.drafts }
+              delete nextDrafts[documentId]
+
+              return {
+                drafts: nextDrafts,
+                stagedChanges: state.stagedChanges.filter((item) => item.documentId !== documentId),
+                pendingAssetChanges: state.pendingAssetChanges.filter((item) => item.documentId !== documentId),
+                treeByPath: {
+                  ...state.treeByPath,
+                  [parentPath]: (state.treeByPath[parentPath] || []).filter((item) => normalizeGitPath(item.path) !== normalizeGitPath(draft.path)),
+                },
+                currentDocumentId: state.currentDocumentId === documentId ? null : state.currentDocumentId,
+              }
+            })
+            if (tab) {
+              useTabsStore.getState().closeTab(tab.id)
+            }
+            return
+          }
           if (!snapshot.remoteContent) return
 
           set((state) => {
@@ -1509,6 +1662,281 @@ export const useGitStore = create<GitStore>()(
           }
         },
 
+        refreshRepositoryFromRemote: async () => {
+          const { config, drafts, stagedChanges } = get()
+          if (hasAnyConflictDraft(drafts)) {
+            throw new Error('Resolve all conflicted files before refreshing repository content')
+          }
+
+          set({ isLoadingTree: true, isFetchingRemote: true, error: null })
+          try {
+            const runtimeConfig = toRuntimeConfig(config)
+            const client = getGitProviderClient(runtimeConfig)
+            const { treeByPath: remoteTreeByPath, treeMap: remoteTreeMap } = await loadCompleteRemoteTree(client, runtimeConfig)
+            const currentBaseTreeMap = get().baseTreeMap
+            const hasBaseline = Object.keys(currentBaseTreeMap).length > 0
+            const treeDiff = hasBaseline
+              ? diffTreeShaMaps(currentBaseTreeMap, remoteTreeMap)
+              : {
+                  addedPaths: Object.keys(remoteTreeMap),
+                  deletedPaths: [] as string[],
+                  updatedPaths: [] as string[],
+                }
+            const changedPaths = hasBaseline
+              ? Array.from(new Set([
+                  ...treeDiff.addedPaths,
+                  ...treeDiff.deletedPaths,
+                  ...treeDiff.updatedPaths,
+                ]))
+              : [] as string[]
+            const remoteFileCache = new Map<string, Awaited<ReturnType<typeof client.getFile>>>()
+
+            const getRemoteFileForPath = async (path: string) => {
+              const normalizedPath = normalizeGitPath(path)
+              if (remoteFileCache.has(normalizedPath)) {
+                return remoteFileCache.get(normalizedPath)!
+              }
+
+              const remoteFile = await client.getFile(runtimeConfig, normalizedPath)
+              remoteFileCache.set(normalizedPath, remoteFile)
+              return remoteFile
+            }
+
+            const reconcileDocumentIds = new Set<string>()
+            Object.values(get().drafts).forEach((draft) => {
+              if (!draft.isNew && changedPaths.includes(normalizeGitPath(draft.path))) {
+                reconcileDocumentIds.add(draft.documentId)
+              }
+            })
+
+            for (const change of get().stagedChanges) {
+              if ((change.kind === 'git-draft' || change.kind === 'git-delete-file') && change.documentId) {
+                reconcileDocumentIds.add(change.documentId)
+              }
+            }
+
+            const conflictedDocumentIds: string[] = []
+            const deletedDocumentIds = new Set<string>()
+
+            for (const documentId of reconcileDocumentIds) {
+              const currentDraft = get().drafts[documentId]
+              if (!currentDraft) {
+                continue
+              }
+
+              const draftPath = normalizeGitPath(currentDraft.path)
+              const pathDeletedRemotely = hasBaseline && treeDiff.deletedPaths.includes(draftPath)
+              const pathAddedOrUpdatedRemotely = !pathDeletedRemotely && (
+                !hasBaseline ||
+                treeDiff.addedPaths.includes(draftPath) ||
+                treeDiff.updatedPaths.includes(draftPath)
+              )
+              const hasLocalChange = currentDraft.isNew || hasMeaningfulLocalGitChange(
+                currentDraft.draftContent,
+                currentDraft.originalContent
+              )
+              const stagedDelete = get().stagedChanges.find((item) => item.kind === 'git-delete-file' && item.documentId === documentId)
+
+              if (pathDeletedRemotely) {
+                if (stagedDelete) {
+                  set((state) => {
+                    const nextDrafts = { ...state.drafts }
+                    delete nextDrafts[documentId]
+
+                    return {
+                      drafts: nextDrafts,
+                      stagedChanges: state.stagedChanges.filter((item) => item.id !== stagedDelete.id),
+                      currentDocumentId: state.currentDocumentId === documentId ? null : state.currentDocumentId,
+                    }
+                  })
+                  deletedDocumentIds.add(documentId)
+                  const tab = useTabsStore.getState().findTabByFileId(documentId)
+                  if (tab) {
+                    useTabsStore.getState().closeTab(tab.id)
+                  }
+                  continue
+                }
+
+                if (!hasLocalChange) {
+                  set((state) => {
+                    const nextDrafts = { ...state.drafts }
+                    delete nextDrafts[documentId]
+                    return {
+                      drafts: nextDrafts,
+                      currentDocumentId: state.currentDocumentId === documentId ? null : state.currentDocumentId,
+                    }
+                  })
+                  deletedDocumentIds.add(documentId)
+                  const tab = useTabsStore.getState().findTabByFileId(documentId)
+                  if (tab) {
+                    useTabsStore.getState().closeTab(tab.id)
+                  }
+                  continue
+                }
+
+                const mergeResult = mergeGitText(currentDraft.originalContent, currentDraft.draftContent, '')
+                if (mergeResult.hasConflicts) {
+                  set((state) => ({
+                    drafts: {
+                      ...state.drafts,
+                      [documentId]: applyConflictState(
+                        state.drafts[documentId],
+                        '',
+                        undefined,
+                        mergeResult.mergedText,
+                        true
+                      ),
+                    },
+                  }))
+                  conflictedDocumentIds.push(documentId)
+                } else {
+                  set((state) => ({
+                    drafts: {
+                      ...state.drafts,
+                      [documentId]: {
+                        ...resolveDraftAgainstRemoteBase(state.drafts[documentId], mergeResult.mergedText),
+                        remoteMissing: true,
+                        remoteContent: '',
+                        remoteSha: undefined,
+                        status: 'auto-merged',
+                        hasRemoteUpdates: true,
+                      },
+                    },
+                  }))
+                  syncGitDraftStageState(get(), documentId)
+                  syncOpenGitTabFromDraft(documentId, get().drafts[documentId])
+                }
+                continue
+              }
+
+              if (!pathAddedOrUpdatedRemotely) {
+                continue
+              }
+
+              const remoteFile = await getRemoteFileForPath(draftPath)
+              const latestDraft = get().drafts[documentId]
+              if (!latestDraft) {
+                continue
+              }
+
+              const remoteBaseContent = latestDraft.isNew ? '' : latestDraft.originalContent
+              const remoteBaseSha = latestDraft.isNew ? undefined : latestDraft.sha
+              const remoteChanged = latestDraft.isNew
+                ? true
+                : hasMeaningfulRemoteGitChange(remoteFile.content, remoteBaseContent, remoteFile.sha, remoteBaseSha)
+
+              if (!hasLocalChange) {
+                set((state) => ({
+                  drafts: {
+                    ...state.drafts,
+                    [documentId]: {
+                      ...state.drafts[documentId],
+                      name: remoteFile.name || state.drafts[documentId].name,
+                      sha: remoteFile.sha,
+                      content: remoteFile.content,
+                      originalContent: remoteFile.content,
+                      draftContent: remoteFile.content,
+                      remoteContent: remoteFile.content,
+                      remoteSha: remoteFile.sha,
+                      remoteMissing: false,
+                      isDirty: false,
+                      isNew: false,
+                      status: 'clean',
+                      hasConflict: false,
+                      hasRemoteUpdates: false,
+                      conflictSnapshot: undefined,
+                      conflictResolvedContent: undefined,
+                      lastCheckedAt: Date.now(),
+                    },
+                  },
+                }))
+                syncOpenGitTabFromDraft(documentId, get().drafts[documentId])
+                continue
+              }
+
+              if (!remoteChanged && !latestDraft.isNew) {
+                set((state) => ({
+                  drafts: {
+                    ...state.drafts,
+                    [documentId]: {
+                      ...state.drafts[documentId],
+                      remoteContent: remoteFile.content,
+                      remoteSha: remoteFile.sha,
+                      remoteMissing: false,
+                      hasRemoteUpdates: false,
+                      lastCheckedAt: Date.now(),
+                    },
+                  },
+                }))
+                continue
+              }
+
+              const mergeResult = mergeGitText(
+                latestDraft.isNew ? '' : latestDraft.originalContent,
+                latestDraft.draftContent,
+                remoteFile.content
+              )
+
+              if (mergeResult.hasConflicts) {
+                set((state) => ({
+                  drafts: {
+                    ...state.drafts,
+                    [documentId]: applyConflictState(
+                      {
+                        ...state.drafts[documentId],
+                        name: remoteFile.name || state.drafts[documentId].name,
+                        lastCheckedAt: Date.now(),
+                      },
+                      remoteFile.content,
+                      remoteFile.sha,
+                      mergeResult.mergedText
+                    ),
+                  },
+                }))
+                conflictedDocumentIds.push(documentId)
+              } else {
+                set((state) => ({
+                  drafts: {
+                    ...state.drafts,
+                    [documentId]: {
+                      ...resolveDraftAgainstRemoteBase(state.drafts[documentId], mergeResult.mergedText),
+                      name: remoteFile.name || state.drafts[documentId].name,
+                      remoteMissing: false,
+                      lastCheckedAt: Date.now(),
+                      status: 'auto-merged',
+                    },
+                  },
+                }))
+                syncGitDraftStageState(get(), documentId)
+                syncOpenGitTabFromDraft(documentId, get().drafts[documentId])
+              }
+            }
+
+            set((state) => ({
+              treeByPath: Object.fromEntries(
+                Object.entries(remoteTreeByPath).map(([path, items]) => [
+                  path,
+                  buildTreeItemsForPath(state, path, items),
+                ])
+              ),
+              baseTreeMap: remoteTreeMap,
+              lastFetchedAt: Date.now(),
+            }))
+
+            return {
+              addedPaths: treeDiff.addedPaths,
+              deletedPaths: treeDiff.deletedPaths,
+              updatedPaths: treeDiff.updatedPaths,
+              conflictedDocumentIds,
+            }
+          } catch (error) {
+            set({ error: error instanceof Error ? error.message : 'Failed to refresh repository content' })
+            throw error
+          } finally {
+            set({ isLoadingTree: false, isFetchingRemote: false })
+          }
+        },
+
         acceptLocalVersion: (documentId) => {
           const draft = get().drafts[documentId]
           if (!draft) return
@@ -1517,11 +1945,12 @@ export const useGitStore = create<GitStore>()(
         },
 
         commitCurrentFile: async (message) => {
-          const { currentDocumentId, drafts, config, stagedChanges } = get()
+          const { currentDocumentId, drafts, config } = get()
           const draft = currentDocumentId ? drafts[currentDocumentId] : null
           const trimmedMessage = message.trim()
+          const initialStagedChanges = get().stagedChanges
           if (!trimmedMessage) throw new Error('Commit message is required')
-          if (!stagedChanges.length && !draft) throw new Error('No Git file is currently open')
+          if (!initialStagedChanges.length && !draft) throw new Error('No Git file is currently open')
 
           set({ isCommitting: true, error: null, pendingCommitMessage: trimmedMessage })
           try {
@@ -1540,6 +1969,18 @@ export const useGitStore = create<GitStore>()(
               throw new Error('Resolve all conflicted files before committing')
             }
 
+            await get().refreshRepositoryFromRemote()
+
+            const conflictedAfterRefresh = getFirstConflictDocumentId(get().drafts)
+            if (conflictedAfterRefresh) {
+              set((state) => ({
+                error: 'Conflict detected: remote file changed since last sync',
+                currentDocumentId: conflictedAfterRefresh,
+              }))
+              throw new Error('Conflict detected: remote file changed since last sync')
+            }
+
+            const stagedChanges = get().stagedChanges
             const committedChangeIds = new Set(stagedChanges.map((item) => item.id))
             const buildCommitAttemptState = () => {
               const batchActions: GitBatchCommitAction[] = []
@@ -1843,7 +2284,7 @@ export const useGitStore = create<GitStore>()(
                 pendingCommitMessage: null,
               }
             })
-            await get().loadTree('')
+            await get().refreshRepositoryFromRemote()
           } catch (error) {
             const message = error instanceof Error ? error.message : 'Failed to commit file'
             set({ error: message })
