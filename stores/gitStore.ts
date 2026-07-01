@@ -8,6 +8,7 @@ import { createIndexedDbPersistStorage } from '@/lib/git-store-persist-storage'
 import type { GitBatchCommitAction, GitBranchRef, GitConflictSnapshot, GitDraftFile, GitProviderConfig, GitRepoRef, GitTreeItem, StagedGitChange } from '@/lib/git/types'
 import { arrayBufferToBase64, buildGitDocumentId, getGitFileName, joinGitPath, normalizeGitPath, parseGitDocumentId } from '@/lib/git/utils'
 import { decryptSecret, encryptSecret, normalizeEncryptedSecret } from '@/lib/secret-storage'
+import { useDocumentStore } from './documentStore'
 import { useFileSystemStore } from './fileSystemStore'
 import { useTabsStore } from './tabsStore'
 
@@ -495,6 +496,92 @@ function syncOpenGitTabFromDraft(documentId: string, draft: GitDraftFile | undef
   }
 
   tabsStore.markTabAsSaved(tab.id, draft.name)
+}
+
+function buildGitTabStateFromDraft(draft: GitDraftFile) {
+  return {
+    fileName: draft.name,
+    content: draft.draftContent,
+    savedContent: draft.draftContent,
+    isModified: draft.isDirty || draft.isNew === true,
+    isNew: false,
+    fileId: draft.documentId,
+    sourceType: 'git' as const,
+    gitMeta: {
+      provider: draft.provider,
+      ownerOrNamespace: draft.ownerOrNamespace,
+      repo: draft.repo,
+      branch: draft.branch,
+      path: draft.path,
+      sha: draft.sha,
+      fileKind: 'text' as const,
+    },
+  }
+}
+
+function syncLocalTabToGitDraft(localFileId: string, draft: GitDraftFile) {
+  const tabsStore = useTabsStore.getState()
+  const documentStore = useDocumentStore.getState()
+  const localTab = tabsStore.tabs.find((tab) => tab.sourceType !== 'git' && tab.fileId === localFileId) || null
+  const gitTab = tabsStore.tabs.find((tab) => tab.sourceType === 'git' && tab.fileId === draft.documentId) || null
+
+  if (!localTab && !gitTab) {
+    return false
+  }
+
+  const nextTabState = buildGitTabStateFromDraft(draft)
+
+  useTabsStore.setState((state) => {
+    const currentLocalTab = state.tabs.find((tab) => tab.sourceType !== 'git' && tab.fileId === localFileId) || null
+    const currentGitTab = state.tabs.find((tab) => tab.sourceType === 'git' && tab.fileId === draft.documentId) || null
+    let nextTabs = state.tabs
+    let nextActiveTabId = state.activeTabId
+
+    if (currentGitTab) {
+      nextTabs = nextTabs.map((tab) => (
+        tab.id === currentGitTab.id
+          ? { ...tab, ...nextTabState }
+          : tab
+      ))
+    }
+
+    if (currentLocalTab) {
+      if (currentGitTab && currentGitTab.id !== currentLocalTab.id) {
+        nextTabs = nextTabs.filter((tab) => tab.id !== currentLocalTab.id)
+        if (state.activeTabId === currentLocalTab.id) {
+          nextActiveTabId = currentGitTab.id
+        }
+      } else {
+        nextTabs = nextTabs.map((tab) => (
+          tab.id === currentLocalTab.id
+            ? { ...tab, ...nextTabState }
+            : tab
+        ))
+      }
+    }
+
+    return {
+      tabs: nextTabs,
+      activeTabId: nextActiveTabId,
+    }
+  })
+
+  const activeTab = useTabsStore.getState().getActiveTab()
+  const shouldReloadDocument = (
+    activeTab?.sourceType === 'git' &&
+    activeTab.fileId === draft.documentId &&
+    (
+      documentStore.document?.fileId === localFileId ||
+      documentStore.document?.fileId === draft.documentId
+    )
+  )
+
+  if (shouldReloadDocument) {
+    documentStore.loadDocument(draft.draftContent, draft.name, draft.documentId)
+    return true
+  }
+
+  return activeTab?.sourceType === 'git' && activeTab.fileId === draft.documentId
 }
 
 function ensureTreePath(
@@ -1131,24 +1218,89 @@ export const useGitStore = create<GitStore>()(
           if (!file) return
 
           const normalizedRepoPath = normalizeGitPath(repoPath)
+          const currentLocalTab = useTabsStore.getState().tabs.find((tab) => tab.sourceType !== 'git' && tab.fileId === fileId)
+          const nextContent = currentLocalTab?.content ?? file.content
+          const documentId = buildGitDocumentId(get().config, normalizedRepoPath)
+
           set((state) => {
-            const existing = state.stagedChanges.find((item) => item.kind === 'local-file' && item.localFileId === fileId)
+            const existingDraft = state.drafts[documentId]
+            const isExistingDraftDirty = existingDraft && !existingDraft.isNew
+              ? hasMeaningfulLocalGitChange(nextContent, existingDraft.originalContent)
+              : false
+            const nextDraft: GitDraftFile = existingDraft
+              ? {
+                  ...existingDraft,
+                  path: normalizedRepoPath,
+                  name: getGitFileName(normalizedRepoPath),
+                  content: nextContent,
+                  draftContent: nextContent,
+                  isDirty: existingDraft.isNew
+                    ? nextContent.length > 0
+                    : isExistingDraftDirty,
+                  status: existingDraft.isNew
+                    ? (nextContent.length > 0 ? 'dirty' : 'clean')
+                    : (isExistingDraftDirty ? 'dirty' : 'clean'),
+                  provider: state.config.provider,
+                  repo: state.config.repo,
+                  ownerOrNamespace: state.config.ownerOrNamespace,
+                  branch: state.config.branch,
+                }
+              : {
+                  documentId,
+                  path: normalizedRepoPath,
+                  name: getGitFileName(normalizedRepoPath),
+                  sha: undefined,
+                  content: nextContent,
+                  originalContent: '',
+                  draftContent: nextContent,
+                  isDirty: nextContent.length > 0,
+                  isNew: true,
+                  status: nextContent.length > 0 ? 'dirty' : 'clean',
+                  remoteContent: undefined,
+                  remoteSha: undefined,
+                  hasRemoteUpdates: false,
+                  hasConflict: false,
+                  lastCheckedAt: Date.now(),
+                  provider: state.config.provider,
+                  repo: state.config.repo,
+                  ownerOrNamespace: state.config.ownerOrNamespace,
+                  branch: state.config.branch,
+                }
             const nextChange: StagedGitChange = {
-              id: existing?.id || `local-file:${fileId}`,
-              kind: 'local-file',
-              label: file.name,
+              id: `git-draft:${documentId}`,
+              kind: 'git-draft',
+              label: nextDraft.name,
               repoPath: normalizedRepoPath,
-              localFileId: fileId,
-              localFileName: file.name,
+              documentId,
               updatedAt: Date.now(),
             }
+            const nextStagedChanges = state.stagedChanges.filter((item) => !(
+              (item.kind === 'local-file' && item.localFileId === fileId) ||
+              (item.kind === 'git-draft' && item.documentId === documentId)
+            ))
 
             return {
-              stagedChanges: existing
-                ? state.stagedChanges.map((item) => item.id === existing.id ? nextChange : item)
-                : [...state.stagedChanges, nextChange],
+              drafts: {
+                ...state.drafts,
+                [documentId]: nextDraft,
+              },
+              stagedChanges: nextDraft.isDirty || nextDraft.isNew
+                ? [...nextStagedChanges, nextChange]
+                : nextStagedChanges,
+              treeByPath: ensureTreePath(state.treeByPath, normalizedRepoPath, 'file'),
             }
           })
+
+          const stagedDraft = get().drafts[documentId]
+          if (!stagedDraft) {
+            return
+          }
+          const activatedGitTab = syncLocalTabToGitDraft(fileId, stagedDraft)
+          syncOpenGitTabFromDraft(documentId, stagedDraft)
+
+          if (activatedGitTab) {
+            set({ currentDocumentId: documentId })
+          }
         },
 
         stageDeletedGitFile: async (path) => {

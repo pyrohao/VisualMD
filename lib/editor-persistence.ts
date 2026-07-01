@@ -44,11 +44,12 @@ export function applyMarkdownToDocument(markdown: string, options: { external?: 
 export function persistMarkdownToActiveSource(
   markdown: string,
   fileName?: string,
-  options: { markSaved?: boolean } = {}
+  options: { markSaved?: boolean; markDocumentSaved?: boolean } = {}
 ) {
   const tabsStore = useTabsStore.getState()
   const activeTab = tabsStore.getActiveTab()
   const markSaved = options.markSaved === true
+  const markDocumentSaved = options.markDocumentSaved ?? markSaved
 
   if (!activeTab) return false
 
@@ -109,7 +110,7 @@ export function persistMarkdownToActiveSource(
     useGitStore.getState().updateDraftContent(activeTab.fileId, markdown)
     syncTabState()
 
-    if (markSaved) {
+    if (markDocumentSaved) {
       useDocumentStore.getState().markAsSaved()
     }
     return true
@@ -134,7 +135,7 @@ export function persistMarkdownToActiveSource(
 
     syncTabState()
 
-    if (markSaved) {
+    if (markDocumentSaved) {
       useDocumentStore.getState().markAsSaved()
     }
     return true
@@ -142,13 +143,13 @@ export function persistMarkdownToActiveSource(
 
   syncTabState()
 
-  if (markSaved) {
+  if (markDocumentSaved) {
     useDocumentStore.getState().markAsSaved()
   }
   return true
 }
 
-export function syncActiveDocumentToActiveSource(options: { markSaved?: boolean } = {}) {
+export function syncActiveDocumentToActiveSource(options: { markSaved?: boolean; markDocumentSaved?: boolean } = {}) {
   const tabsStore = useTabsStore.getState()
   const activeTab = tabsStore.getActiveTab()
   const documentStore = useDocumentStore.getState()
@@ -161,6 +162,12 @@ export function syncActiveDocumentToActiveSource(options: { markSaved?: boolean 
 }
 
 export function persistActiveTabSave() {
+  const activeTab = useTabsStore.getState().getActiveTab()
+  if (activeTab?.sourceType === 'git') {
+    syncActiveDocumentToActiveSource({ markSaved: true, markDocumentSaved: true })
+    return
+  }
+
   syncActiveDocumentToActiveSource({ markSaved: true })
 }
 

@@ -23,6 +23,7 @@ interface Heading {
 export function OutlinePanel() {
   const { getThemeConfig } = useThemeStore()
   const [mounted, setMounted] = useState(false)
+  const [selectedHeadingIndex, setSelectedHeadingIndex] = useState<number | null>(null)
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
   const { t } = useTranslation()
 
@@ -39,6 +40,7 @@ export function OutlinePanel() {
     const markdown = getCurrentMarkdown()
     if (!markdown) {
       setHeadings([])
+      setSelectedHeadingIndex(null)
       return
     }
 
@@ -55,12 +57,16 @@ export function OutlinePanel() {
     })
 
     setHeadings(extractedHeadings)
+    setSelectedHeadingIndex((currentIndex) =>
+      currentIndex !== null && currentIndex < extractedHeadings.length ? currentIndex : null
+    )
   }, [document, getCurrentMarkdown])
 
   // 点击标题跳转到对应位置
-  const handleHeadingClick = (line: number) => {
+  const handleHeadingClick = (line: number, index: number) => {
+    setSelectedHeadingIndex(index)
     // 触发事件让编辑器跳转到指定行
-    window.dispatchEvent(new CustomEvent('outline-jump', { detail: { line } }))
+    window.dispatchEvent(new CustomEvent('outline-jump', { detail: { line, index } }))
   }
 
   return (
@@ -97,19 +103,26 @@ export function OutlinePanel() {
             {headings.map((heading, index) => (
               <button
                 key={index}
-                onClick={() => handleHeadingClick(heading.line)}
+                onClick={() => handleHeadingClick(heading.line, index)}
                 className="relative w-full rounded px-2 py-1.5 text-left text-sm transition-colors hover:opacity-80"
                 style={{
                   paddingLeft: `${(heading.level - 1) * 12 + 8}px`,
-                  color: heading.level === 1 ? themeConfig.heading : themeConfig.text,
+                  color: selectedHeadingIndex === index
+                    ? themeConfig.heading
+                    : heading.level === 1
+                      ? themeConfig.heading
+                      : themeConfig.text,
                   fontWeight: heading.level === 1 ? 600 : 400,
-                  backgroundColor: 'transparent',
+                  backgroundColor: selectedHeadingIndex === index ? `${themeConfig.primary}12` : 'transparent',
                 }}
                 onMouseEnter={(e) => {
+                  if (selectedHeadingIndex === index) return
                   e.currentTarget.style.backgroundColor = themeConfig.hover
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = 'transparent'
+                  e.currentTarget.style.backgroundColor = selectedHeadingIndex === index
+                    ? `${themeConfig.primary}12`
+                    : 'transparent'
                 }}
               >
                 {heading.text}

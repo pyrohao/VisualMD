@@ -60,6 +60,11 @@ type EditorSelectionSnapshot = {
   shouldRefocus: boolean
 }
 
+type OutlineJumpDetail = {
+  line: number
+  index?: number
+}
+
 const LIVE_PREVIEW_LAYOUT_STORAGE_KEY = 'visualmd-live-preview-layout'
 const PREVIEW_MODE_STORAGE_KEY = 'visualmd-preview-mode'
 
@@ -73,6 +78,20 @@ function isPreviewMode(value: string | null): value is PreviewMode {
 
 function normalizeEditorComparableMarkdown(value: string) {
   return value.replace(/\r\n/g, '\n')
+}
+
+function getLineStartOffset(markdown: string, targetLine: number) {
+  if (targetLine <= 0) return 0
+
+  const lines = markdown.split('\n')
+  const clampedLine = Math.min(targetLine, Math.max(0, lines.length - 1))
+  let offset = 0
+
+  for (let index = 0; index < clampedLine; index += 1) {
+    offset += lines[index].length + 1
+  }
+
+  return offset
 }
 
 /**
@@ -456,6 +475,9 @@ export function MarkdownPreview() {
   const editTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const liveEditorRef = useRef<HTMLTextAreaElement | null>(null)
   const livePreviewRef = useRef<HTMLDivElement | null>(null)
+  const previewScrollRef = useRef<HTMLDivElement | null>(null)
+  const previewArticleRef = useRef<HTMLElement | null>(null)
+  const livePreviewArticleRef = useRef<HTMLElement | null>(null)
   const selectionTimerRef = useRef<number | null>(null)
   const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const isSyncingLiveScrollRef = useRef(false)
@@ -687,7 +709,10 @@ export function MarkdownPreview() {
     }
 
     if (activeTab?.sourceType === 'git' && activeTab.fileId) {
-      persistMarkdownToActiveSource(nextMarkdown, latestFileName, { markSaved: true })
+      persistMarkdownToActiveSource(nextMarkdown, latestFileName, {
+        markSaved: true,
+        markDocumentSaved: true,
+      })
       editContentRef.current = nextMarkdown
       persistedEditContentRef.current = nextMarkdown
       setEditContent(nextMarkdown)
@@ -719,6 +744,59 @@ export function MarkdownPreview() {
     })
     return false
   }, [captureEditorSelectionSnapshot, commitDraftToDocument, document, restoreEditorSelectionSnapshot])
+
+  useEffect(() => {
+    const jumpToTextareaLine = (line: number) => {
+      const textarea = mode === 'live' ? liveEditorRef.current : mode === 'edit' ? editTextareaRef.current : null
+      if (!textarea) return false
+
+      const offset = getLineStartOffset(editContentRef.current, line)
+      const computedStyle = window.getComputedStyle(textarea)
+      const lineHeight = Number.parseFloat(computedStyle.lineHeight || '0') || 22
+      const nextScrollTop = Math.max(0, lineHeight * line - textarea.clientHeight * 0.35)
+
+      textarea.focus({ preventScroll: true })
+      textarea.setSelectionRange(offset, offset)
+      textarea.scrollTop = nextScrollTop
+      return true
+    }
+
+    const jumpToPreviewHeading = (index?: number) => {
+      const article = mode === 'live' ? livePreviewArticleRef.current : mode === 'preview' ? previewArticleRef.current : null
+      const scrollContainer = mode === 'live' ? livePreviewRef.current : mode === 'preview' ? previewScrollRef.current : null
+      if (!article || !scrollContainer || index === undefined) return false
+
+      const headings = article.querySelectorAll('h1, h2, h3, h4, h5, h6')
+      const targetHeading = headings[index] as HTMLElement | undefined
+      if (!targetHeading) return false
+
+      scrollContainer.scrollTo({
+        top: Math.max(0, targetHeading.offsetTop - 24),
+        behavior: 'smooth',
+      })
+      return true
+    }
+
+    const handleOutlineJump = (event: Event) => {
+      const detail = (event as CustomEvent<OutlineJumpDetail>).detail
+      if (!detail || typeof detail.line !== 'number') return
+
+      if (mode === 'preview') {
+        jumpToPreviewHeading(detail.index)
+        return
+      }
+
+      const jumped = jumpToTextareaLine(detail.line)
+      if (mode === 'live' && !jumped) {
+        jumpToPreviewHeading(detail.index)
+      }
+    }
+
+    window.addEventListener('outline-jump', handleOutlineJump)
+    return () => {
+      window.removeEventListener('outline-jump', handleOutlineJump)
+    }
+  }, [mode])
 
   const gitAssets = useMemo(
     () => collectGitAssetMap(stagedChanges, pendingAssetChanges),
@@ -884,10 +962,6 @@ export function MarkdownPreview() {
     }
 
     if (!hasPendingEditorChanges) {
-      return
-    }
-
-    if (activeTab?.sourceType === 'git') {
       return
     }
 
@@ -1288,11 +1362,13 @@ export function MarkdownPreview() {
       <div className="relative flex flex-1 overflow-hidden">
         {mode === 'preview' && (
           <div
+            ref={previewScrollRef}
             className="h-full w-full overflow-y-auto overflow-x-hidden"
           >
             <div className="max-w-none p-8">
               <style>{getThemeStyles(theme)}</style>
               <article
+                ref={previewArticleRef}
                 className="markdown-body max-w-none"
                 dangerouslySetInnerHTML={{ __html: html }}
               />
@@ -1339,6 +1415,7 @@ export function MarkdownPreview() {
               <div className="max-w-none p-5">
                 <style>{getThemeStyles(theme)}</style>
                 <article
+                  ref={livePreviewArticleRef}
                   className="markdown-body max-w-none"
                   dangerouslySetInnerHTML={{ __html: html }}
                 />

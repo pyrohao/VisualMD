@@ -287,7 +287,10 @@ export function NodeEditPanel() {
     if (currFileId && !activeGitDocumentId) {
       persistMarkdownToActiveSource(latestContent, doc.fileName, { markSaved: true })
     } else if (activeGitDocumentId) {
-      persistMarkdownToActiveSource(latestContent, doc.fileName, { markSaved: false })
+      persistMarkdownToActiveSource(latestContent, doc.fileName, {
+        markSaved: true,
+        markDocumentSaved: true,
+      })
     } else if (editTemplateId) {
       // 保存模板内容
       useSidebarStore.setState((state) => ({
@@ -385,7 +388,10 @@ export function NodeEditPanel() {
     if (currFileId && !activeGitDocumentId) {
       persistMarkdownToActiveSource(latestContent, doc.fileName, { markSaved: true })
     } else if (activeGitDocumentId) {
-      persistMarkdownToActiveSource(latestContent, doc.fileName, { markSaved: false })
+      persistMarkdownToActiveSource(latestContent, doc.fileName, {
+        markSaved: true,
+        markDocumentSaved: true,
+      })
     } else if (editTemplateId) {
       useSidebarStore.setState((state) => ({
         templates: state.templates.map(t =>

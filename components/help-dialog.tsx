@@ -160,7 +160,7 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
               Visual MD
             </h1>
             <p className="text-sm" style={{ color: themeConfig.muted }}>
-              版本 1.0.0
+              版本 2.0.0
             </p>
           </div>
 

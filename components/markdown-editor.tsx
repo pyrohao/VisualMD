@@ -37,6 +37,11 @@ import { persistActiveTabSave, syncActiveDocumentToActiveSource } from '@/lib/ed
 import { inferGitFileKind, isGitBinaryFileKind } from '@/lib/git/file-kind'
 import { useHistoryStore } from '@/stores/historyStore'
 
+type OutlineJumpDetail = {
+  line: number
+  index?: number
+}
+
 /**
  * 默认示例Markdown内容（英文版）
  */
@@ -384,6 +389,7 @@ export function MarkdownEditor() {
   // 搜索对话框状态
   const [searchDialogOpen, setSearchDialogOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
+  const pendingOutlineJumpRef = useRef<OutlineJumpDetail | null>(null)
   const leftPanelMinWidthRef = useRef(LEFT_ICON_BAR_WIDTH + SIDEBAR_PANEL_MIN_WIDTH)
   const resizeHandleRef = useRef<HTMLDivElement | null>(null)
   const aiResizeHandleRef = useRef<HTMLDivElement | null>(null)
@@ -461,7 +467,7 @@ export function MarkdownEditor() {
       fileName: targetDraft.name,
       content: targetDraft.draftContent,
       savedContent: targetDraft.draftContent,
-      isModified: true,
+      isModified: targetDraft.isDirty || Boolean(targetDraft.isNew),
       isNew: false,
       fileId: targetDraft.documentId,
       sourceType: 'git',
@@ -540,6 +546,32 @@ export function MarkdownEditor() {
     setMounted(true)
     initTheme()
   }, [])
+
+  useEffect(() => {
+    const handleOutlineJump = (event: Event) => {
+      const detail = (event as CustomEvent<OutlineJumpDetail>).detail
+      if (!detail || typeof detail.line !== 'number' || !rightCollapsed) return
+
+      pendingOutlineJumpRef.current = detail
+      setRightCollapsed(false)
+    }
+
+    window.addEventListener('outline-jump', handleOutlineJump)
+    return () => {
+      window.removeEventListener('outline-jump', handleOutlineJump)
+    }
+  }, [rightCollapsed])
+
+  useEffect(() => {
+    if (rightCollapsed || !pendingOutlineJumpRef.current) return
+
+    const detail = pendingOutlineJumpRef.current
+    pendingOutlineJumpRef.current = null
+
+    window.requestAnimationFrame(() => {
+      window.dispatchEvent(new CustomEvent('outline-jump', { detail }))
+    })
+  }, [rightCollapsed])
 
 
 
