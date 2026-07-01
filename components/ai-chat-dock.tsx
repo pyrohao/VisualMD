@@ -15,6 +15,12 @@ import {
   Sparkles,
   X,
 } from 'lucide-react'
+import { unified } from 'unified'
+import remarkParse from 'remark-parse'
+import remarkGfm from 'remark-gfm'
+import remarkRehype from 'remark-rehype'
+import rehypeSanitize from 'rehype-sanitize'
+import rehypeStringify from 'rehype-stringify'
 import { useThemeStore } from '@/stores/themeStore'
 import { useTranslation } from '@/stores/languageStore'
 import { useSidebarStore } from '@/stores/sidebarStore'
@@ -56,6 +62,154 @@ function ActionIcon({
     >
       {icon}
     </Button>
+  )
+}
+
+function getChatMarkdownStyles(themeConfig: ReturnType<typeof useThemeStore.getState>['getThemeConfig']) {
+  return `
+    .ai-chat-markdown {
+      color: ${themeConfig.text};
+      line-height: 1.7;
+      word-break: break-word;
+    }
+    .ai-chat-markdown > *:first-child {
+      margin-top: 0;
+    }
+    .ai-chat-markdown > *:last-child {
+      margin-bottom: 0;
+    }
+    .ai-chat-markdown p,
+    .ai-chat-markdown ul,
+    .ai-chat-markdown ol,
+    .ai-chat-markdown pre,
+    .ai-chat-markdown blockquote,
+    .ai-chat-markdown table {
+      margin: 0.35rem 0;
+    }
+    .ai-chat-markdown h1,
+    .ai-chat-markdown h2,
+    .ai-chat-markdown h3,
+    .ai-chat-markdown h4,
+    .ai-chat-markdown h5,
+    .ai-chat-markdown h6 {
+      margin: 0.7rem 0 0.45rem;
+      color: ${themeConfig.heading};
+      font-weight: 700;
+      line-height: 1.35;
+    }
+    .ai-chat-markdown h1 { font-size: 1.05rem; }
+    .ai-chat-markdown h2 { font-size: 1rem; }
+    .ai-chat-markdown h3,
+    .ai-chat-markdown h4,
+    .ai-chat-markdown h5,
+    .ai-chat-markdown h6 { font-size: 0.95rem; }
+    .ai-chat-markdown code {
+      background-color: ${themeConfig.code};
+      color: ${themeConfig.heading};
+      border-radius: 0.35rem;
+      padding: 0.1rem 0.35rem;
+      font-size: 0.88em;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    .ai-chat-markdown pre {
+      overflow-x: auto;
+      border-radius: 0.85rem;
+      border: 1px solid ${themeConfig.border};
+      background-color: ${themeConfig.code};
+      padding: 0.75rem 0.9rem;
+    }
+    .ai-chat-markdown pre code {
+      background-color: transparent;
+      padding: 0;
+      color: ${themeConfig.text};
+    }
+    .ai-chat-markdown a {
+      color: ${themeConfig.link};
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    .ai-chat-markdown ul,
+    .ai-chat-markdown ol {
+      padding-left: 1.25rem;
+      list-style-position: outside;
+    }
+    .ai-chat-markdown ul {
+      list-style-type: disc;
+    }
+    .ai-chat-markdown ol {
+      list-style-type: decimal;
+    }
+    .ai-chat-markdown li + li {
+      margin-top: 0.18rem;
+    }
+    .ai-chat-markdown blockquote {
+      border-left: 3px solid ${themeConfig.primary};
+      padding-left: 0.8rem;
+      color: ${themeConfig.textMuted};
+      opacity: 0.92;
+    }
+    .ai-chat-markdown table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.95em;
+    }
+    .ai-chat-markdown th,
+    .ai-chat-markdown td {
+      border: 1px solid ${themeConfig.border};
+      padding: 0.45rem 0.55rem;
+      text-align: left;
+      vertical-align: top;
+    }
+    .ai-chat-markdown th {
+      background-color: ${themeConfig.code};
+      color: ${themeConfig.heading};
+    }
+  `
+}
+
+function ChatMarkdownMessage({
+  content,
+}: {
+  content: string
+}) {
+  const { getThemeConfig } = useThemeStore()
+  const themeConfig = getThemeConfig()
+  const [html, setHtml] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+
+    const renderMarkdown = async () => {
+      if (!content) {
+        setHtml('')
+        return
+      }
+
+      const result = await unified()
+        .use(remarkParse)
+        .use(remarkGfm)
+        .use(remarkRehype)
+        .use(rehypeSanitize)
+        .use(rehypeStringify)
+        .process(content)
+
+      if (!cancelled) {
+        setHtml(String(result))
+      }
+    }
+
+    void renderMarkdown()
+
+    return () => {
+      cancelled = true
+    }
+  }, [content])
+
+  return (
+    <>
+      <style>{getChatMarkdownStyles(themeConfig)}</style>
+      <div className="ai-chat-markdown min-w-0" dangerouslySetInnerHTML={{ __html: html }} />
+    </>
   )
 }
 
@@ -454,7 +608,10 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
                       style={{ justifyContent: isUser ? 'flex-end' : 'flex-start' }}
                     >
                       <div
-                        className="min-w-0 max-w-[88%] overflow-hidden rounded-2xl px-4 py-3 text-sm leading-6 break-words whitespace-pre-wrap"
+                        className={isUser
+                          ? 'min-w-0 max-w-[88%] overflow-hidden rounded-2xl px-4 py-3 text-sm leading-6 break-words whitespace-pre-wrap'
+                          : 'min-w-0 max-w-[88%] overflow-hidden rounded-2xl px-4 py-3 text-sm leading-6 break-words'
+                        }
                         style={{
                           backgroundColor: isUser ? `${themeConfig.primary}10` : themeConfig.card,
                           border: `1px solid ${isUser ? `${themeConfig.primary}22` : themeConfig.border}`,
@@ -477,7 +634,11 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
                             <Loader2 className="mt-1 h-4 w-4 shrink-0 animate-spin" style={{ color: themeConfig.primary }} />
                           )}
                           {(message.displayMessage || message.message) && (
-                            <span className="min-w-0 break-words">{message.displayMessage || message.message}</span>
+                            isUser ? (
+                              <span className="min-w-0 break-words">{message.displayMessage || message.message}</span>
+                            ) : (
+                              <ChatMarkdownMessage content={message.displayMessage || message.message} />
+                            )
                           )}
                         </div>
                         {!!message.error && (

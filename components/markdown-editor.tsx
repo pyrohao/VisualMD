@@ -23,7 +23,7 @@ import { toast } from '@/hooks/use-toast'
 import { useDocumentStore } from '@/stores/documentStore'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useGitStore } from '@/stores/gitStore'
-import { hasUnsavedChanges, saveDirtyEditors } from '@/stores/unsavedChangesStore'
+import { hasUnsavedChanges, saveDirtyEditors, useUnsavedChangesStore } from '@/stores/unsavedChangesStore'
 import { useTranslation } from '@/stores/languageStore'
 import { SIDEBAR_PANEL_MIN_WIDTH, useSidebarStore } from '@/stores/sidebarStore'
 import { useTabsStore } from '@/stores/tabsStore'
@@ -525,12 +525,6 @@ export function MarkdownEditor() {
     }
   }, [activeTabId, clearPendingCommit, commitCurrentFile, openGitDraftByDocumentId, t])
 
-  // 使用 ref 保存当前文件 ID，避免自动保存时的闭包问题
-  const currentFileIdRef = useRef(currentFileId)
-  useEffect(() => {
-    currentFileIdRef.current = currentFileId
-  }, [currentFileId])
-
   // 使用 ref 保存 templateEditMode，避免 handleSave 的闭包问题
   const templateEditModeRef = useRef(templateEditMode)
   useEffect(() => {
@@ -673,15 +667,34 @@ export function MarkdownEditor() {
   const handleSave = useCallback(async () => {
     await saveDirtyEditors()
 
-    // 获取最新的 markdown 内容（从 store 实时获取，避免闭包问题）
-    const { getCurrentMarkdown: getLatestMarkdown, markAsSaved } = useDocumentStore.getState()
-    const latestMarkdown = getLatestMarkdown()
-    
+    const getLatestState = () => {
+      const { activeTabId, tabs } = useTabsStore.getState()
+      const currentTab = tabs.find(t => t.id === activeTabId)
+      const { getCurrentMarkdown, getIsModified } = useDocumentStore.getState()
+
+      return {
+        currentTab,
+        latestMarkdown: getCurrentMarkdown(),
+        documentModified: getIsModified(),
+      }
+    }
+
+    let { currentTab, latestMarkdown, documentModified } = getLatestState()
+
+    if (currentTab?.sourceType === 'git' && currentTab.fileId && currentTab.isModified && !documentModified) {
+      const markdownPreviewSave = useUnsavedChangesStore.getState().editors['markdown-preview']?.save
+      if (markdownPreviewSave) {
+        await markdownPreviewSave()
+        const refreshedState = getLatestState()
+        currentTab = refreshedState.currentTab
+        latestMarkdown = refreshedState.latestMarkdown
+        documentModified = refreshedState.documentModified
+      }
+    }
+
     // 从 ref 获取最新的 templateEditMode（避免闭包问题）
     const currentTemplateEditMode = templateEditModeRef.current
-    const currentFileId = currentFileIdRef.current
-    const { activeTabId, tabs } = useTabsStore.getState()
-    const currentTab = tabs.find(t => t.id === activeTabId)
+    const { activeTabId } = useTabsStore.getState()
 
     if (currentTemplateEditMode.isActive && currentTemplateEditMode.templateId) {
       // 保存模板编辑到模板存储 - 直接使用 setState 避免闭包问题
@@ -718,22 +731,15 @@ export function MarkdownEditor() {
       return
     }
 
-    if (currentTab?.sourceType === 'git' && currentTab.fileId) {
-      const currentGitKind =
-        currentTab.gitMeta?.fileKind || (currentTab.gitMeta?.path ? inferGitFileKind(currentTab.gitMeta.path) : 'text')
-      if (isGitBinaryFileKind(currentGitKind)) {
-        return
-      }
-      persistActiveTabSave()
+    if (currentTab?.sourceType === 'git' && currentTab.fileId && !currentTab.isModified && !documentModified) {
       toast({
         title: t('git.draftSaved'),
       })
       return
     }
 
-    if (currentFileId) {
+    if (documentModified) {
       persistActiveTabSave()
-      markAsSaved()
     }
   }, [t]) // 空依赖数组，使用 ref 获取最新状态
 

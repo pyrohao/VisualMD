@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { discardActiveTabChanges, persistActiveTabSave } from '@/lib/editor-persistence'
+import { useDocumentStore } from './documentStore'
 import { useTabsStore } from './tabsStore'
 
 type EditorHandler = {
@@ -39,6 +40,26 @@ async function runPendingEditors(mode: 'save' | 'discard') {
     if (handler) {
       await handler()
     }
+  }
+}
+
+async function flushPendingMarkdownPreviewSaveIfNeeded() {
+  const activeTab = useTabsStore.getState().getActiveTab()
+  const documentStoreState = useDocumentStore.getState() as {
+    getIsModified?: () => boolean
+    document?: { isModified?: boolean } | null
+  }
+  const documentModified = typeof documentStoreState.getIsModified === 'function'
+    ? documentStoreState.getIsModified()
+    : Boolean(documentStoreState.document?.isModified)
+
+  if (!activeTab?.isModified || documentModified) {
+    return
+  }
+
+  const markdownPreviewSave = useUnsavedChangesStore.getState().editors['markdown-preview']?.save
+  if (markdownPreviewSave) {
+    await markdownPreviewSave()
   }
 }
 
@@ -102,9 +123,18 @@ export const useUnsavedChangesStore = create<UnsavedChangesStore>((set, get) => 
 
   confirmSaveAndContinue: async () => {
     const action = get().pendingAction
+    const documentStoreState = useDocumentStore.getState() as {
+      getIsModified?: () => boolean
+      document?: { isModified?: boolean } | null
+    }
 
-    await runPendingEditors('save')
-    persistActiveTabSave()
+    await saveDirtyEditors()
+    const documentModified = typeof documentStoreState.getIsModified === 'function'
+      ? documentStoreState.getIsModified()
+      : Boolean(documentStoreState.document?.isModified)
+    if (documentModified) {
+      persistActiveTabSave()
+    }
 
     set({
       dialogOpen: false,
@@ -156,6 +186,7 @@ export function hasUnsavedChanges() {
 
 export async function saveDirtyEditors() {
   await runPendingEditors('save')
+  await flushPendingMarkdownPreviewSaveIfNeeded()
 }
 
 export async function discardDirtyEditors() {

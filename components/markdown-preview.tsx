@@ -21,6 +21,7 @@ import { useTranslation } from '@/stores/languageStore'
 import { useAiChatStore } from '@/stores/aiChatStore'
 import { getGitProviderClient } from '@/lib/git/providers'
 import { inferGitFileKind, inferGitFileMimeType, isGitBinaryFileKind } from '@/lib/git/file-kind'
+import { persistMarkdownToActiveSource } from '@/lib/editor-persistence'
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
@@ -59,6 +60,10 @@ function isLivePreviewLayout(value: string | null): value is LivePreviewLayout {
 
 function isPreviewMode(value: string | null): value is PreviewMode {
   return value === 'preview' || value === 'edit' || value === 'live'
+}
+
+function normalizeEditorComparableMarkdown(value: string) {
+  return value.replace(/\r\n/g, '\n')
 }
 
 /**
@@ -411,7 +416,7 @@ function GitBinaryPreview({
 }
 
 export function MarkdownPreview() {
-  const { document, updateFromMarkdown } = useDocumentStore()
+  const { document } = useDocumentStore()
   const externalRevision = useDocumentStore((state) => state.externalRevision)
   const addEditorSelectionReference = useAiChatStore((state) => state.addEditorSelectionReference)
   const selectionCandidate = useAiChatStore((state) => state.selectionCandidate)
@@ -447,6 +452,7 @@ export function MarkdownPreview() {
   const isSyncingLiveScrollRef = useRef(false)
   const previousDocumentKeyRef = useRef<string>('')
   const skipLiveSyncRef = useRef(false)
+  const isPersistingDraftRef = useRef(false)
   const gitImageCacheRef = useRef<Map<string, string>>(new Map())
   const editContentRef = useRef(editContent)
   const persistedEditContentRef = useRef(persistedEditContent)
@@ -491,7 +497,9 @@ export function MarkdownPreview() {
   const latestExternalRevisionRef = useRef(externalRevision)
   const isEditingMode = mode === 'edit' || mode === 'live'
   const renderMarkdown = mode === 'live' ? editContent : markdown
-  const hasPendingEditorChanges = isEditingMode && editContent !== persistedEditContent
+  const hasPendingEditorChanges = isEditingMode && (
+    normalizeEditorComparableMarkdown(editContent) !== normalizeEditorComparableMarkdown(persistedEditContent)
+  )
   const documentKey = `${activeTabId || ''}\u0000${document?.fileId || ''}\u0000${document?.fileName || ''}`
   const activeReferences = useMemo(() => {
     if (!currentConversationId || selectedReferenceIds.length === 0) {
@@ -509,8 +517,25 @@ export function MarkdownPreview() {
     persistedEditContentRef.current = persistedEditContent
   }, [editContent, persistedEditContent])
 
+  useEffect(() => {
+    if (!selectionCandidate || !isEditingMode) {
+      return
+    }
+
+    const nextSelectedText = editContent.slice(selectionCandidate.startOffset, selectionCandidate.endOffset)
+    if (nextSelectedText === selectionCandidate.expectedText) {
+      return
+    }
+
+    clearSelectionCandidate()
+  }, [clearSelectionCandidate, editContent, isEditingMode, selectionCandidate])
+
   // 当 markdown 变化时，更新编辑内容
   useEffect(() => {
+    if (isPersistingDraftRef.current) {
+      return
+    }
+
     if (externalRevision !== latestExternalRevisionRef.current) {
       latestExternalRevisionRef.current = externalRevision
       latestMarkdownRef.current = markdown
@@ -543,7 +568,7 @@ export function MarkdownPreview() {
     clearSelectionCandidate()
   }, [clearSelectionCandidate, documentKey])
 
-  const syncDraftToDocument = useCallback((nextMarkdown: string) => {
+  const commitDraftToDocument = useCallback((nextMarkdown: string) => {
     const documentStore = useDocumentStore.getState()
     const currentMarkdown = documentStore.getCurrentMarkdown()
 
@@ -559,14 +584,14 @@ export function MarkdownPreview() {
     const activeTab = useTabsStore.getState().getActiveTab()
     const editingTemplateId = useSidebarStore.getState().editingTemplateId
 
-    if (!document || !nextMarkdown || !syncDraftToDocument(nextMarkdown)) {
+    if (!document || !commitDraftToDocument(nextMarkdown)) {
       return false
     }
 
+    isPersistingDraftRef.current = true
     const documentStore = useDocumentStore.getState()
     const latestMarkdown = documentStore.getCurrentMarkdown()
     const latestFileName = documentStore.document?.fileName
-    const tabsStore = useTabsStore.getState()
 
     if (editingTemplateId) {
       useSidebarStore.setState((state) => ({
@@ -595,40 +620,48 @@ export function MarkdownPreview() {
       }
 
       documentStore.markAsSaved()
+      editContentRef.current = latestMarkdown
+      persistedEditContentRef.current = latestMarkdown
+      setEditContent(latestMarkdown)
       setPersistedEditContent(latestMarkdown)
+      window.requestAnimationFrame(() => {
+        isPersistingDraftRef.current = false
+      })
       useUnsavedChangesStore.getState().setEditorDirty('markdown-preview', false)
       return true
     }
 
     if (activeTab?.sourceType === 'git' && activeTab.fileId) {
-      useGitStore.getState().updateDraftContent(activeTab.fileId, latestMarkdown)
-      tabsStore.updateTabContent(activeTab.id, latestMarkdown)
-      tabsStore.markTabAsModified(activeTab.id, true)
-      documentStore.markAsSaved()
+      persistMarkdownToActiveSource(latestMarkdown, latestFileName, { markSaved: true })
+      editContentRef.current = latestMarkdown
+      persistedEditContentRef.current = latestMarkdown
+      setEditContent(latestMarkdown)
       setPersistedEditContent(latestMarkdown)
+      window.requestAnimationFrame(() => {
+        isPersistingDraftRef.current = false
+      })
       useUnsavedChangesStore.getState().setEditorDirty('markdown-preview', false)
       return true
     }
 
     if (activeTab?.fileId) {
-      const fileStore = useFileSystemStore.getState()
-      const currentFile = fileStore.files.find((item) => item.id === activeTab.fileId)
-
-      if (latestFileName && currentFile && currentFile.name !== latestFileName) {
-        fileStore.renameFile(activeTab.fileId, latestFileName)
-      }
-
-      fileStore.saveFileContent(activeTab.fileId, latestMarkdown)
-      tabsStore.updateTabContent(activeTab.id, latestMarkdown)
-      tabsStore.markTabAsSaved(activeTab.id, latestFileName)
-      documentStore.markAsSaved()
+      persistMarkdownToActiveSource(latestMarkdown, latestFileName, { markSaved: true })
+      editContentRef.current = latestMarkdown
+      persistedEditContentRef.current = latestMarkdown
+      setEditContent(latestMarkdown)
       setPersistedEditContent(latestMarkdown)
+      window.requestAnimationFrame(() => {
+        isPersistingDraftRef.current = false
+      })
       useUnsavedChangesStore.getState().setEditorDirty('markdown-preview', false)
       return true
     }
 
+    window.requestAnimationFrame(() => {
+      isPersistingDraftRef.current = false
+    })
     return false
-  }, [document, syncDraftToDocument])
+  }, [commitDraftToDocument, document])
 
   const gitAssets = useMemo(
     () => collectGitAssetMap(stagedChanges, pendingAssetChanges),
@@ -792,6 +825,10 @@ export function MarkdownPreview() {
       return
     }
 
+    if (activeTab?.sourceType === 'git') {
+      return
+    }
+
     autoSaveTimeoutRef.current = setTimeout(() => {
       persistEditorDraft()
     }, 800)
@@ -802,7 +839,7 @@ export function MarkdownPreview() {
         autoSaveTimeoutRef.current = null
       }
     }
-  }, [editContent, hasPendingEditorChanges, persistEditorDraft])
+  }, [activeTab?.sourceType, editContent, hasPendingEditorChanges, persistEditorDraft])
 
   const handleAddTextareaSelection = useCallback((textarea: HTMLTextAreaElement | null, delay = 0) => {
     if (!textarea) return
@@ -815,9 +852,6 @@ export function MarkdownPreview() {
       if (selectionStart === selectionEnd) return
       if (sourceMarkdown !== editContent) {
         setEditContent(sourceMarkdown)
-      }
-      if (sourceMarkdown !== useDocumentStore.getState().getCurrentMarkdown()) {
-        updateFromMarkdown(sourceMarkdown)
       }
       void addEditorSelectionReference(
         selectionStart,
@@ -840,7 +874,7 @@ export function MarkdownPreview() {
     }
 
     submitSelection()
-  }, [addEditorSelectionReference, editContent, updateFromMarkdown])
+  }, [addEditorSelectionReference, editContent])
 
   const bindTextareaSelection = useCallback(() => ({
     onSelect: (event: React.SyntheticEvent<HTMLTextAreaElement>) => {
@@ -899,10 +933,6 @@ export function MarkdownPreview() {
     if (!result) return
 
     setEditContent(result.nextValue)
-    if (mode === 'live') {
-      updateFromMarkdown(result.nextValue)
-    }
-
     if (isGitTab) {
       persistGitDraftAfterPaste(result.nextValue)
     }
@@ -913,7 +943,7 @@ export function MarkdownPreview() {
       textarea.focus()
       textarea.setSelectionRange(result.selectionStart, result.selectionEnd)
     })
-  }, [mode, persistGitDraftAfterPaste, updateFromMarkdown])
+  }, [persistGitDraftAfterPaste])
 
   const liveLabels =
     currentLanguage === 'zh'
@@ -973,19 +1003,8 @@ export function MarkdownPreview() {
     if (mode !== 'live') return
     if (skipLiveSyncRef.current) {
       skipLiveSyncRef.current = false
-      return
     }
-
-    const timer = setTimeout(() => {
-      if (editContent !== markdown) {
-        updateFromMarkdown(editContent)
-      }
-    }, 180)
-
-    return () => {
-      clearTimeout(timer)
-    }
-  }, [editContent, markdown, mode, updateFromMarkdown])
+  }, [mode])
 
   useEffect(() => {
     if (!selectionCandidate) {
