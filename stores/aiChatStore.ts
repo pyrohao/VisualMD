@@ -71,6 +71,12 @@ type GeneratedDocumentSession = {
   updatedAt: number
 }
 
+type GeneratedDocumentPreviewSyncState = {
+  timeoutId: ReturnType<typeof setTimeout> | null
+  pendingContent: string | null
+  lastAppliedAt: number
+}
+
 type UiConversationRecord = AgentConversation & {
   documentId: string | null
   tabId: string | null
@@ -110,6 +116,7 @@ interface AiChatStore {
   selectionCandidate: AiDocReferenceSnapshot | null
   draftInput: string
   selectedReferenceIds: string[]
+  sendingConversationIds: string[]
   sendingStatus: string | null
   sendingConversationId: string | null
   chatTemperature: number
@@ -147,7 +154,32 @@ interface AiChatStore {
   syncToolUndoStackWithMarkdown: (markdown: string) => void
 }
 
-let activeAbortController: AbortController | null = null
+const abortControllerByConversation = new Map<string, AbortController>()
+const activeRunIdByConversation = new Map<string, string>()
+const GENERATED_DOCUMENT_PREVIEW_THROTTLE_MS = 1500
+
+function beginConversationRun(conversationId: string) {
+  abortControllerByConversation.get(conversationId)?.abort()
+  const controller = new AbortController()
+  const runId = nanoid()
+  abortControllerByConversation.set(conversationId, controller)
+  activeRunIdByConversation.set(conversationId, runId)
+  return { controller, runId }
+}
+
+function isConversationRunActive(conversationId: string, runId: string) {
+  return activeRunIdByConversation.get(conversationId) === runId
+}
+
+function finishConversationRun(conversationId: string, runId: string) {
+  if (!isConversationRunActive(conversationId, runId)) {
+    return false
+  }
+
+  activeRunIdByConversation.delete(conversationId)
+  abortControllerByConversation.delete(conversationId)
+  return true
+}
 
 function isGitCreationAvailable() {
   const gitState = useGitStore.getState()
@@ -443,6 +475,121 @@ async function createGeneratedLocalTempFile(fileName: string, content: string) {
   return { fileId, tabId, fileName: normalizedName }
 }
 
+function syncGeneratedDocumentPreview(session: Pick<GeneratedDocumentSession, 'fileName' | 'tempFileId' | 'tempTabId'>, content: string) {
+  if (!session.tempFileId || !session.tempTabId) {
+    return false
+  }
+
+  const tabsStore = useTabsStore.getState()
+  const documentStore = useDocumentStore.getState()
+  const activeTab = tabsStore.getActiveTab()
+  if (activeTab?.id !== session.tempTabId) {
+    return false
+  }
+
+  if (documentStore.document?.fileId !== session.tempFileId) {
+    documentStore.loadDocument(content, session.fileName, session.tempFileId)
+    return true
+  }
+
+  return documentStore.applyExternalMarkdown(content)
+}
+
+function cancelGeneratedDocumentPreviewSync(
+  previewSyncStateByToolCall: Map<string, GeneratedDocumentPreviewSyncState>,
+  toolCallId: string
+) {
+  const syncState = previewSyncStateByToolCall.get(toolCallId)
+  if (!syncState) return
+
+  if (syncState.timeoutId) {
+    clearTimeout(syncState.timeoutId)
+  }
+
+  previewSyncStateByToolCall.delete(toolCallId)
+}
+
+function scheduleGeneratedDocumentPreviewSync(args: {
+  previewSyncStateByToolCall: Map<string, GeneratedDocumentPreviewSyncState>
+  generatedDocuments: Map<string, GeneratedDocumentSession>
+  toolCallId: string
+  session: GeneratedDocumentSession
+  content: string
+}) {
+  if (!args.session.tempFileId || !args.session.tempTabId) {
+    return
+  }
+
+  const existingState = args.previewSyncStateByToolCall.get(args.toolCallId) || {
+    timeoutId: null,
+    pendingContent: null,
+    lastAppliedAt: 0,
+  }
+  const now = Date.now()
+  const elapsed = now - existingState.lastAppliedAt
+
+  if (!existingState.timeoutId && (existingState.lastAppliedAt === 0 || elapsed >= GENERATED_DOCUMENT_PREVIEW_THROTTLE_MS)) {
+    const applied = syncGeneratedDocumentPreview(args.session, args.content)
+    args.previewSyncStateByToolCall.set(args.toolCallId, {
+      timeoutId: null,
+      pendingContent: null,
+      lastAppliedAt: applied ? now : existingState.lastAppliedAt,
+    })
+    return
+  }
+
+  if (existingState.timeoutId) {
+    clearTimeout(existingState.timeoutId)
+  }
+
+  const waitMs = Math.max(0, GENERATED_DOCUMENT_PREVIEW_THROTTLE_MS - elapsed)
+  const nextState: GeneratedDocumentPreviewSyncState = {
+    timeoutId: null,
+    pendingContent: args.content,
+    lastAppliedAt: existingState.lastAppliedAt,
+  }
+
+  nextState.timeoutId = setTimeout(() => {
+    const latestState = args.previewSyncStateByToolCall.get(args.toolCallId)
+    const latestSession = args.generatedDocuments.get(args.toolCallId)
+    if (!latestState || !latestSession || latestState.pendingContent == null) {
+      args.previewSyncStateByToolCall.delete(args.toolCallId)
+      return
+    }
+
+    const applied = syncGeneratedDocumentPreview(latestSession, latestState.pendingContent)
+    args.previewSyncStateByToolCall.set(args.toolCallId, {
+      timeoutId: null,
+      pendingContent: null,
+      lastAppliedAt: applied ? Date.now() : latestState.lastAppliedAt,
+    })
+  }, waitMs)
+
+  args.previewSyncStateByToolCall.set(args.toolCallId, nextState)
+}
+
+function flushGeneratedDocumentPreviewSync(args: {
+  previewSyncStateByToolCall: Map<string, GeneratedDocumentPreviewSyncState>
+  toolCallId: string
+  session: GeneratedDocumentSession
+  content?: string
+}) {
+  const existingState = args.previewSyncStateByToolCall.get(args.toolCallId)
+  const nextContent = args.content ?? existingState?.pendingContent ?? args.session.content
+
+  if (existingState?.timeoutId) {
+    clearTimeout(existingState.timeoutId)
+  }
+
+  args.previewSyncStateByToolCall.delete(args.toolCallId)
+
+  if (nextContent == null) {
+    return false
+  }
+
+  return syncGeneratedDocumentPreview(args.session, nextContent)
+}
+
 async function syncGeneratedDocumentToTempFile(args: {
   conversationId: string
   toolCallId: string
@@ -452,12 +599,10 @@ async function syncGeneratedDocumentToTempFile(args: {
   tempTabId?: string | null
 }) {
   const tabsStore = useTabsStore.getState()
-  const documentStore = useDocumentStore.getState()
-  const activeTab = tabsStore.getActiveTab()
-  const shouldSyncPreview = activeTab?.id === args.tempTabId
 
   let tempFileId = args.tempFileId || null
   let tempTabId = args.tempTabId || null
+  let nextFileName = args.fileName
 
   if (!tempFileId || !tempTabId) {
     const created = await createGeneratedLocalTempFile(args.fileName, args.content)
@@ -466,17 +611,14 @@ async function syncGeneratedDocumentToTempFile(args: {
     }
     tempFileId = created.fileId
     tempTabId = created.tabId
+    nextFileName = created.fileName
   } else {
     useFileSystemStore.getState().saveFile(tempFileId, args.content)
     tabsStore.updateTabContent(tempTabId, args.content)
     tabsStore.markTabAsModified(tempTabId, true)
   }
 
-  if (shouldSyncPreview || activeTab?.id === tempTabId) {
-    documentStore.applyExternalMarkdown(args.content)
-  }
-
-  return { tempFileId, tempTabId, fileName: args.fileName, content: args.content }
+  return { tempFileId, tempTabId, fileName: nextFileName, content: args.content }
 }
 
 async function finalizeGeneratedDocumentAsLocal(session: GeneratedDocumentSession) {
@@ -579,6 +721,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
   selectionCandidate: null,
   draftInput: '',
   selectedReferenceIds: [],
+  sendingConversationIds: [],
   sendingStatus: null,
   sendingConversationId: null,
   chatTemperature: 0.7,
@@ -659,13 +802,13 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       currentConversationId: conversationId,
       messagesByConversation: {
         ...state.messagesByConversation,
-        [conversationId]: state.sendingConversationId === conversationId && state.messagesByConversation[conversationId]?.length
+        [conversationId]: state.sendingConversationIds.includes(conversationId) && state.messagesByConversation[conversationId]?.length
           ? state.messagesByConversation[conversationId]
           : messages,
       },
       visibleMessagesByConversation: {
         ...state.visibleMessagesByConversation,
-        [conversationId]: state.sendingConversationId === conversationId && state.visibleMessagesByConversation[conversationId]?.length
+        [conversationId]: state.sendingConversationIds.includes(conversationId) && state.visibleMessagesByConversation[conversationId]?.length
           ? state.visibleMessagesByConversation[conversationId]
           : getVisibleMessages(messages),
       },
@@ -947,8 +1090,10 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
 
   sendMessage: async () => {
     let conversationId = get().currentConversationId
+    let runId: string | null = null
     let messages: AgentMessage[] = []
     const generatedDocuments = new Map<string, GeneratedDocumentSession>()
+    const generatedDocumentPreviewSyncStateByToolCall = new Map<string, GeneratedDocumentPreviewSyncState>()
 
     try {
       await saveDirtyEditors()
@@ -974,6 +1119,11 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       conversationId = conversationId || (await get().createConversation())
       if (!conversationId) return
 
+      const runContext = beginConversationRun(conversationId)
+      runId = runContext.runId
+      const isCurrentRun = () => isConversationRunActive(conversationId as string, runId as string)
+
+      await removeGeneratedDocumentSession(conversationId)
       set((state) => {
         const nextSessions = { ...state.generatedDocumentSessionsByConversation }
         delete nextSessions[conversationId]
@@ -1024,6 +1174,9 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         selectedReferenceIds: [],
         selectionCandidate: null,
         isSending: true,
+        sendingConversationIds: state.sendingConversationIds.includes(conversationId)
+          ? state.sendingConversationIds
+          : [...state.sendingConversationIds, conversationId],
         sendingConversationId: conversationId,
         sendingStatus: '正在连接 AI...',
         error: null,
@@ -1041,7 +1194,6 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         },
       }))
 
-      activeAbortController = new AbortController()
       const result = await runAgentReActLoop({
         providerConfig: {
           ...providerConfig,
@@ -1054,18 +1206,18 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         tools: createDefaultAgentTools(),
         markdown: documentStore.getCurrentMarkdown(),
         maxTurns: 5,
-        signal: activeAbortController.signal,
+        signal: runContext.controller.signal,
         onGeneratedDocumentEvent: async (event) => {
+          if (!isCurrentRun()) return
+
           if (event.type === 'start') {
-            const created = await createGeneratedLocalTempFile(event.fileName, '')
-            if (!created) return
             const startedSession: GeneratedDocumentSession = {
               conversationId,
               toolCallId: event.toolCallId,
-              fileName: created.fileName,
+              fileName: normalizeGeneratedFileName(event.fileName),
               content: '',
-              tempFileId: created.fileId,
-              tempTabId: created.tabId,
+              tempFileId: null,
+              tempTabId: null,
               gitTargetDirectory: isGitCreationAvailable() ? getGitTargetDirectory() : null,
               status: 'streaming',
               error: null,
@@ -1074,6 +1226,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
             }
             generatedDocuments.set(event.toolCallId, startedSession)
             await persistGeneratedDocumentSession(startedSession)
+            if (!isCurrentRun()) return
             set({ sendingStatus: '正在生成新文档...' })
             return
           }
@@ -1082,6 +1235,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
           if (!session) return
 
           if (event.type === 'delta') {
+            const didCreateTempDocument = !session.tempFileId || !session.tempTabId
             const nextSession = await syncGeneratedDocumentToTempFile({
               conversationId,
               toolCallId: event.toolCallId,
@@ -1090,25 +1244,38 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
               tempFileId: session.tempFileId,
               tempTabId: session.tempTabId,
             })
-            generatedDocuments.set(event.toolCallId, {
+            const streamedSession: GeneratedDocumentSession = {
               ...session,
               ...nextSession,
               content: event.content,
               status: 'streaming',
               updatedAt: Date.now(),
-            })
-            await persistGeneratedDocumentSession({
-              ...session,
-              ...nextSession,
-              content: event.content,
-              status: 'streaming',
-              updatedAt: Date.now(),
-            })
+            }
+            if (!isCurrentRun()) return
+            generatedDocuments.set(event.toolCallId, streamedSession)
+            if (didCreateTempDocument) {
+              generatedDocumentPreviewSyncStateByToolCall.set(event.toolCallId, {
+                timeoutId: null,
+                pendingContent: null,
+                lastAppliedAt: Date.now(),
+              })
+            } else {
+              scheduleGeneratedDocumentPreviewSync({
+                previewSyncStateByToolCall: generatedDocumentPreviewSyncStateByToolCall,
+                generatedDocuments,
+                toolCallId: event.toolCallId,
+                session: streamedSession,
+                content: event.content,
+              })
+            }
+            await persistGeneratedDocumentSession(streamedSession)
+            if (!isCurrentRun()) return
             set({ sendingStatus: '正在生成新文档...' })
             return
           }
 
           if (event.type === 'error') {
+            cancelGeneratedDocumentPreviewSync(generatedDocumentPreviewSyncStateByToolCall, event.toolCallId)
             const failedSession: GeneratedDocumentSession = {
               ...session,
               content: session.content || '',
@@ -1116,13 +1283,19 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
               error: event.error,
               updatedAt: Date.now(),
             }
+            if (!isCurrentRun()) return
             generatedDocuments.set(event.toolCallId, failedSession)
             await finalizeGeneratedDocumentAsLocal(failedSession)
             await persistGeneratedDocumentSession(failedSession)
+            if (!isCurrentRun()) return
             set((state) => {
               const nextSessions = { ...state.generatedDocumentSessionsByConversation }
               delete nextSessions[conversationId]
+              const nextSendingConversationIds = state.sendingConversationIds.filter((id) => id !== conversationId)
               return {
+                isSending: nextSendingConversationIds.length > 0,
+                sendingConversationIds: nextSendingConversationIds,
+                sendingConversationId: nextSendingConversationIds.at(-1) || null,
                 sendingStatus: null,
                 generatedDocumentSessionsByConversation: nextSessions,
               }
@@ -1130,6 +1303,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
             return
           }
 
+          const didCreateTempDocument = !session.tempFileId || !session.tempTabId
           const finalSession = await syncGeneratedDocumentToTempFile({
             conversationId,
             toolCallId: event.toolCallId,
@@ -1146,9 +1320,21 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
             error: null,
             updatedAt: Date.now(),
           }
+          if (!isCurrentRun()) return
           generatedDocuments.set(event.toolCallId, nextSession)
+          if (didCreateTempDocument) {
+            cancelGeneratedDocumentPreviewSync(generatedDocumentPreviewSyncStateByToolCall, event.toolCallId)
+          } else {
+            flushGeneratedDocumentPreviewSync({
+              previewSyncStateByToolCall: generatedDocumentPreviewSyncStateByToolCall,
+              toolCallId: event.toolCallId,
+              session: nextSession,
+              content: event.content,
+            })
+          }
           await finalizeGeneratedDocumentAsLocal(nextSession)
           await persistGeneratedDocumentSession(nextSession)
+          if (!isCurrentRun()) return
 
           if (isGitCreationAvailable()) {
             set({
@@ -1172,6 +1358,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
           })
         },
         onAssistantTextDelta: (text) => {
+          if (!isCurrentRun()) return
           set((state) => ({
             sendingStatus: 'AI 正在回复...',
             visibleMessagesByConversation: {
@@ -1189,13 +1376,20 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         },
       })
 
+      if (!isCurrentRun()) {
+        return
+      }
+
       const newMessages = result.messages.slice(runtimeMessages.length)
       await saveAgentMessages(newMessages)
+      if (!isCurrentRun()) {
+        return
+      }
       const nextMessages = [...messages, ...newMessages]
 
-      const appliedDocumentChanged = result.appliedMarkdown !== documentStore.getCurrentMarkdown()
+      const appliedDocumentChanged = result.appliedMarkdown !== result.previousMarkdown
       let toolUndoRecords: ToolUndoRecord[] = []
-      if (appliedDocumentChanged) {
+      if (appliedDocumentChanged && result.appliedTools.length > 0) {
         set({ sendingStatus: '正在应用工具结果...' })
         useHistoryStore.getState().addHistory({
           type: 'batch',
@@ -1237,8 +1431,9 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       }
 
       set((state) => ({
-        isSending: false,
-        sendingConversationId: null,
+        isSending: state.sendingConversationIds.filter((id) => id !== conversationId).length > 0,
+        sendingConversationIds: state.sendingConversationIds.filter((id) => id !== conversationId),
+        sendingConversationId: state.sendingConversationIds.filter((id) => id !== conversationId).at(-1) || null,
         sendingStatus: null,
         messagesByConversation: {
           ...state.messagesByConversation,
@@ -1256,8 +1451,13 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
           ],
         },
       }))
-      activeAbortController = null
     } catch (error) {
+      generatedDocumentPreviewSyncStateByToolCall.forEach((_, toolCallId) => {
+        cancelGeneratedDocumentPreviewSync(generatedDocumentPreviewSyncStateByToolCall, toolCallId)
+      })
+      if (!conversationId || !runId || !isConversationRunActive(conversationId, runId)) {
+        return
+      }
       const failedConversationId = conversationId || get().currentConversationId || ''
       const failedMessage = createFailedAssistantMessage(failedConversationId, error)
       if (failedConversationId) {
@@ -1265,8 +1465,9 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       }
       const nextMessages = [...messages, failedMessage]
       set((state) => ({
-        isSending: false,
-        sendingConversationId: null,
+        isSending: state.sendingConversationIds.filter((id) => id !== failedConversationId).length > 0,
+        sendingConversationIds: state.sendingConversationIds.filter((id) => id !== failedConversationId),
+        sendingConversationId: state.sendingConversationIds.filter((id) => id !== failedConversationId).at(-1) || null,
         sendingStatus: null,
         error: failedMessage.error || 'AI request failed',
         messagesByConversation: {
@@ -1278,14 +1479,36 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
           ...(failedConversationId ? { [failedConversationId]: getVisibleMessages(nextMessages) } : {}),
         },
       }))
-      activeAbortController = null
+    } finally {
+      generatedDocumentPreviewSyncStateByToolCall.forEach((_, toolCallId) => {
+        cancelGeneratedDocumentPreviewSync(generatedDocumentPreviewSyncStateByToolCall, toolCallId)
+      })
+      if (conversationId && runId) {
+        finishConversationRun(conversationId, runId)
+      }
     }
   },
 
   stopSending: () => {
-    activeAbortController?.abort()
-    activeAbortController = null
-    set({ isSending: false, sendingConversationId: null, sendingStatus: null, error: '已中断 AI 请求。' })
+    const targetConversationId = get().currentConversationId || get().sendingConversationId
+    if (targetConversationId) {
+      abortControllerByConversation.get(targetConversationId)?.abort()
+      abortControllerByConversation.delete(targetConversationId)
+      activeRunIdByConversation.delete(targetConversationId)
+    }
+    set((state) => {
+      const nextSendingConversationIds = targetConversationId
+        ? state.sendingConversationIds.filter((id) => id !== targetConversationId)
+        : state.sendingConversationIds
+
+      return {
+        isSending: nextSendingConversationIds.length > 0,
+        sendingConversationIds: nextSendingConversationIds,
+        sendingConversationId: nextSendingConversationIds.at(-1) || null,
+        sendingStatus: null,
+        error: '已中断 AI 请求。',
+      }
+    })
   },
 
   undoLastToolApply: async () => {

@@ -86,7 +86,7 @@ export const defaultAgentToolDefinitions: AgentToolDefinition[] = [
   },
   {
     name: 'generate_document_tool',
-    description: 'Create and save a new Markdown file only when the user explicitly asks for a new document or file.',
+    description: 'Create and save a new Markdown file only when the user explicitly asks for a new document or file. In a normal single-file request, call this tool at most once, then reply with a short confirmation instead of generating another file.',
     argumentsSchema: {
       type: 'object',
       description: 'Arguments for generating a brand-new Markdown document.',
@@ -98,7 +98,7 @@ export const defaultAgentToolDefinitions: AgentToolDefinition[] = [
         },
         prompt: {
           type: 'string',
-          description: 'Required. The document-generation instruction used to create the new file content. Use this tool only for brand-new files, not for normal chat or edits to the current document.',
+          description: 'Required. The document-generation instruction used to create the new file content. Use this tool only for brand-new files, not for normal chat or edits to the current document. After one successful generation, do not call this tool again unless the user explicitly asked for multiple separate files.',
         },
       },
       required: ['fileName', 'prompt'],
@@ -111,27 +111,43 @@ export async function executeApplyTool(args: Record<string, unknown>, context: A
   const newString = typeof args.newString === 'string' ? args.newString : ''
 
   if (!oldString) {
-    return { ok: false, message: 'oldString is required', metadata: { matchCount: 0 } }
+    return {
+      ok: false,
+      message: 'apply_tool failed: oldString is required. Ask the model to provide an exact source fragment before retrying apply_tool.',
+      metadata: {
+        matchCount: 0,
+        nextStep: 'Provide exact oldString and retry apply_tool.',
+      },
+    }
   }
 
   const matchCount = context.markdown.split(oldString).length - 1
   if (matchCount !== 1) {
     return {
       ok: false,
-      message: matchCount === 0 ? 'oldString not found' : 'oldString matched multiple times',
+      message: matchCount === 0
+        ? 'apply_tool failed: oldString not found. Use semantic_tool to find the closest matching paragraph or choose a different exact fragment.'
+        : 'apply_tool failed: oldString matched multiple times. Narrow the target fragment and retry apply_tool with a unique exact match.',
       metadata: {
         matchCount,
         failedText: oldString,
         contextPreview: context.markdown.slice(0, 400),
+        nextStep: matchCount === 0
+          ? 'Use semantic_tool or choose a different exact fragment.'
+          : 'Retry apply_tool with a smaller unique exact fragment.',
       },
     }
   }
 
   return {
     ok: true,
-    message: 'apply_tool succeeded',
+    message: 'apply_tool succeeded. The current document markdown has been updated. Do not repeat the same edit. Next, briefly confirm the change to the user or continue with the next requested task.',
     nextMarkdown: context.markdown.replace(oldString, newString),
-    metadata: { matchCount },
+    metadata: {
+      matchCount,
+      nextStep: 'Briefly confirm the edit or continue with the next user-requested task.',
+      shouldReplyToUser: true,
+    },
   }
 }
 
@@ -151,20 +167,24 @@ export async function executeSemanticTool(args: Record<string, unknown>, context
 
   const best = ranked[0]
   if (!best || best.similarity <= 0) {
-    return { ok: false, message: 'No semantic candidate found' }
+    return {
+      ok: false,
+      message: 'semantic_tool failed: no semantic candidate found. Ask the user for a more specific target or explain that the intended paragraph could not be located.',
+      metadata: {
+        nextStep: 'Ask for clarification or explain that no suitable target was found.',
+      },
+    }
   }
 
   return {
     ok: true,
-    message: JSON.stringify({
+    message: 'semantic_tool succeeded. A likely candidate paragraph was found. Use that candidate as oldString in apply_tool if the user still wants an edit.',
+    metadata: {
       query,
       nearText,
       candidate: best.text,
       candidates: ranked.slice(0, 3).map((item) => item.text),
-    }),
-    metadata: {
-      candidate: best.text,
-      candidates: ranked.slice(0, 3).map((item) => item.text),
+      nextStep: 'Use the candidate as oldString in apply_tool if it matches the user intent.',
     },
   }
 }
@@ -174,11 +194,23 @@ export async function executeGenerateDocumentTool(args: Record<string, unknown>,
   const fileName = typeof args.fileName === 'string' ? args.fileName.trim() : ''
 
   if (!prompt) {
-    return { ok: false, message: 'prompt is required' }
+    return {
+      ok: false,
+      message: 'generate_document_tool failed: prompt is required. Provide a concrete document-generation prompt before retrying.',
+      metadata: {
+        nextStep: 'Provide a concrete document-generation prompt and retry.',
+      },
+    }
   }
 
   if (!context.providerConfig) {
-    return { ok: false, message: 'providerConfig is required' }
+    return {
+      ok: false,
+      message: 'generate_document_tool failed: providerConfig is required. The model service is not configured, so no file was created.',
+      metadata: {
+        nextStep: 'Explain that document generation is unavailable until the provider is configured.',
+      },
+    }
   }
 
   const service = new AIService(context.providerConfig)
@@ -215,7 +247,7 @@ export async function executeGenerateDocumentTool(args: Record<string, unknown>,
     await context.onGeneratedDocumentEvent?.({ type: 'done', toolCallId, fileName: targetFileName, content })
     return {
       ok: true,
-      message: 'generate_document succeeded',
+      message: 'generate_document succeeded. One document has been created and saved. Do not call generate_document_tool again in this run unless the user explicitly requested multiple files. Next, briefly confirm completion to the user.',
       generatedFile: {
         fileName: targetFileName,
         content,
@@ -224,12 +256,20 @@ export async function executeGenerateDocumentTool(args: Record<string, unknown>,
         fileName: targetFileName,
         contentLength: content.length,
         streamed: true,
+        shouldContinueWithTextOnly: true,
+        forbidAdditionalGenerateToolCalls: true,
       },
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'generate_document failed'
     await context.onGeneratedDocumentEvent?.({ type: 'error', toolCallId, fileName: targetFileName, error: message })
-    return { ok: false, message }
+    return {
+      ok: false,
+      message: `generate_document_tool failed: ${message}. No new file should be assumed. Explain the failure or ask the user whether to retry.`,
+      metadata: {
+        nextStep: 'Explain the failure or ask whether to retry generation.',
+      },
+    }
   }
 }
 

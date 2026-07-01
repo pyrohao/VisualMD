@@ -612,7 +612,7 @@ describe('ai chat store hook adapter', () => {
     expect(useAiChatStore.getState().generatedDocumentSessionsByConversation['conversation-1']).toBeUndefined()
   })
 
-  it('streams generated documents into a temp local file and opens them immediately', async () => {
+  it('streams generated documents into a temp local file when the first content chunk arrives', async () => {
     const agent = await import('@/lib/agent')
     vi.mocked(agent.runAgentReActLoop).mockClear()
     vi.mocked(agent.runAgentReActLoop).mockImplementationOnce(async (options: any) => {
@@ -655,9 +655,105 @@ describe('ai chat store hook adapter', () => {
     await useAiChatStore.getState().setDraftInput('生成文档')
     await useAiChatStore.getState().sendMessage()
 
-    expect(storage.importFile).toHaveBeenCalledWith('Live.md', '', null)
-    expect(storage.loadDocument).toHaveBeenCalledWith('', 'Live.md', 'generated-file-1')
+    expect(storage.importFile).toHaveBeenCalledWith('Live.md', '# Live', null)
+    expect(storage.loadDocument).toHaveBeenCalledWith('# Live', 'Live.md', 'generated-file-1')
     expect(storage.saveFileContent).toHaveBeenCalledWith('generated-file-1', '# Live')
+    expect(storage.saveFileContent).not.toHaveBeenCalledWith('file-1', '# Doc\n\nSelected text.')
+    expect(storage.updateTabContent).not.toHaveBeenCalledWith('tab-1', '# Doc\n\nSelected text.')
+    expect(useAiChatStore.getState().generatedDocumentSessionsByConversation['conversation-1']).toBeUndefined()
+  })
+
+  it('ignores stale generated document completions from an older run in the same conversation', async () => {
+    const agent = await import('@/lib/agent')
+    vi.mocked(agent.runAgentReActLoop).mockClear()
+
+    let releaseFirstRun: (() => Promise<void>) | null = null
+
+    vi.mocked(agent.runAgentReActLoop)
+      .mockImplementationOnce(async (options: any) => {
+        await options.onGeneratedDocumentEvent?.({ type: 'start', toolCallId: 'tool-call-old', fileName: 'Old.md' })
+
+        await new Promise<void>((resolve) => {
+          releaseFirstRun = async () => {
+            await options.onGeneratedDocumentEvent?.({
+              type: 'done',
+              toolCallId: 'tool-call-old',
+              fileName: 'Old.md',
+              content: '# Old',
+            })
+            resolve()
+          }
+        })
+
+        return {
+          messages: [
+            ...options.messages,
+            {
+              id: 'assistant-old',
+              conversationId: 'conversation-1',
+              role: 'assistant',
+              message: '旧生成完成',
+              createdAt: 2,
+              state: 'done',
+            },
+          ],
+          appliedMarkdown: '# Doc\n\nSelected text.',
+          previousMarkdown: '# Doc\n\nSelected text.',
+          appliedToolCallIds: [],
+          appliedTools: [],
+          stoppedBecause: 'assistant-text',
+        }
+      })
+      .mockImplementationOnce(async (options: any) => {
+        await options.onGeneratedDocumentEvent?.({ type: 'start', toolCallId: 'tool-call-new', fileName: 'New.md' })
+        await options.onGeneratedDocumentEvent?.({
+          type: 'done',
+          toolCallId: 'tool-call-new',
+          fileName: 'New.md',
+          content: '# New',
+        })
+
+        return {
+          messages: [
+            ...options.messages,
+            {
+              id: 'assistant-new',
+              conversationId: 'conversation-1',
+              role: 'assistant',
+              message: '新生成完成',
+              createdAt: 3,
+              state: 'done',
+            },
+          ],
+          appliedMarkdown: '# Doc\n\nSelected text.',
+          previousMarkdown: '# Doc\n\nSelected text.',
+          appliedToolCallIds: [],
+          appliedTools: [],
+          stoppedBecause: 'assistant-text',
+        }
+      })
+
+    const { useAiChatStore } = await import('@/stores/aiChatStore')
+    await useAiChatStore.getState().createConversation()
+
+    await useAiChatStore.getState().setDraftInput('第一次生成')
+    const firstRunPromise = useAiChatStore.getState().sendMessage()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    await useAiChatStore.getState().setDraftInput('第二次生成')
+    const secondRunPromise = useAiChatStore.getState().sendMessage()
+    await secondRunPromise
+
+    expect(storage.importFile).toHaveBeenCalledTimes(1)
+    expect(storage.importFile).toHaveBeenCalledWith('New.md', '# New', null)
+    expect(storage.saveFileContent).toHaveBeenCalledWith('generated-file-1', '# New')
+    expect(storage.saveFileContent).not.toHaveBeenCalledWith('generated-file-1', '# Old')
+
+    await releaseFirstRun?.()
+    await firstRunPromise
+
+    expect(storage.importFile).toHaveBeenCalledTimes(1)
+    expect(storage.saveFileContent).not.toHaveBeenCalledWith('generated-file-1', '# Old')
     expect(useAiChatStore.getState().generatedDocumentSessionsByConversation['conversation-1']).toBeUndefined()
   })
 
@@ -737,7 +833,7 @@ describe('ai chat store hook adapter', () => {
     )
   })
 
-  it('streams generated document tool output into a new file and tab', async () => {
+  it('streams generated document tool output into a new file and tab after content starts streaming', async () => {
     const agent = await import('@/lib/agent')
     vi.mocked(agent.runAgentReActLoop).mockImplementationOnce(async (options: any) => {
       await options.onGeneratedDocumentEvent?.({ type: 'start', toolCallId: 'tool-call-generate', fileName: 'Live.md' })
@@ -780,10 +876,11 @@ describe('ai chat store hook adapter', () => {
     await useAiChatStore.getState().setDraftInput('生成一个新文档')
     await useAiChatStore.getState().sendMessage()
 
-    expect(storage.importFile).toHaveBeenCalledWith('Live.md', '', null)
-    expect(storage.openFileInTab).toHaveBeenCalledWith('Live.md', '', 'generated-file-1')
+    expect(storage.importFile).toHaveBeenCalledWith('Live.md', '# Live', null)
+    expect(storage.openFileInTab).toHaveBeenCalledWith('Live.md', '# Live', 'generated-file-1')
     expect(storage.saveFileContent).toHaveBeenCalledWith('generated-file-1', '# Live')
     expect(storage.updateTabContent).toHaveBeenCalledWith('generated-tab-1', '# Live')
+    expect(storage.saveFileContent).not.toHaveBeenCalledWith('file-1', '# Doc\n\nSelected text.')
     expect(storage.importFile).toHaveBeenCalledTimes(1)
   })
 })

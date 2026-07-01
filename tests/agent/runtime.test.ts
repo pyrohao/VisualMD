@@ -123,6 +123,7 @@ describe('agent runtime', () => {
 
     expect(deltas).toEqual(['已生成'])
     expect(result.generatedFiles[0]?.fileName).toBe('Guide.md')
+    expect(result.messages.at(-1)?.message).toBe('已生成')
   })
 
   it('executes tool calls and continues to final text', async () => {
@@ -250,6 +251,30 @@ describe('agent runtime', () => {
     expect(events.map((event) => event.type)).toEqual(['start', 'delta', 'delta', 'done'])
     expect(result.messages.find((message) => message.role === 'tool')?.message).not.toContain('# Agent Doc')
     expect(result.messages.at(-1)?.message).toBe('Generated')
+  })
+
+  it('allows a natural text confirmation after generate_document_tool succeeds', async () => {
+    vi.spyOn(AIService.prototype, 'chatMessagesStream')
+      .mockResolvedValueOnce('{"tool":"generate_document_tool","arguments":{"prompt":"make test3","fileName":"test3.md"}}')
+      .mockResolvedValueOnce('# Test3')
+      .mockResolvedValueOnce('已生成 test3')
+
+    const messages: AgentMessage[] = [
+      { id: 'u1', conversationId: 'c1', role: 'user', message: 'generate', createdAt: 1 },
+    ]
+
+    const result = await runAgentReActLoop({
+      providerConfig,
+      apiKey: 'test',
+      messages,
+      tools: createDefaultAgentTools(),
+      markdown: '',
+      maxTurns: 5,
+    })
+
+    expect(result.generatedFiles).toHaveLength(1)
+    expect(result.generatedFiles[0]?.fileName).toBe('test3.md')
+    expect(result.messages.at(-1)?.message).toBe('已生成 test3')
   })
 
   it('stops on unknown tools', async () => {

@@ -268,8 +268,7 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
     draftInput,
     selectedReferenceIds,
     isLoading,
-    isSending,
-    sendingConversationId,
+    sendingConversationIds,
     error,
     chatTemperature,
     chatMaxTokens,
@@ -311,6 +310,47 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
     const activeProvider = connectedProviders.find((provider) => provider.id === activeProviderId)
     return activeProvider ? `${activeProvider.id}::${activeProvider.model}` : ''
   }, [activeProviderId, connectedProviders])
+  const sortedConversations = useMemo(
+    () => [...conversations].sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt),
+    [conversations]
+  )
+  const formatConversationDate = (value: number) => {
+    const targetDate = new Date(value)
+    const now = new Date()
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const startOfTarget = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate())
+    const diffDays = Math.round((startOfToday.getTime() - startOfTarget.getTime()) / 86400000)
+    const timeLabel = new Intl.DateTimeFormat(currentLanguage === 'zh' ? 'zh-CN' : 'en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(targetDate)
+
+    if (diffDays === 0) {
+      return currentLanguage === 'zh' ? `今天 ${timeLabel}` : `Today ${timeLabel}`
+    }
+
+    if (diffDays === 1) {
+      return currentLanguage === 'zh' ? `昨天 ${timeLabel}` : `Yesterday ${timeLabel}`
+    }
+
+    if (targetDate.getFullYear() === now.getFullYear()) {
+      const dateLabel = new Intl.DateTimeFormat(currentLanguage === 'zh' ? 'zh-CN' : 'en-US', {
+        month: '2-digit',
+        day: '2-digit',
+      }).format(targetDate)
+      return `${dateLabel} ${timeLabel}`
+    }
+
+    return new Intl.DateTimeFormat(currentLanguage === 'zh' ? 'zh-CN' : 'en-US', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(targetDate)
+  }
 
   useEffect(() => {
     void initialize()
@@ -325,6 +365,9 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
   const currentGeneratedDocumentSession = currentConversationId
     ? generatedDocumentSessionsByConversation[currentConversationId] || null
     : null
+  const currentConversationSending = currentConversationId
+    ? sendingConversationIds.includes(currentConversationId)
+    : false
   const selectedReferences = useMemo(
     () => {
       const currentReferences = currentConversationId ? referencesByConversation[currentConversationId] || [] : []
@@ -343,7 +386,7 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
     return normalized || (currentLanguage === 'zh' ? '空白选区' : 'Empty selection')
   }
   const submitMessage = () => {
-    if (!draftInput.trim() || isSending || isLoading) return
+    if (!draftInput.trim() || currentConversationSending || isLoading) return
     void sendMessage()
   }
   const submitRename = (conversationId: string) => {
@@ -501,8 +544,8 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
         <ScrollArea className="min-h-0 w-full max-w-full flex-1 overflow-x-hidden">
           <div className="flex min-h-full w-full min-w-0 max-w-full flex-col overflow-x-hidden px-4 pb-4 pt-3">
             <div className="space-y-1">
-              {conversations.map((conversation) => {
-                const conversationSending = sendingConversationId === conversation.id
+              {sortedConversations.map((conversation) => {
+                const conversationSending = sendingConversationIds.includes(conversation.id)
                 return (
                 <div
                   key={conversation.id}
@@ -570,19 +613,17 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
                         {conversation.title}
                       </div>
                     )}
-                    {conversationSending && (
-                      <div className="mt-1 text-xs" style={{ color: themeConfig.textMuted }}>
-                        {currentLanguage === 'zh' ? '回复中' : 'Responding'}
-                      </div>
-                    )}
+                    <div className="mt-1 flex items-center gap-2 text-xs" style={{ color: themeConfig.textMuted }}>
+                      {conversationSending && (
+                        <span>{currentLanguage === 'zh' ? '回复中' : 'Responding'}</span>
+                      )}
+                      <span>{formatConversationDate(conversation.updatedAt || conversation.lastMessageAt || conversation.createdAt)}</span>
+                    </div>
                   </div>
-                  <div className="ml-2 flex w-[84px] shrink-0 items-center justify-end gap-0.5">
+                  <div className="ml-2 flex w-[58px] shrink-0 items-center justify-end gap-0.5">
                     {conversationSending && (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" style={{ color: themeConfig.primary }} />
                     )}
-                    <div className="flex-shrink-0 text-xs" style={{ color: themeConfig.textMuted }}>
-                      {conversation.messageCount}
-                    </div>
                     {editingConversationId === conversation.id ? (
                       <Button
                         type="button"
@@ -876,7 +917,7 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
                   onClick={() => void resolveGeneratedDocumentGitOffer(currentConversationId, false)}
                   style={{ color: themeConfig.primary, backgroundColor: `${themeConfig.primary}12` }}
                 >
-                  {currentLanguage === 'zh' ? '保持本地' : 'Keep local'}
+                  {currentLanguage === 'zh' ? '稍后' : 'Later'}
                 </Button>
                 <Button
                   type="button"
@@ -885,7 +926,7 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
                   className="h-7 w-7 rounded-md hover:bg-transparent focus-visible:ring-0"
                   onClick={() => void resolveGeneratedDocumentGitOffer(currentConversationId, false)}
                   style={{ color: themeConfig.textMuted, backgroundColor: 'transparent' }}
-                  title={currentLanguage === 'zh' ? '保持本地' : 'Keep local'}
+                  title={currentLanguage === 'zh' ? '稍后处理' : 'Dismiss'}
                 >
                   <X className="h-3.5 w-3.5" />
                 </Button>
@@ -966,14 +1007,14 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
               <Button
                 type="button"
                 className="h-10 w-10 rounded-full p-0"
-                disabled={(!draftInput.trim() && !isSending) || isLoading}
-                onClick={isSending ? stopSending : submitMessage}
+                disabled={(!draftInput.trim() && !currentConversationSending) || isLoading}
+                onClick={currentConversationSending ? stopSending : submitMessage}
                 style={{
-                  backgroundColor: isSending ? themeConfig.danger : draftInput.trim() ? themeConfig.primary : themeConfig.border,
+                  backgroundColor: currentConversationSending ? themeConfig.danger : draftInput.trim() ? themeConfig.primary : themeConfig.border,
                   color: themeConfig.buttonText,
                 }}
               >
-                {isSending ? <X className="h-4 w-4" /> : <ArrowUp className="h-4 w-4" />}
+                {currentConversationSending ? <X className="h-4 w-4" /> : <ArrowUp className="h-4 w-4" />}
               </Button>
             </div>
           </div>
