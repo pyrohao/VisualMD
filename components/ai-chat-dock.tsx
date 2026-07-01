@@ -10,9 +10,11 @@ import {
   Loader2,
   MoreHorizontal,
   PencilLine,
+  Plus,
   RotateCcw,
   Settings,
   Sparkles,
+  Trash2,
   X,
 } from 'lucide-react'
 import { unified } from 'unified'
@@ -23,7 +25,6 @@ import rehypeSanitize from 'rehype-sanitize'
 import rehypeStringify from 'rehype-stringify'
 import { useThemeStore } from '@/stores/themeStore'
 import { useTranslation } from '@/stores/languageStore'
-import { useSidebarStore } from '@/stores/sidebarStore'
 import { useAiChatStore } from '@/stores/aiChatStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useGitStore } from '@/stores/gitStore'
@@ -31,6 +32,28 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { toast } from '@/hooks/use-toast'
 
 type DockView = 'history' | 'conversation'
@@ -44,20 +67,23 @@ function ActionIcon({
   title,
   onClick,
   color,
+  disabled,
 }: {
   icon: React.ReactNode
   title?: string
   onClick?: () => void
   color: string
+  disabled?: boolean
 }) {
   return (
     <Button
       type="button"
       variant="ghost"
       size="icon"
-      className="h-7 w-7 rounded-md hover:bg-transparent focus-visible:ring-0"
+      className="h-7 w-7 rounded-md hover:bg-transparent focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-45"
       onClick={onClick}
       title={title}
+      disabled={disabled}
       style={{ color, backgroundColor: 'transparent' }}
     >
       {icon}
@@ -65,7 +91,9 @@ function ActionIcon({
   )
 }
 
-function getChatMarkdownStyles(themeConfig: ReturnType<typeof useThemeStore.getState>['getThemeConfig']) {
+function getChatMarkdownStyles(
+  themeConfig: ReturnType<ReturnType<typeof useThemeStore.getState>['getThemeConfig']>
+) {
   return `
     .ai-chat-markdown {
       color: ${themeConfig.text};
@@ -216,11 +244,14 @@ function ChatMarkdownMessage({
 export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
   const [editingConversationId, setEditingConversationId] = useState<string | null>(null)
   const [editingTitle, setEditingTitle] = useState('')
-  const [showChatSettings, setShowChatSettings] = useState(false)
+  const [renameDialogOpen, setRenameDialogOpen] = useState(false)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [configDialogOpen, setConfigDialogOpen] = useState(false)
+  const [pendingDeleteConversationId, setPendingDeleteConversationId] = useState<string | null>(null)
+  const [pendingDeleteConversationTitle, setPendingDeleteConversationTitle] = useState('')
   const [referencesExpanded, setReferencesExpanded] = useState(false)
   const { getThemeConfig } = useThemeStore()
   const { currentLanguage } = useTranslation()
-  const setActivePanel = useSidebarStore((state) => state.setActivePanel)
   const providers = useSettingsStore((state) => state.providers)
   const activeProviderId = useSettingsStore((state) => state.activeProviderId)
   const setActiveProvider = useSettingsStore((state) => state.setActiveProvider)
@@ -264,6 +295,15 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
   const connectedProviders = useMemo(
     () => providers.filter((provider) => provider.isTested && provider.model),
     [providers]
+  )
+  const runtimeModelOptions = useMemo(
+    () => connectedProviders.map((provider) => ({
+      value: `${provider.id}::${provider.model}`,
+      label: `${provider.name} · ${provider.model}`,
+      providerName: provider.name,
+      model: provider.model,
+    })),
+    [connectedProviders]
   )
   const selectedRuntimeModel = useMemo(() => {
     const activeProvider = connectedProviders.find((provider) => provider.id === activeProviderId)
@@ -328,6 +368,32 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
         : 'Switching models mid-conversation may increase token usage.',
     })
   }
+  const activeProvider = connectedProviders.find((provider) => provider.id === activeProviderId) || null
+  const modelLabel = activeProvider?.name || (currentLanguage === 'zh' ? '选择模型' : 'Choose model')
+  const modelShortLabel = modelLabel.length > 10 ? `${modelLabel.slice(0, 10)}…` : modelLabel
+  const openRenameDialog = () => {
+    if (!currentConversation) return
+    setEditingTitle(currentConversation.title)
+    setRenameDialogOpen(true)
+  }
+  const openDeleteDialog = (conversationId: string, conversationTitle: string) => {
+    setPendingDeleteConversationId(conversationId)
+    setPendingDeleteConversationTitle(conversationTitle)
+    setDeleteDialogOpen(true)
+  }
+  const confirmRenameConversation = () => {
+    if (!currentConversationId || !editingTitle.trim()) return
+    void renameConversation(currentConversationId, editingTitle.trim())
+    setRenameDialogOpen(false)
+    setEditingTitle('')
+  }
+  const confirmRemoveCurrentConversation = () => {
+    if (!pendingDeleteConversationId) return
+    void removeConversation(pendingDeleteConversationId)
+    setDeleteDialogOpen(false)
+    setPendingDeleteConversationId(null)
+    setPendingDeleteConversationTitle('')
+  }
 
   return (
     <div
@@ -366,18 +432,66 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
         )}
 
         <div className="flex shrink-0 items-center gap-1">
-          <ActionIcon icon={<MoreHorizontal className="h-4 w-4" />} color={themeConfig.muted} />
-          <ActionIcon icon={<RotateCcw className="h-4 w-4" />} color={themeConfig.muted} />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 rounded-md hover:bg-transparent focus-visible:ring-0"
+                title={currentLanguage === 'zh' ? '更多操作' : 'More actions'}
+                disabled={!currentConversationId}
+                style={{ color: themeConfig.muted, backgroundColor: 'transparent' }}
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              className="w-40"
+              style={{
+                backgroundColor: themeConfig.card,
+                borderColor: themeConfig.border,
+                color: themeConfig.text,
+              }}
+            >
+              <DropdownMenuItem
+                onClick={openRenameDialog}
+                disabled={!currentConversationId}
+                className="gap-2"
+              >
+                <PencilLine className="h-4 w-4" />
+                {currentLanguage === 'zh' ? '重命名对话' : 'Rename chat'}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator style={{ backgroundColor: themeConfig.border }} />
+              <DropdownMenuItem
+                onClick={() => {
+                  if (!currentConversation) return
+                  openDeleteDialog(currentConversation.id, currentConversation.title)
+                }}
+                disabled={!currentConversationId}
+                variant="destructive"
+                className="gap-2"
+              >
+                <Trash2 className="h-4 w-4" />
+                {currentLanguage === 'zh' ? '删除对话' : 'Delete chat'}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <ActionIcon
             icon={<Settings className="h-4 w-4" />}
             color={themeConfig.muted}
-            onClick={() => setActivePanel('settings')}
+            onClick={() => setConfigDialogOpen(true)}
+            title={currentLanguage === 'zh' ? '对话配置' : 'Chat settings'}
           />
-          <ActionIcon
-            icon={<PencilLine className="h-4 w-4" />}
-            color={themeConfig.muted}
-            onClick={() => void createConversation()}
-          />
+          {view !== 'history' && (
+            <ActionIcon
+              icon={<Plus className="h-4 w-4" />}
+              color={themeConfig.muted}
+              onClick={() => void createConversation()}
+              title={currentLanguage === 'zh' ? '新建对话' : 'New chat'}
+            />
+          )}
         </div>
       </div>
 
@@ -402,10 +516,26 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
                     if (editingConversationId === conversation.id) return
                     void openConversation(conversation.id)
                   }}
-                  className="flex w-full min-w-0 items-center rounded-xl px-2 py-2 text-left transition-colors"
+                  className="flex w-full min-w-0 items-center border px-3 py-3 text-left transition-all duration-200"
                   style={{
                     backgroundColor:
-                      currentConversationId === conversation.id ? `${themeConfig.primary}10` : 'transparent',
+                      currentConversationId === conversation.id ? `${themeConfig.primary}10` : themeConfig.card,
+                    borderColor:
+                      currentConversationId === conversation.id ? `${themeConfig.primary}20` : `${themeConfig.border}88`,
+                    boxShadow: 'none',
+                  }}
+                  onMouseEnter={(event) => {
+                    event.currentTarget.style.transform = 'translateY(-1px)'
+                    event.currentTarget.style.boxShadow = `0 10px 22px ${themeConfig.primary}10`
+                    if (currentConversationId !== conversation.id) {
+                      event.currentTarget.style.borderColor = `${themeConfig.primary}22`
+                    }
+                  }}
+                  onMouseLeave={(event) => {
+                    event.currentTarget.style.transform = 'translateY(0)'
+                    event.currentTarget.style.boxShadow = 'none'
+                    event.currentTarget.style.borderColor =
+                      currentConversationId === conversation.id ? `${themeConfig.primary}20` : `${themeConfig.border}88`
                   }}
                 >
                   <div className="min-w-0 flex-1">
@@ -488,9 +618,10 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
                       className="h-7 w-6 rounded-md hover:bg-transparent focus-visible:ring-0"
                       onClick={(event) => {
                         event.stopPropagation()
-                        void removeConversation(conversation.id)
+                        openDeleteDialog(conversation.id, conversation.title)
                       }}
                       style={{ color: themeConfig.textMuted, backgroundColor: 'transparent' }}
+                      title={currentLanguage === 'zh' ? '删除对话' : 'Delete chat'}
                     >
                       <X className="h-4 w-4" />
                     </Button>
@@ -771,100 +902,50 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
           />
 
           <div className="mt-3 flex min-w-0 items-center justify-between gap-3">
-            <div className="relative">
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="h-9 w-9 rounded-md hover:bg-transparent focus-visible:ring-0"
-                onClick={() => setShowChatSettings((value) => !value)}
-                style={{ color: themeConfig.textMuted, backgroundColor: 'transparent' }}
+            <Select
+              value={selectedRuntimeModel}
+              onValueChange={handleChatModelChange}
+              disabled={!runtimeModelOptions.length}
+            >
+              <SelectTrigger
+                className="h-9 min-w-[124px] max-w-[156px] rounded-full px-3 text-xs shadow-none"
+                style={{
+                  backgroundColor: 'transparent',
+                  borderColor: themeConfig.border,
+                  color: themeConfig.text,
+                }}
+                title={activeProvider ? `${activeProvider.name} · ${activeProvider.model}` : modelLabel}
               >
-                <Settings className="h-4 w-4" />
-              </Button>
-              {showChatSettings && (
-                <div
-                  className="absolute bottom-11 left-0 z-20 w-64 rounded-lg border p-3 shadow-lg"
-                  style={{
-                    backgroundColor: themeConfig.card,
-                    borderColor: themeConfig.border,
-                    color: themeConfig.text,
-                  }}
-                >
-                  <div className="space-y-3">
-                    <div>
-                      <label className="text-xs" style={{ color: themeConfig.textMuted }}>
-                        {currentLanguage === 'zh' ? '模型' : 'Model'}
-                      </label>
-                      <select
-                        value={selectedRuntimeModel}
-                        onChange={(event) => handleChatModelChange(event.target.value)}
-                        className="mt-1 h-8 w-full rounded-md border px-2 text-sm outline-none"
-                        style={{ backgroundColor: themeConfig.input, borderColor: themeConfig.border, color: themeConfig.text }}
-                      >
-                        {!connectedProviders.length && (
-                          <option value="">
-                            {currentLanguage === 'zh' ? '暂无已连接模型' : 'No connected models'}
-                          </option>
-                        )}
-                        {connectedProviders.map((provider) => {
-                          const models = Array.from(new Set([provider.model, ...provider.models].filter(Boolean)))
-                          return models.map((model) => (
-                            <option key={`${provider.id}::${model}`} value={`${provider.id}::${model}`}>
-                              {provider.name} · {model}
-                            </option>
-                          ))
-                        })}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="text-xs" style={{ color: themeConfig.textMuted }}>
-                        Temperature
-                      </label>
-                      <input
-                        type="number"
-                        min="0"
-                        max="2"
-                        step="0.1"
-                        value={chatTemperature}
-                        onChange={(event) => void setChatTemperature(Number(event.target.value))}
-                        className="mt-1 h-8 w-full rounded-md border px-2 text-sm outline-none"
-                        style={{ backgroundColor: themeConfig.input, borderColor: themeConfig.border, color: themeConfig.text }}
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs" style={{ color: themeConfig.textMuted }}>
-                        Max tokens
-                      </label>
-                      <input
-                        type="number"
-                        min="256"
-                        max="200000"
-                        step="1024"
-                        value={chatMaxTokens}
-                        onChange={(event) => void setChatMaxTokens(Number(event.target.value))}
-                        className="mt-1 h-8 w-full rounded-md border px-2 text-sm outline-none"
-                        style={{ backgroundColor: themeConfig.input, borderColor: themeConfig.border, color: themeConfig.text }}
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs" style={{ color: themeConfig.textMuted }}>
-                        {currentLanguage === 'zh' ? '历史轮数' : 'History rounds'}
-                      </label>
-                      <input
-                        type="number"
-                        min="1"
-                        max="100"
-                        value={chatHistoryRounds}
-                        onChange={(event) => void setChatHistoryRounds(Number(event.target.value))}
-                        className="mt-1 h-8 w-full rounded-md border px-2 text-sm outline-none"
-                        style={{ backgroundColor: themeConfig.input, borderColor: themeConfig.border, color: themeConfig.text }}
-                      />
-                    </div>
+                <SelectValue placeholder={currentLanguage === 'zh' ? '选择模型' : 'Choose model'}>
+                  <span className="truncate">{modelShortLabel}</span>
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent
+                style={{
+                  ['--chat-model-option-active-bg' as string]: `${themeConfig.primary}14`,
+                  ['--chat-model-option-active-text' as string]: themeConfig.heading,
+                  backgroundColor: themeConfig.card,
+                  borderColor: themeConfig.border,
+                  color: themeConfig.text,
+                }}
+              >
+                {!connectedProviders.length ? (
+                  <div className="px-2 py-2 text-sm" style={{ color: themeConfig.textMuted }}>
+                    {currentLanguage === 'zh' ? '暂无已连接模型' : 'No connected models'}
                   </div>
-                </div>
-              )}
-            </div>
+                ) : (
+                  runtimeModelOptions.map((option) => (
+                    <SelectItem
+                      key={option.value}
+                      value={option.value}
+                      className="data-[highlighted]:[background-color:var(--chat-model-option-active-bg)] data-[highlighted]:[color:var(--chat-model-option-active-text)]"
+                    >
+                      {option.label}
+                    </SelectItem>
+                  ))
+                )}
+              </SelectContent>
+            </Select>
 
             <div className="flex items-center gap-2">
               {error && (
@@ -889,6 +970,187 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
           </div>
         </div>
       </div>
+
+      <Dialog open={renameDialogOpen} onOpenChange={setRenameDialogOpen}>
+        <DialogContent
+          showCloseButton={false}
+          style={{
+            backgroundColor: themeConfig.card,
+            borderColor: themeConfig.border,
+            color: themeConfig.text,
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle style={{ color: themeConfig.heading }}>
+              {currentLanguage === 'zh' ? '重命名对话' : 'Rename chat'}
+            </DialogTitle>
+            <DialogDescription style={{ color: themeConfig.textMuted }}>
+              {currentLanguage === 'zh'
+                ? '为当前对话设置一个更清晰的名称。'
+                : 'Set a clearer name for the current conversation.'}
+            </DialogDescription>
+          </DialogHeader>
+          <input
+            value={editingTitle}
+            onChange={(event) => setEditingTitle(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                confirmRenameConversation()
+              }
+            }}
+            className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+            style={{
+              color: themeConfig.text,
+              borderColor: themeConfig.border,
+              backgroundColor: themeConfig.background,
+            }}
+            autoFocus
+          />
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setRenameDialogOpen(false)}
+              style={{ color: themeConfig.textMuted, backgroundColor: 'transparent' }}
+            >
+              {currentLanguage === 'zh' ? '取消' : 'Cancel'}
+            </Button>
+            <Button
+              type="button"
+              onClick={confirmRenameConversation}
+              disabled={!editingTitle.trim()}
+              style={{
+                backgroundColor: themeConfig.primary,
+                color: themeConfig.buttonText,
+              }}
+            >
+              {currentLanguage === 'zh' ? '保存' : 'Save'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent
+          showCloseButton={false}
+          style={{
+            backgroundColor: themeConfig.card,
+            borderColor: themeConfig.border,
+            color: themeConfig.text,
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle style={{ color: themeConfig.heading }}>
+              {currentLanguage === 'zh' ? '删除对话' : 'Delete chat'}
+            </DialogTitle>
+            <DialogDescription style={{ color: themeConfig.textMuted }}>
+              {currentLanguage === 'zh'
+                ? `删除后将无法恢复，确认要移除“${pendingDeleteConversationTitle || '当前对话'}”吗？`
+                : `This cannot be undone. Remove “${pendingDeleteConversationTitle || 'this conversation'}”?`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setDeleteDialogOpen(false)}
+              style={{ color: themeConfig.textMuted, backgroundColor: 'transparent' }}
+            >
+              {currentLanguage === 'zh' ? '取消' : 'Cancel'}
+            </Button>
+            <Button
+              type="button"
+              onClick={confirmRemoveCurrentConversation}
+              style={{
+                backgroundColor: themeConfig.danger,
+                color: themeConfig.buttonText,
+              }}
+            >
+              {currentLanguage === 'zh' ? '删除' : 'Delete'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={configDialogOpen} onOpenChange={setConfigDialogOpen}>
+        <DialogContent
+          style={{
+            backgroundColor: themeConfig.card,
+            borderColor: themeConfig.border,
+            color: themeConfig.text,
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle style={{ color: themeConfig.heading }}>
+              {currentLanguage === 'zh' ? '对话配置' : 'Chat settings'}
+            </DialogTitle>
+            <DialogDescription style={{ color: themeConfig.textMuted }}>
+              {currentLanguage === 'zh'
+                ? '调整当前对话使用的生成参数。'
+                : 'Adjust generation parameters for the current chat.'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <label className="text-xs" style={{ color: themeConfig.textMuted }}>
+                Temperature
+              </label>
+              <input
+                type="number"
+                min="0"
+                max="2"
+                step="0.1"
+                value={chatTemperature}
+                onChange={(event) => void setChatTemperature(Number(event.target.value))}
+                className="mt-1 h-10 w-full rounded-lg border px-3 text-sm outline-none"
+                style={{
+                  backgroundColor: themeConfig.input,
+                  borderColor: themeConfig.border,
+                  color: themeConfig.text,
+                }}
+              />
+            </div>
+            <div>
+              <label className="text-xs" style={{ color: themeConfig.textMuted }}>
+                Max tokens
+              </label>
+              <input
+                type="number"
+                min="256"
+                max="200000"
+                step="1024"
+                value={chatMaxTokens}
+                onChange={(event) => void setChatMaxTokens(Number(event.target.value))}
+                className="mt-1 h-10 w-full rounded-lg border px-3 text-sm outline-none"
+                style={{
+                  backgroundColor: themeConfig.input,
+                  borderColor: themeConfig.border,
+                  color: themeConfig.text,
+                }}
+              />
+            </div>
+            <div>
+              <label className="text-xs" style={{ color: themeConfig.textMuted }}>
+                {currentLanguage === 'zh' ? '历史轮数' : 'History rounds'}
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="100"
+                value={chatHistoryRounds}
+                onChange={(event) => void setChatHistoryRounds(Number(event.target.value))}
+                className="mt-1 h-10 w-full rounded-lg border px-3 text-sm outline-none"
+                style={{
+                  backgroundColor: themeConfig.input,
+                  borderColor: themeConfig.border,
+                  color: themeConfig.text,
+                }}
+              />
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

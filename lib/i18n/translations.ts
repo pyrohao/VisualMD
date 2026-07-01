@@ -594,8 +594,8 @@ export const translations: Record<Language, Translations> = {
     git: {
       provider: '平台',
       token: '访问令牌',
-      tokenPlaceholder: 'PAT / 访问令牌',
-      namespace: '所有者 / 命名空间',
+      tokenPlaceholder: 'PAT',
+      namespace: '用户名',
       repository: '仓库',
       branch: '分支',
       baseUrl: 'API 基础地址',

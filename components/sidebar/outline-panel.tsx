@@ -98,7 +98,7 @@ export function OutlinePanel() {
               <button
                 key={index}
                 onClick={() => handleHeadingClick(heading.line)}
-                className="w-full rounded px-2 py-1.5 text-left text-sm transition-colors hover:opacity-80"
+                className="relative w-full rounded px-2 py-1.5 text-left text-sm transition-colors hover:opacity-80"
                 style={{
                   paddingLeft: `${(heading.level - 1) * 12 + 8}px`,
                   color: heading.level === 1 ? themeConfig.heading : themeConfig.text,
