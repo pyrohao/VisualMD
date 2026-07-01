@@ -90,6 +90,7 @@ export async function deleteAgentConversation(conversationId: string) {
   await conversationsStore.remove(conversationId)
   await draftsStore.remove(conversationId)
   await messagesStore.remove(conversationId)
+  await documentSessionsStore.remove(conversationId)
   await Promise.all(
     references
       .map((entry) => entry.value)

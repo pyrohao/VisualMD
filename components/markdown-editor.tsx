@@ -42,6 +42,10 @@ type OutlineJumpDetail = {
   index?: number
 }
 
+type PreviewOpenDetail = {
+  mode?: 'preview' | 'edit' | 'live'
+}
+
 /**
  * 默认示例Markdown内容（英文版）
  */
@@ -390,6 +394,7 @@ export function MarkdownEditor() {
   const [searchDialogOpen, setSearchDialogOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
   const pendingOutlineJumpRef = useRef<OutlineJumpDetail | null>(null)
+  const pendingPreviewOpenRef = useRef<PreviewOpenDetail | null>(null)
   const leftPanelMinWidthRef = useRef(LEFT_ICON_BAR_WIDTH + SIDEBAR_PANEL_MIN_WIDTH)
   const resizeHandleRef = useRef<HTMLDivElement | null>(null)
   const aiResizeHandleRef = useRef<HTMLDivElement | null>(null)
@@ -570,6 +575,32 @@ export function MarkdownEditor() {
 
     window.requestAnimationFrame(() => {
       window.dispatchEvent(new CustomEvent('outline-jump', { detail }))
+    })
+  }, [rightCollapsed])
+
+  useEffect(() => {
+    const handlePreviewOpen = (event: Event) => {
+      const detail = (event as CustomEvent<PreviewOpenDetail>).detail
+      if (!detail?.mode || !rightCollapsed) return
+
+      pendingPreviewOpenRef.current = detail
+      setRightCollapsed(false)
+    }
+
+    window.addEventListener('visualmd:open-preview', handlePreviewOpen)
+    return () => {
+      window.removeEventListener('visualmd:open-preview', handlePreviewOpen)
+    }
+  }, [rightCollapsed])
+
+  useEffect(() => {
+    if (rightCollapsed || !pendingPreviewOpenRef.current) return
+
+    const detail = pendingPreviewOpenRef.current
+    pendingPreviewOpenRef.current = null
+
+    window.requestAnimationFrame(() => {
+      window.dispatchEvent(new CustomEvent('visualmd:open-preview', { detail }))
     })
   }, [rightCollapsed])
 

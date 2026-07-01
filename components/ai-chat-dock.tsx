@@ -197,8 +197,10 @@ function getChatMarkdownStyles(
 
 function ChatMarkdownMessage({
   content,
+  className,
 }: {
   content: string
+  className?: string
 }) {
   const { getThemeConfig } = useThemeStore()
   const themeConfig = getThemeConfig()
@@ -236,7 +238,7 @@ function ChatMarkdownMessage({
   return (
     <>
       <style>{getChatMarkdownStyles(themeConfig)}</style>
-      <div className="ai-chat-markdown min-w-0" dangerouslySetInnerHTML={{ __html: html }} />
+      <div className={`ai-chat-markdown min-w-0 ${className || ''}`} dangerouslySetInnerHTML={{ __html: html }} />
     </>
   )
 }
@@ -285,11 +287,11 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
     setChatTemperature,
     setChatMaxTokens,
     setChatHistoryRounds,
-    chooseGeneratedDocumentSaveTarget,
+    resolveGeneratedDocumentGitOffer,
     undoLastToolApply,
     dismissLastToolApply,
   } = useAiChatStore()
-  const gitConnected = useGitStore((state) => state.connected)
+  const gitReady = useGitStore((state) => Boolean(state.connected && state.config.repo && state.config.branch))
 
   const themeConfig = getThemeConfig()
   const connectedProviders = useMemo(
@@ -732,6 +734,7 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
               <div className="w-full min-w-0 max-w-full space-y-3 overflow-x-hidden">
                 {currentMessages.map((message) => {
                   const isUser = message.role === 'user'
+                  const messageBody = message.displayMessage ?? message.message
                   return (
                     <div
                       key={message.id}
@@ -751,24 +754,30 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
                       >
                         {message.thinking && (
                           <div
-                            className="mb-2 border-b pb-2 text-xs leading-5"
-                            style={{ color: themeConfig.textMuted, borderColor: themeConfig.border }}
+                            className="mb-3 rounded-xl border px-3 py-2"
+                            style={{
+                              color: themeConfig.textMuted,
+                              borderColor: themeConfig.border,
+                              backgroundColor: themeConfig.background,
+                            }}
                           >
-                            <div className="mb-1 font-medium" style={{ color: themeConfig.heading }}>
+                            <div className="mb-2 text-[11px] font-medium uppercase tracking-[0.14em]" style={{ color: themeConfig.heading }}>
                               {currentLanguage === 'zh' ? '思考' : 'Thinking'}
                             </div>
-                            {message.thinking}
+                            <div style={{ color: themeConfig.textMuted, fontStyle: 'italic' }}>
+                              <ChatMarkdownMessage content={message.thinking} className="[&_p]:italic [&_li]:italic [&_blockquote]:italic" />
+                            </div>
                           </div>
                         )}
                         <div className="flex items-start gap-2">
                           {message.state === 'pending' && !isUser && (
                             <Loader2 className="mt-1 h-4 w-4 shrink-0 animate-spin" style={{ color: themeConfig.primary }} />
                           )}
-                          {(message.displayMessage || message.message) && (
+                          {messageBody && (
                             isUser ? (
-                              <span className="min-w-0 break-words">{message.displayMessage || message.message}</span>
+                              <span className="min-w-0 break-words">{messageBody}</span>
                             ) : (
-                              <ChatMarkdownMessage content={message.displayMessage || message.message} />
+                              <ChatMarkdownMessage content={messageBody} />
                             )
                           )}
                         </div>
@@ -834,7 +843,7 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
             </div>
           )}
 
-          {currentConversationId && currentGeneratedDocumentSession && gitConnected && (
+          {currentConversationId && currentGeneratedDocumentSession?.status === 'ready' && gitReady && (
             <div
               className="mb-3 flex min-w-0 items-center justify-between gap-2 rounded-xl border px-3 py-2 text-xs"
               style={{
@@ -845,8 +854,8 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
             >
               <span className="min-w-0 truncate">
                 {currentLanguage === 'zh'
-                  ? `已生成 ${currentGeneratedDocumentSession.fileName}，请选择保存位置`
-                  : `Generated ${currentGeneratedDocumentSession.fileName}. Choose where to save.`}
+                  ? `已生成 ${currentGeneratedDocumentSession.fileName}，已保存到本地。是否加入 Git？`
+                  : `Generated ${currentGeneratedDocumentSession.fileName} and saved locally. Add it to Git?`}
               </span>
               <div className="flex shrink-0 items-center gap-1">
                 <Button
@@ -854,29 +863,29 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
                   variant="ghost"
                   size="sm"
                   className="h-7 rounded-md px-2 hover:bg-transparent focus-visible:ring-0"
-                  onClick={() => void chooseGeneratedDocumentSaveTarget(currentConversationId, 'local')}
+                  onClick={() => void resolveGeneratedDocumentGitOffer(currentConversationId, true)}
                   style={{ color: themeConfig.primary, backgroundColor: `${themeConfig.primary}12` }}
                 >
-                  {currentLanguage === 'zh' ? '本地保存' : 'Save local'}
+                  {currentLanguage === 'zh' ? '加入 Git' : 'Add to Git'}
                 </Button>
                 <Button
                   type="button"
                   variant="ghost"
                   size="sm"
                   className="h-7 rounded-md px-2 hover:bg-transparent focus-visible:ring-0"
-                  onClick={() => void chooseGeneratedDocumentSaveTarget(currentConversationId, 'git')}
+                  onClick={() => void resolveGeneratedDocumentGitOffer(currentConversationId, false)}
                   style={{ color: themeConfig.primary, backgroundColor: `${themeConfig.primary}12` }}
                 >
-                  {currentLanguage === 'zh' ? '保存到 Git' : 'Save to Git'}
+                  {currentLanguage === 'zh' ? '保持本地' : 'Keep local'}
                 </Button>
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon"
                   className="h-7 w-7 rounded-md hover:bg-transparent focus-visible:ring-0"
-                  onClick={() => void chooseGeneratedDocumentSaveTarget(currentConversationId, 'local')}
+                  onClick={() => void resolveGeneratedDocumentGitOffer(currentConversationId, false)}
                   style={{ color: themeConfig.textMuted, backgroundColor: 'transparent' }}
-                  title={currentLanguage === 'zh' ? '保存到本地' : 'Save local'}
+                  title={currentLanguage === 'zh' ? '保持本地' : 'Keep local'}
                 >
                   <X className="h-3.5 w-3.5" />
                 </Button>

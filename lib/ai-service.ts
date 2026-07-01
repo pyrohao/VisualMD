@@ -109,9 +109,46 @@ function joinApiUrl(baseUrl: string, path: string) {
   return `${baseUrl.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`
 }
 
+function normalizeModelTextContent(value: any): string {
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (typeof item === 'string') return item
+        if (typeof item?.text === 'string') return item.text
+        if (typeof item?.content === 'string') return item.content
+        return ''
+      })
+      .join('')
+  }
+  return ''
+}
+
+function combineReasoningAndAnswer(reasoning: string, answer: string) {
+  const trimmedReasoning = reasoning.trim()
+  const trimmedAnswer = answer.trim()
+
+  if (trimmedReasoning && trimmedAnswer) {
+    return `<think>${trimmedReasoning}</think>\n\n${trimmedAnswer}`
+  }
+
+  if (trimmedReasoning) {
+    return `<think>${trimmedReasoning}</think>`
+  }
+
+  return trimmedAnswer
+}
+
+function buildStreamedAssistantText(reasoning: string, answer: string) {
+  return combineReasoningAndAnswer(reasoning, answer)
+}
+
 function extractOpenAIContent(data: any) {
   const message = data.choices?.[0]?.message
-  return message?.content || message?.reasoning_content || ''
+  return combineReasoningAndAnswer(
+    normalizeModelTextContent(message?.reasoning_content),
+    normalizeModelTextContent(message?.content)
+  )
 }
 
 function extractOpenAIResponsesContent(data: any) {
@@ -516,7 +553,8 @@ export class AIService {
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
-    let fullText = ''
+    let reasoningText = ''
+    let answerText = ''
 
     while (true) {
       let chunk: ReadableStreamReadResult<Uint8Array>
@@ -537,15 +575,23 @@ export class AIService {
         if (!trimmed || !trimmed.startsWith('data:')) continue
         const payload = trimmed.slice(5).trim()
         if (payload === '[DONE]') {
-          return fullText
+          return buildStreamedAssistantText(reasoningText, answerText)
         }
 
         try {
           const data = JSON.parse(payload)
-          const delta = data.choices?.[0]?.delta?.content || data.choices?.[0]?.delta?.reasoning_content || ''
-          if (delta) {
-            fullText += delta
-            onDelta?.(delta, fullText)
+          const contentDelta = normalizeModelTextContent(data.choices?.[0]?.delta?.content)
+          const reasoningDelta = normalizeModelTextContent(data.choices?.[0]?.delta?.reasoning_content)
+          if (reasoningDelta) {
+            reasoningText += reasoningDelta
+          }
+          if (contentDelta) {
+            answerText += contentDelta
+          }
+
+          const nextFullText = buildStreamedAssistantText(reasoningText, answerText)
+          if (nextFullText) {
+            onDelta?.(contentDelta || reasoningDelta, nextFullText)
           }
         } catch {
           continue
@@ -553,6 +599,7 @@ export class AIService {
       }
     }
 
+    const fullText = buildStreamedAssistantText(reasoningText, answerText)
     if (!fullText) {
       throw new Error('API返回内容为空')
     }
@@ -593,7 +640,8 @@ export class AIService {
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
-    let fullText = ''
+    let reasoningText = ''
+    let answerText = ''
 
     while (true) {
       let chunk: ReadableStreamReadResult<Uint8Array>
@@ -619,10 +667,22 @@ export class AIService {
 
         try {
           const data = JSON.parse(payload)
-          const delta = data.delta || data.text || data.output_text || ''
-          if (typeof delta === 'string' && delta) {
-            fullText += delta
-            onDelta?.(delta, fullText)
+          const reasoningDelta = normalizeModelTextContent(
+            data.reasoning_content || data.reasoning?.text || data.delta?.reasoning_content
+          )
+          const contentDelta = normalizeModelTextContent(
+            data.delta?.content || data.delta || data.text || data.output_text
+          )
+          if (reasoningDelta) {
+            reasoningText += reasoningDelta
+          }
+          if (contentDelta) {
+            answerText += contentDelta
+          }
+
+          const nextFullText = buildStreamedAssistantText(reasoningText, answerText)
+          if (nextFullText) {
+            onDelta?.(contentDelta || reasoningDelta, nextFullText)
           }
         } catch {
           continue
@@ -630,6 +690,7 @@ export class AIService {
       }
     }
 
+    const fullText = buildStreamedAssistantText(reasoningText, answerText)
     if (!fullText) {
       throw new Error('API返回内容为空')
     }

@@ -53,6 +53,31 @@ describe('AIService streaming chat', () => {
     expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string).stream).toBe(true)
   })
 
+  it('combines reasoning and answer in OpenAI-compatible SSE streams', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(streamFromText([
+      'data: {"choices":[{"delta":{"reasoning_content":"Think 1. "}}]}',
+      'data: {"choices":[{"delta":{"reasoning_content":"Think 2."}}]}',
+      'data: {"choices":[{"delta":{"content":"Final"}}]}',
+      'data: {"choices":[{"delta":{"content":" answer"}}]}',
+      'data: [DONE]',
+      '',
+    ].join('\n')))))
+    const deltas: string[] = []
+
+    const result = await new AIService(providerConfig).chatMessagesStream({
+      messages: [{ role: 'user', content: 'hello' }],
+      onDelta: (_delta, fullText) => deltas.push(fullText),
+    })
+
+    expect(result).toBe('<think>Think 1. Think 2.</think>\n\nFinal answer')
+    expect(deltas).toEqual([
+      '<think>Think 1.</think>',
+      '<think>Think 1. Think 2.</think>',
+      '<think>Think 1. Think 2.</think>\n\nFinal',
+      '<think>Think 1. Think 2.</think>\n\nFinal answer',
+    ])
+  })
+
   it('normalizes rate limit and service errors', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(
       JSON.stringify({ error: { message: 'slow down' } }),
@@ -214,5 +239,37 @@ describe('AIService streaming chat', () => {
 
     expect(result).toBe('Hello')
     expect(deltas).toEqual(['Hel', 'Hello'])
+  })
+
+  it('combines reasoning and answer in OpenAI Responses SSE streams', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(streamFromText([
+      'event: response.reasoning.delta',
+      'data: {"reasoning_content":"Plan. "}',
+      '',
+      'event: response.reasoning.delta',
+      'data: {"reasoning_content":"Check."}',
+      '',
+      'event: response.output_text.delta',
+      'data: {"delta":"Done"}',
+      '',
+      'data: [DONE]',
+      '',
+    ].join('\n')))))
+    const deltas: string[] = []
+
+    const result = await new AIService({
+      ...providerConfig,
+      openAIEndpoint: 'responses',
+    }).chatMessagesStream({
+      messages: [{ role: 'user', content: 'hello' }],
+      onDelta: (_delta, fullText) => deltas.push(fullText),
+    })
+
+    expect(result).toBe('<think>Plan. Check.</think>\n\nDone')
+    expect(deltas).toEqual([
+      '<think>Plan.</think>',
+      '<think>Plan. Check.</think>',
+      '<think>Plan. Check.</think>\n\nDone',
+    ])
   })
 })

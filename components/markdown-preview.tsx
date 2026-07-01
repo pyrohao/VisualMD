@@ -502,6 +502,24 @@ export function MarkdownPreview() {
     }
   }, [])
 
+  useEffect(() => {
+    const handleOpenPreview = (event: Event) => {
+      const detail = (event as CustomEvent<{ mode?: PreviewMode }>).detail
+      const nextMode = detail?.mode
+      if (!nextMode || !isPreviewMode(nextMode)) {
+        return
+      }
+
+      setMode(nextMode)
+      window.localStorage.setItem(PREVIEW_MODE_STORAGE_KEY, nextMode)
+    }
+
+    window.addEventListener('visualmd:open-preview', handleOpenPreview)
+    return () => {
+      window.removeEventListener('visualmd:open-preview', handleOpenPreview)
+    }
+  }, [])
+
   const handleLiveLayoutChange = useCallback((nextLayout: LivePreviewLayout) => {
     setLiveLayout(nextLayout)
     window.localStorage.setItem(LIVE_PREVIEW_LAYOUT_STORAGE_KEY, nextLayout)

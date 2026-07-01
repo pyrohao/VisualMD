@@ -44,7 +44,7 @@ import { useSettingsStore } from './settingsStore'
 import { useTabsStore } from './tabsStore'
 import { saveDirtyEditors } from './unsavedChangesStore'
 import { applyMarkdownToDocument, persistMarkdownToActiveSource } from '@/lib/editor-persistence'
-import { getGitFileName, joinGitPath, normalizeGitPath } from '@/lib/git/utils'
+import { joinGitPath, normalizeGitPath } from '@/lib/git/utils'
 
 export type AiReferenceRecord = AiDocReferenceSnapshot & {
   id: string
@@ -54,8 +54,6 @@ export type AiReferenceRecord = AiDocReferenceSnapshot & {
   stale: boolean
   createdAt: number
 }
-
-export type AiDocumentCreateTarget = 'local' | 'git'
 
 type GeneratedDocumentStatus = 'streaming' | 'ready' | 'failed'
 
@@ -142,7 +140,7 @@ interface AiChatStore {
   setChatTemperature: (value: number) => Promise<void>
   setChatMaxTokens: (value: number) => Promise<void>
   setChatHistoryRounds: (value: number) => Promise<void>
-  chooseGeneratedDocumentSaveTarget: (conversationId: string, target: AiDocumentCreateTarget) => Promise<boolean>
+  resolveGeneratedDocumentGitOffer: (conversationId: string, shouldStageToGit: boolean) => Promise<boolean>
   clearGeneratedDocumentSession: (conversationId: string) => void
   undoLastToolApply: () => Promise<boolean>
   dismissLastToolApply: () => void
@@ -208,11 +206,18 @@ function isVisibleMessage(message: AgentMessage) {
 }
 
 function getVisibleMessages(messages: AgentMessage[]): VisibleAgentMessage[] {
-  return messages.filter(isVisibleMessage).map((message) => ({
-    ...message,
-    displayMessage: splitAssistantThinking(getDisplayMessage(message)).text || getDisplayMessage(message),
-    thinking: message.role === 'assistant' ? splitAssistantThinking(getDisplayMessage(message)).thinking : undefined,
-  }))
+  return messages.filter(isVisibleMessage).map((message) => {
+    const displaySource = getDisplayMessage(message)
+    const parsed = message.role === 'assistant'
+      ? splitAssistantThinking(displaySource)
+      : { text: displaySource, thinking: '' }
+
+    return {
+      ...message,
+      displayMessage: parsed.text,
+      thinking: message.role === 'assistant' ? parsed.thinking : undefined,
+    }
+  })
 }
 
 function createToolUndoRecord(args: {
@@ -434,6 +439,7 @@ async function createGeneratedLocalTempFile(fileName: string, content: string) {
 
   const tabId = tabsStore.openFileInTab(normalizedName, content, fileId)
   documentStore.loadDocument(content, normalizedName, fileId)
+  requestAiGeneratedDocumentLivePreview()
   return { fileId, tabId, fileName: normalizedName }
 }
 
@@ -496,43 +502,26 @@ async function removeGeneratedDocumentSession(conversationId: string) {
 
 async function moveGeneratedDocumentToGit(session: GeneratedDocumentSession) {
   const gitStore = useGitStore.getState()
-  const tabsStore = useTabsStore.getState()
-  const documentStore = useDocumentStore.getState()
-  const fileSystemStore = useFileSystemStore.getState()
   const normalizedPath = normalizeGitPath(joinGitPath(session.gitTargetDirectory || '', session.fileName))
 
-  await gitStore.createFile(normalizedPath, session.content, `Create ${normalizedPath}`)
-  const nextGitState = useGitStore.getState()
-  const draft = nextGitState.currentDocumentId ? nextGitState.drafts[nextGitState.currentDocumentId] : null
-  if (draft) {
-    const draftContent = draft.draftContent || session.content
-    tabsStore.openGitFileInTab({
-      fileName: draft.name || getGitFileName(normalizedPath),
-      content: draftContent,
-      savedContent: draftContent,
-      isModified: draft.isDirty || Boolean(draft.isNew),
-      isNew: draft.isNew,
-      fileId: draft.documentId,
-      sourceType: 'git',
-      gitMeta: {
-        provider: draft.provider,
-        ownerOrNamespace: draft.ownerOrNamespace,
-        repo: draft.repo,
-        branch: draft.branch,
-        path: draft.path,
-        sha: draft.sha,
-        fileKind: 'text',
-      },
-    })
-    documentStore.loadDocument(draftContent, draft.name || getGitFileName(normalizedPath), draft.documentId)
+  if (session.tempFileId) {
+    gitStore.stageLocalFile(session.tempFileId, normalizedPath)
+    return
   }
 
-  if (session.tempFileId) {
-    fileSystemStore.deleteFile(session.tempFileId)
+  const created = await createGeneratedLocalTempFile(session.fileName, session.content)
+  if (!created) {
+    throw new Error('无法创建本地文档以加入 Git')
   }
-  if (session.tempTabId) {
-    tabsStore.closeTab(session.tempTabId)
+
+  const nextSession = {
+    ...session,
+    tempFileId: created.fileId,
+    tempTabId: created.tabId,
+    fileName: created.fileName,
   }
+  await finalizeGeneratedDocumentAsLocal(nextSession)
+  useGitStore.getState().stageLocalFile(created.fileId, normalizedPath)
 }
 
 async function applyMarkdownTransaction(
@@ -564,8 +553,17 @@ function getGitTargetDirectory() {
   return ''
 }
 
-function buildGeneratedGitPath(fileName: string) {
-  return joinGitPath(getGitTargetDirectory(), fileName)
+function requestAiGeneratedDocumentLivePreview() {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  window.localStorage.setItem('visualmd-preview-mode', 'live')
+  window.dispatchEvent(new CustomEvent('visualmd:open-preview', {
+    detail: {
+      mode: 'live',
+    },
+  }))
 }
 
 export const useAiChatStore = create<AiChatStore>((set, get) => ({
@@ -740,7 +738,10 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
   },
 
   removeConversation: async (conversationId) => {
-    await deleteAgentConversation(conversationId)
+    await Promise.all([
+      deleteAgentConversation(conversationId),
+      deleteAgentDocumentSession(conversationId),
+    ])
     set((state) => {
       const nextMessages = { ...state.messagesByConversation }
       delete nextMessages[conversationId]
@@ -822,15 +823,13 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
     await saveAgentUiState('chat_history_rounds', String(nextValue))
   },
 
-  chooseGeneratedDocumentSaveTarget: async (conversationId, target) => {
+  resolveGeneratedDocumentGitOffer: async (conversationId, shouldStageToGit) => {
     const session = get().generatedDocumentSessionsByConversation[conversationId]
     if (!session) return false
 
     try {
-      if (target === 'git') {
+      if (shouldStageToGit) {
         await moveGeneratedDocumentToGit(session)
-      } else {
-        await finalizeGeneratedDocumentAsLocal(session)
       }
     } catch (error) {
       await finalizeGeneratedDocumentAsLocal(session)
@@ -1148,6 +1147,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
             updatedAt: Date.now(),
           }
           generatedDocuments.set(event.toolCallId, nextSession)
+          await finalizeGeneratedDocumentAsLocal(nextSession)
           await persistGeneratedDocumentSession(nextSession)
 
           if (isGitCreationAvailable()) {
@@ -1161,7 +1161,6 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
             return
           }
 
-          await finalizeGeneratedDocumentAsLocal(nextSession)
           await removeGeneratedDocumentSession(conversationId)
           set((state) => {
             const nextSessions = { ...state.generatedDocumentSessionsByConversation }
