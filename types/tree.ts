@@ -52,6 +52,37 @@ export interface DocumentMetadata {
   [key: string]: any
 }
 
+export type DocumentMutationScope = 'none' | 'visual' | 'full'
+
+export type DocumentMutationType =
+  | 'load-document'
+  | 'mark-saved'
+  | 'update-node'
+  | 'update-metadata'
+  | 'update-file-name'
+  | 'toggle-node'
+  | 'expand-all'
+  | 'collapse-all'
+  | 'structure-change'
+  | 'markdown-sync'
+  | 'external-markdown'
+  | 'history-change'
+
+export interface DocumentMutation {
+  /** 单调递增的变更编号，用于驱动画布精确更新 */
+  id: number
+  /** 变更类型 */
+  type: DocumentMutationType
+  /** 画布可否局部处理 */
+  scope: DocumentMutationScope
+  /** 受影响的节点 */
+  nodeId?: string | null
+  /** 是否为断开节点 */
+  detached?: boolean
+  /** 发生变化的字段 */
+  fields?: string[]
+}
+
 /**
  * 完整文档状态
  * 对应技术文档2.1节

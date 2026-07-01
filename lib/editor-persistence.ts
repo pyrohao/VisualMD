@@ -4,6 +4,43 @@ import { useGitStore } from '@/stores/gitStore'
 import { useTabsStore } from '@/stores/tabsStore'
 import { inferGitFileKind, isGitBinaryFileKind } from '@/lib/git/file-kind'
 
+export function applyMarkdownToDocument(markdown: string, options: { external?: boolean } = {}) {
+  const documentStore = useDocumentStore.getState() as {
+    getCurrentMarkdown?: () => string
+    updateFromMarkdown?: (markdown: string) => boolean
+    applyExternalMarkdown?: (markdown: string) => boolean
+  }
+  const currentMarkdown = typeof documentStore.getCurrentMarkdown === 'function'
+    ? documentStore.getCurrentMarkdown()
+    : null
+
+  if (currentMarkdown !== null && markdown === currentMarkdown) {
+    return true
+  }
+
+  const applied = options.external && typeof documentStore.applyExternalMarkdown === 'function'
+    ? documentStore.applyExternalMarkdown(markdown)
+    : typeof documentStore.updateFromMarkdown === 'function'
+      ? documentStore.updateFromMarkdown(markdown)
+      : typeof documentStore.applyExternalMarkdown === 'function'
+        ? documentStore.applyExternalMarkdown(markdown)
+        : false
+
+  if (!applied) {
+    return false
+  }
+
+  if (
+    options.external &&
+    typeof documentStore.applyExternalMarkdown !== 'function' &&
+    typeof documentStore.updateFromMarkdown === 'function'
+  ) {
+    useDocumentStore.setState((state) => ({ externalRevision: state.externalRevision + 1 }))
+  }
+
+  return true
+}
+
 export function persistMarkdownToActiveSource(
   markdown: string,
   fileName?: string,
@@ -19,26 +56,58 @@ export function persistMarkdownToActiveSource(
   const activeGitKind =
     activeTab.gitMeta?.fileKind || (activeTab.gitMeta?.path ? inferGitFileKind(activeTab.gitMeta.path) : 'text')
 
+  const syncTabState = () => {
+    if (typeof tabsStore.updateTabContent === 'function') {
+      tabsStore.updateTabContent(activeTab.id, markdown)
+    }
+
+    if (markSaved) {
+      if (typeof tabsStore.markTabAsSaved === 'function') {
+        tabsStore.markTabAsSaved(activeTab.id, nextFileName)
+      } else if (typeof useTabsStore.setState === 'function') {
+        useTabsStore.setState((state) => ({
+          tabs: state.tabs.map((tab) =>
+            tab.id === activeTab.id
+              ? {
+                  ...tab,
+                  fileName: nextFileName,
+                  content: markdown,
+                  savedContent: markdown,
+                  isModified: false,
+                  isNew: false,
+                }
+              : tab
+          ),
+        }))
+      }
+      return
+    }
+
+    if (typeof tabsStore.markTabAsModified === 'function') {
+      tabsStore.markTabAsModified(activeTab.id, true)
+    } else if (typeof useTabsStore.setState === 'function') {
+      useTabsStore.setState((state) => ({
+        tabs: state.tabs.map((tab) =>
+          tab.id === activeTab.id
+            ? {
+                ...tab,
+                fileName: nextFileName,
+                content: markdown,
+                isModified: true,
+              }
+            : tab
+        ),
+      }))
+    }
+  }
+
   if (activeTab.sourceType === 'git' && activeTab.fileId) {
     if (isGitBinaryFileKind(activeGitKind)) {
       return false
     }
 
     useGitStore.getState().updateDraftContent(activeTab.fileId, markdown)
-    useTabsStore.setState((state) => ({
-      tabs: state.tabs.map((tab) =>
-        tab.id === activeTab.id
-          ? {
-              ...tab,
-              fileName: nextFileName,
-              content: markdown,
-              savedContent: markSaved ? markdown : tab.savedContent,
-              isModified: markSaved ? false : true,
-              isNew: markSaved ? false : tab.isNew,
-            }
-          : tab
-      ),
-    }))
+    syncTabState()
 
     if (markSaved) {
       useDocumentStore.getState().markAsSaved()
@@ -48,7 +117,10 @@ export function persistMarkdownToActiveSource(
 
   if (activeTab.fileId) {
     const fileStore = useFileSystemStore.getState()
-    const currentFile = fileStore.files.find((item) => item.id === activeTab.fileId)
+    const currentFiles = Array.isArray((fileStore as { files?: unknown }).files)
+      ? (fileStore as { files: Array<{ id: string; name: string }> }).files
+      : []
+    const currentFile = currentFiles.find((item) => item.id === activeTab.fileId)
 
     if (nextFileName && currentFile && currentFile.name !== nextFileName) {
       fileStore.renameFile(activeTab.fileId, nextFileName)
@@ -60,20 +132,7 @@ export function persistMarkdownToActiveSource(
       fileStore.saveFile(activeTab.fileId, markdown)
     }
 
-    useTabsStore.setState((state) => ({
-      tabs: state.tabs.map((tab) =>
-        tab.id === activeTab.id
-          ? {
-              ...tab,
-              fileName: nextFileName,
-              content: markdown,
-              savedContent: markSaved ? markdown : tab.savedContent,
-              isModified: markSaved ? false : true,
-              isNew: markSaved ? false : tab.isNew,
-            }
-          : tab
-      ),
-    }))
+    syncTabState()
 
     if (markSaved) {
       useDocumentStore.getState().markAsSaved()
@@ -81,20 +140,7 @@ export function persistMarkdownToActiveSource(
     return true
   }
 
-  useTabsStore.setState((state) => ({
-    tabs: state.tabs.map((tab) =>
-      tab.id === activeTab.id
-        ? {
-            ...tab,
-            fileName: nextFileName,
-            content: markdown,
-            savedContent: markSaved ? markdown : tab.savedContent,
-            isModified: markSaved ? false : true,
-            isNew: markSaved ? false : tab.isNew,
-          }
-        : tab
-    ),
-  }))
+  syncTabState()
 
   if (markSaved) {
     useDocumentStore.getState().markAsSaved()

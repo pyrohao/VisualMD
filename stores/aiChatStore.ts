@@ -43,6 +43,7 @@ import { useHistoryStore } from './historyStore'
 import { useSettingsStore } from './settingsStore'
 import { useTabsStore } from './tabsStore'
 import { saveDirtyEditors } from './unsavedChangesStore'
+import { applyMarkdownToDocument, persistMarkdownToActiveSource } from '@/lib/editor-persistence'
 import { getGitFileName, joinGitPath, normalizeGitPath } from '@/lib/git/utils'
 
 export type AiReferenceRecord = AiDocReferenceSnapshot & {
@@ -534,70 +535,18 @@ async function moveGeneratedDocumentToGit(session: GeneratedDocumentSession) {
   }
 }
 
-async function syncMarkdownToActiveSource(
-  nextMarkdown: string,
-  nextFileName?: string,
-  options: { markSaved?: boolean } = {}
-) {
-  const tabsStore = useTabsStore.getState()
-  const activeTab = tabsStore.getActiveTab()
-  if (!activeTab) return
-
-  tabsStore.updateTabContent(activeTab.id, nextMarkdown)
-
-  if (activeTab.sourceType === 'git' && activeTab.fileId) {
-    useGitStore.getState().updateDraftContent(activeTab.fileId, nextMarkdown)
-    if (options.markSaved) {
-      tabsStore.markTabAsSaved(activeTab.id, nextFileName)
-    } else {
-      tabsStore.markTabAsModified(activeTab.id, true)
-    }
-    return
-  }
-
-  if (activeTab.fileId) {
-    if (options.markSaved) {
-      useFileSystemStore.getState().saveFileContent(activeTab.fileId, nextMarkdown)
-    } else {
-      useFileSystemStore.getState().saveFile(activeTab.fileId, nextMarkdown)
-    }
-    if (nextFileName) {
-      useFileSystemStore.getState().renameFile(activeTab.fileId, nextFileName)
-    }
-    if (options.markSaved) {
-      tabsStore.markTabAsSaved(activeTab.id, nextFileName)
-    } else {
-      tabsStore.markTabAsModified(activeTab.id, true)
-    }
-    return
-  }
-
-  if (options.markSaved) {
-    tabsStore.markTabAsSaved(activeTab.id, nextFileName)
-  } else {
-    tabsStore.markTabAsModified(activeTab.id, true)
-  }
-}
-
 async function applyMarkdownTransaction(
   nextMarkdown: string,
   nextFileName?: string,
   options: { markSaved?: boolean } = {}
 ) {
-  const applied = useDocumentStore.getState().applyExternalMarkdown(nextMarkdown)
+  const applied = applyMarkdownToDocument(nextMarkdown, { external: true })
   if (!applied) {
     throw new Error('AI 工具写回失败：文档解析失败。')
   }
 
-  const committedMarkdown = useDocumentStore.getState().getCurrentMarkdown()
-
-  await syncMarkdownToActiveSource(committedMarkdown, nextFileName, options)
-
-  if (options.markSaved) {
-    useDocumentStore.getState().markAsSaved?.()
-  }
-
-  return committedMarkdown
+  await persistMarkdownToActiveSource(nextMarkdown, nextFileName, options)
+  return nextMarkdown
 }
 
 function getGitTargetDirectory() {

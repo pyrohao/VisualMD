@@ -34,17 +34,260 @@ import { CreateNodesDialog } from './create-nodes-dialog'
 import {
   FLOW_HANDLE_IDS,
   findNodeInDetached,
+  getLevelColor,
+  getHandlesForDirection,
   shouldHideVirtualRoot,
   treeToNodesAndEdges,
   type FlowNodeData,
 } from '@/lib/flow-helpers'
+import type { TreeLayoutMode } from '@/lib/layout-engine'
 import { useDocumentStore } from '@/stores/documentStore'
 import { useCanvasLayoutStore } from '@/stores/canvasLayoutStore'
-import type { TreeNode } from '@/types/tree'
+import type { DocumentMutation, TreeNode } from '@/types/tree'
 import { useThemeStore } from '@/stores/themeStore'
 import { useTranslation } from '@/stores/languageStore'
 import { toast } from '@/hooks/use-toast'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
+
+type ThemeConfig = ReturnType<ReturnType<typeof useThemeStore.getState>['getThemeConfig']>
+
+function createNodeCallbacks(
+  updateNode: (nodeId: string, updates: Partial<TreeNode>) => void,
+  toggleNode: (nodeId: string) => void,
+  selectNode: (nodeId: string | null) => void
+) {
+  return {
+    onChange: (id: string, title: string, content: string) => {
+      updateNode(id, { title, content })
+    },
+    onToggleCollapse: (id: string) => {
+      toggleNode(id)
+    },
+    onSelect: (id: string) => {
+      selectNode(id)
+    },
+    onMoveToPosition: (id: string, position: number) => {
+      useDocumentStore.getState().moveNodeToPosition(id, position)
+    },
+    onMetadataChange: (metadata: Record<string, string>) => {
+      useDocumentStore.getState().updateMetadata(metadata)
+    },
+  }
+}
+
+function attachNodeCallbacks(
+  nodes: Node<FlowNodeData>[],
+  callbacks: ReturnType<typeof createNodeCallbacks>,
+  selectedNodeId: string | null
+): Node<FlowNodeData>[] {
+  return nodes.map((node) => ({
+    ...node,
+    selected: node.id === selectedNodeId,
+    data: {
+      ...node.data,
+      ...callbacks,
+    },
+  }))
+}
+
+function attachEdgeStyles(
+  edges: Edge[],
+  selectedEdgeId: string | null,
+  themeConfig: ThemeConfig
+): Edge[] {
+  return edges.map((edge) => ({
+    ...edge,
+    style: {
+      stroke: selectedEdgeId === edge.id ? themeConfig.accent : themeConfig.muted,
+      strokeWidth: selectedEdgeId === edge.id ? 3 : 2,
+    },
+    animated: selectedEdgeId === edge.id,
+  }))
+}
+
+function toFlowNodeData(
+  node: TreeNode,
+  layoutMode: TreeLayoutMode,
+  metadata?: Record<string, string>,
+  orderIndex?: number,
+  siblingsCount?: number
+): Partial<FlowNodeData> {
+  return {
+    label: node.isVirtual ? 'Metadata' : node.title || '未命名',
+    level: node.level,
+    isCollapsed: node.isCollapsed || false,
+    hasChildren: node.children.length > 0,
+    layoutMode,
+    content: node.content,
+    childrenCount: node.children.length,
+    isDetached: node.isDetached || false,
+    isVirtual: node.isVirtual || false,
+    orderIndex,
+    siblingsCount,
+    metadata: node.isVirtual ? metadata : undefined,
+  }
+}
+
+function findNodeContext(
+  root: TreeNode,
+  detachedNodes: TreeNode[],
+  nodeId: string
+): { node: TreeNode; orderIndex?: number; siblingsCount?: number; detached: boolean } | null {
+  if (root.id === nodeId) {
+    return { node: root, orderIndex: 1, siblingsCount: 1, detached: false }
+  }
+
+  const walkTree = (parent: TreeNode): { node: TreeNode; orderIndex?: number; siblingsCount?: number; detached: boolean } | null => {
+    const childCount = parent.children.length
+    for (let index = 0; index < childCount; index += 1) {
+      const child = parent.children[index]
+      if (child.id === nodeId) {
+        return {
+          node: child,
+          orderIndex: index + 1,
+          siblingsCount: childCount,
+          detached: false,
+        }
+      }
+      const nested = walkTree(child)
+      if (nested) {
+        return nested
+      }
+    }
+    return null
+  }
+
+  const inTree = walkTree(root)
+  if (inTree) {
+    return inTree
+  }
+
+  const walkDetached = (
+    nodes: TreeNode[],
+    parentDetached = true
+  ): { node: TreeNode; orderIndex?: number; siblingsCount?: number; detached: boolean } | null => {
+    const siblingsCount = nodes.length
+    for (let index = 0; index < nodes.length; index += 1) {
+      const child = nodes[index]
+      if (child.id === nodeId) {
+        return {
+          node: child,
+          orderIndex: index + 1,
+          siblingsCount,
+          detached: parentDetached,
+        }
+      }
+      const nested = walkDetached(child.children, true)
+      if (nested) {
+        return nested
+      }
+    }
+    return null
+  }
+
+  return walkDetached(detachedNodes)
+}
+
+function buildPatchedEdge(
+  currentEdge: Edge,
+  node: TreeNode,
+  selectedEdgeId: string | null,
+  themeConfig: ThemeConfig
+): Edge {
+  const direction = (currentEdge.sourceHandle === FLOW_HANDLE_IDS.sourceLeft
+    ? 'left'
+    : currentEdge.sourceHandle === FLOW_HANDLE_IDS.sourceBottom
+      ? 'down'
+      : 'right')
+  const { sourceHandle, targetHandle } = getHandlesForDirection(direction)
+
+  return {
+    ...currentEdge,
+    sourceHandle,
+    targetHandle,
+    style: {
+      stroke: selectedEdgeId === currentEdge.id
+        ? themeConfig.accent
+        : node.isDetached
+          ? '#9ca3af'
+          : getLevelColor(node.level),
+      strokeWidth: selectedEdgeId === currentEdge.id ? 3 : 2,
+      cursor: 'pointer',
+      ...(node.isDetached ? { strokeDasharray: '5,5' } : {}),
+    },
+    animated: selectedEdgeId === currentEdge.id,
+    ...(node.isDetached
+      ? {}
+      : {
+          markerEnd: {
+            type: 'arrowclosed',
+            width: 12,
+            height: 12,
+            color: getLevelColor(node.level),
+          },
+        }),
+  }
+}
+
+function rebuildFlowGraph(
+  document: NonNullable<ReturnType<typeof useDocumentStore.getState>['document']>,
+  layoutMode: TreeLayoutMode,
+  selectedNodeId: string | null,
+  selectedEdgeId: string | null,
+  themeConfig: ThemeConfig,
+  callbacks: ReturnType<typeof createNodeCallbacks>
+) {
+  const detachedNodes = document.detachedNodes || []
+  const { nodes, edges } = treeToNodesAndEdges(document.root, detachedNodes, layoutMode)
+
+  return {
+    nodes: attachNodeCallbacks(nodes as Node<FlowNodeData>[], callbacks, selectedNodeId),
+    edges: attachEdgeStyles(edges, selectedEdgeId, themeConfig),
+  }
+}
+
+function applyVisualMutationToNodes(
+  currentNodes: Node<FlowNodeData>[],
+  document: NonNullable<ReturnType<typeof useDocumentStore.getState>['document']>,
+  mutation: DocumentMutation,
+  layoutMode: TreeLayoutMode,
+  selectedNodeId: string | null,
+  callbacks: ReturnType<typeof createNodeCallbacks>
+): Node<FlowNodeData>[] | null {
+  if (!mutation.nodeId) {
+    return null
+  }
+
+  const context = findNodeContext(document.root, document.detachedNodes || [], mutation.nodeId)
+  if (!context) {
+    return null
+  }
+
+  return currentNodes.map((flowNode) => {
+    if (flowNode.id !== mutation.nodeId) {
+      return flowNode
+    }
+
+    const nextData = {
+      ...flowNode.data,
+      ...toFlowNodeData(
+        context.node,
+        layoutMode,
+        document.metadata,
+        context.orderIndex,
+        context.siblingsCount
+      ),
+      ...callbacks,
+    } satisfies FlowNodeData
+
+    return {
+      ...flowNode,
+      position: context.node.position ?? flowNode.position,
+      selected: flowNode.id === selectedNodeId,
+      data: nextData,
+    }
+  })
+}
 
 // 注册自定义节点类型
 const nodeTypes: NodeTypes = {
@@ -70,6 +313,7 @@ export function FlowCanvas() {
     error,
     clearError,
     markAsSaved,
+    lastMutation,
   } = useDocumentStore()
 
   const { getThemeConfig } = useThemeStore()
@@ -77,7 +321,10 @@ export function FlowCanvas() {
   const { t } = useTranslation()
   const { mode: layoutMode } = useCanvasLayoutStore()
   const hideVirtualRoot = document ? shouldHideVirtualRoot(document.root) : false
-  const detachedNodes = useMemo(() => document?.detachedNodes || [], [document?.detachedNodes])
+  const nodeCallbacks = useMemo(
+    () => createNodeCallbacks(updateNode, toggleNode, selectNode),
+    [selectNode, toggleNode, updateNode]
+  )
 
   // 启用键盘快捷键
   useKeyboardShortcuts({
@@ -91,14 +338,23 @@ export function FlowCanvas() {
     },
   })
 
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
+
   // 将树结构转换为React Flow节点和边
 
   const { nodes: initialNodes, edges: initialEdges } = useMemo(() => {
     if (!document) {
       return { nodes: [], edges: [] }
     }
-    return treeToNodesAndEdges(document.root, detachedNodes, layoutMode)
-  }, [detachedNodes, document, layoutMode])
+    return rebuildFlowGraph(
+      document,
+      layoutMode,
+      selectedNodeId,
+      selectedEdgeId,
+      themeConfig,
+      nodeCallbacks
+    )
+  }, [document, layoutMode, nodeCallbacks, selectedEdgeId, selectedNodeId, themeConfig])
 
   // React Flow??
 
@@ -125,75 +381,70 @@ export function FlowCanvas() {
 
   // ??????
 
-  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   // ??????
   const [contextMenuEdge, setContextMenuEdge] = useState<Edge | null>(null)
   const [contextMenuOpen, setContextMenuOpen] = useState(false)
   const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 })
+  const lastAppliedMutationId = useRef<number>(0)
 
   // ????????????
   useEffect(() => {
-    if (!document) return
+    if (!document) {
+      lastAppliedMutationId.current = 0
+      setNodes([])
+      setEdges([])
+      return
+    }
 
-    const detachedNodes = (document as any).detachedNodes || []
-    const { nodes: newNodes, edges: newEdges } = treeToNodesAndEdges(
-      document.root,
-      detachedNodes,
-      layoutMode
+    if (lastMutation.id === lastAppliedMutationId.current) {
+      return
+    }
+
+    if (lastMutation.scope === 'visual') {
+      const patchedNodes = applyVisualMutationToNodes(
+        nodes,
+        document,
+        lastMutation,
+        layoutMode,
+        selectedNodeId,
+        nodeCallbacks
+      )
+
+      if (patchedNodes) {
+        setNodes(patchedNodes)
+
+        if (lastMutation.type === 'update-node' && lastMutation.nodeId) {
+          const context = findNodeContext(document.root, document.detachedNodes || [], lastMutation.nodeId)
+          if (context) {
+            setEdges((currentEdges) =>
+              currentEdges.map((edge) =>
+                edge.target === lastMutation.nodeId ? buildPatchedEdge(edge, context.node, selectedEdgeId, themeConfig) : edge
+              )
+            )
+          }
+        }
+
+        lastAppliedMutationId.current = lastMutation.id
+        return
+      }
+    }
+
+    const nextGraph = rebuildFlowGraph(
+      document,
+      layoutMode,
+      selectedNodeId,
+      selectedEdgeId,
+      themeConfig,
+      nodeCallbacks
     )
-
-    // 添加回调函数到节点数据
-
-    const nodesWithCallbacks = newNodes.map(node => ({
-      ...node,
-      data: {
-        ...node.data,
-        onChange: (id: string, title: string, content: string) => {
-          updateNode(id, { title, content })
-        },
-        onToggleCollapse: (id: string) => {
-          toggleNode(id)
-        },
-        onSelect: (id: string) => {
-          selectNode(id)
-        },
-        onMoveToPosition: (id: string, position: number) => {
-          useDocumentStore.getState().moveNodeToPosition(id, position)
-        },
-        onMetadataChange: (metadata: Record<string, string>) => {
-          useDocumentStore.getState().updateMetadata(metadata)
-        },
-      },
-    }))
-
-    // 设置边的基础样式
-
-    const edgesWithStyle = newEdges.map(edge => ({
-      ...edge,
-      style: {
-        stroke: selectedEdgeId === edge.id ? themeConfig.accent : themeConfig.muted,
-        strokeWidth: selectedEdgeId === edge.id ? 3 : 2,
-      },
-      animated: selectedEdgeId === edge.id,
-    }))
-
-    setNodes(nodesWithCallbacks as Node<FlowNodeData>[])
-    setEdges(edgesWithStyle)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [document, layoutMode])
+    setNodes(nextGraph.nodes)
+    setEdges(nextGraph.edges)
+    lastAppliedMutationId.current = lastMutation.id
+  }, [document, lastMutation, layoutMode, nodeCallbacks, nodes, selectedEdgeId, selectedNodeId, setEdges, setNodes, themeConfig])
 
   // 当选中的边变化时，更新已有边的样式
   useEffect(() => {
-    setEdges((currentEdges) =>
-      currentEdges.map(edge => ({
-        ...edge,
-        style: {
-          stroke: selectedEdgeId === edge.id ? themeConfig.accent : themeConfig.muted,
-          strokeWidth: selectedEdgeId === edge.id ? 3 : 2,
-        },
-        animated: selectedEdgeId === edge.id,
-      }))
-    )
+    setEdges((currentEdges) => attachEdgeStyles(currentEdges, selectedEdgeId, themeConfig))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedEdgeId, themeConfig])
 

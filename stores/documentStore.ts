@@ -13,7 +13,14 @@
 import { create } from 'zustand'
 import { devtools, persist } from 'zustand/middleware'
 import { nanoid } from 'nanoid'
-import type { TreeNode, DocumentState, DocumentMetadata } from '@/types/tree'
+import type {
+  TreeNode,
+  DocumentState,
+  DocumentMetadata,
+  DocumentMutation,
+  DocumentMutationScope,
+  DocumentMutationType,
+} from '@/types/tree'
 import { parseMarkdown } from '@/lib/markdown-parser'
 import { generateFromState, generateMarkdown } from '@/lib/markdown-generator'
 import { useHistoryStore, injectGetDocumentState } from './historyStore'
@@ -40,6 +47,8 @@ interface DocumentStore {
   error: string | null
   /** 外部事务写回版本，用于同步本地编辑文本 */
   externalRevision: number
+  /** 最近一次文档变更语义，供画布增量刷新使用 */
+  lastMutation: DocumentMutation
 
   // ==================== 操作 ====================
   
@@ -220,6 +229,18 @@ interface DocumentStore {
    * 是否可以重做
    */
   canRedo: () => boolean
+}
+
+function createMutation(
+  type: DocumentMutationType,
+  scope: DocumentMutationScope,
+  options: Omit<DocumentMutation, 'id' | 'type' | 'scope'> = {}
+): Omit<DocumentMutation, 'id'> {
+  return {
+    type,
+    scope,
+    ...options,
+  }
 }
 
 /**
@@ -743,12 +764,120 @@ function detachNodeFromDetached(
   return { newDetachedNodes, extractedNode }
 }
 
+function setNodeCollapsedInTree(root: TreeNode, nodeId: string, isCollapsed: boolean): TreeNode {
+  if (root.id === nodeId) {
+    return { ...root, isCollapsed }
+  }
+
+  return {
+    ...root,
+    children: root.children.map((child) => setNodeCollapsedInTree(child, nodeId, isCollapsed)),
+  }
+}
+
+function setNodeCollapsedInDetached(
+  detachedNodes: TreeNode[],
+  nodeId: string,
+  isCollapsed: boolean
+): TreeNode[] {
+  return detachedNodes.map((node) => {
+    if (node.id === nodeId) {
+      return { ...node, isCollapsed }
+    }
+
+    return {
+      ...node,
+      children: setNodeCollapsedInDetached(node.children, nodeId, isCollapsed),
+    }
+  })
+}
+
+function syncCollapseStateInTree(root: TreeNode, expandedNodeIds: Set<string>): TreeNode {
+  const isCollapsed = root.children.length > 0 ? !expandedNodeIds.has(root.id) : false
+
+  return {
+    ...root,
+    isCollapsed,
+    children: root.children.map((child) => syncCollapseStateInTree(child, expandedNodeIds)),
+  }
+}
+
+function syncCollapseStateInDetached(
+  detachedNodes: TreeNode[],
+  expandedNodeIds: Set<string>
+): TreeNode[] {
+  return detachedNodes.map((node) => {
+    const isCollapsed = node.children.length > 0 ? !expandedNodeIds.has(node.id) : false
+
+    return {
+      ...node,
+      isCollapsed,
+      children: syncCollapseStateInDetached(node.children, expandedNodeIds),
+    }
+  })
+}
+
+function collectAllDetachedNodeIds(detachedNodes: TreeNode[]): string[] {
+  const ids: string[] = []
+
+  const traverse = (nodes: TreeNode[]) => {
+    for (const node of nodes) {
+      ids.push(node.id)
+      if (node.children.length > 0) {
+        traverse(node.children)
+      }
+    }
+  }
+
+  traverse(detachedNodes)
+  return ids
+}
+
+function resolveExpandedNodeIdsForDocument(
+  root: TreeNode,
+  detachedNodes: TreeNode[],
+  preferredExpandedNodeIds?: Iterable<string> | null
+): Set<string> {
+  const allIds = new Set([
+    ...collectAllNodeIds(root),
+    ...collectAllDetachedNodeIds(detachedNodes),
+  ])
+
+  if (!preferredExpandedNodeIds) {
+    return allIds
+  }
+
+  const resolved = new Set<string>()
+  for (const id of preferredExpandedNodeIds) {
+    if (allIds.has(id)) {
+      resolved.add(id)
+    }
+  }
+
+  if (resolved.size <= 1 && allIds.size > 1) {
+    return allIds
+  }
+
+  resolved.add('root')
+  return resolved
+}
+
 /**
  * 创建文档Store
  */
 export const useDocumentStore = create<DocumentStore>()(
   devtools(
     (set, get) => {
+      let mutationId = 0
+      const nextMutation = (
+        type: DocumentMutationType,
+        scope: DocumentMutationScope,
+        options: Omit<DocumentMutation, 'id' | 'type' | 'scope'> = {}
+      ): DocumentMutation => ({
+        id: ++mutationId,
+        ...createMutation(type, scope, options),
+      })
+
       // 注入获取文档状态的函数到historyStore
       injectGetDocumentState(() => {
         const { document } = get()
@@ -768,6 +897,11 @@ export const useDocumentStore = create<DocumentStore>()(
         isLoading: false,
         error: null,
         externalRevision: 0,
+        lastMutation: {
+          id: 0,
+          type: 'load-document',
+          scope: 'full',
+        },
 
         // ==================== 操作实现 ====================
         
@@ -786,11 +920,22 @@ export const useDocumentStore = create<DocumentStore>()(
                 
                 // 恢复展开状态
                 if (savedState.expandedNodeIds && savedState.expandedNodeIds.length > 0) {
+                  const expandedNodeIds = resolveExpandedNodeIdsForDocument(
+                    document.root,
+                    document.detachedNodes || [],
+                    savedState.expandedNodeIds
+                  )
+                  const syncedDocument = {
+                    ...document,
+                    root: syncCollapseStateInTree(document.root, expandedNodeIds),
+                    detachedNodes: syncCollapseStateInDetached(document.detachedNodes || [], expandedNodeIds),
+                  }
                   set({ 
-                    document, 
-                    expandedNodeIds: new Set(savedState.expandedNodeIds),
+                    document: syncedDocument, 
+                    expandedNodeIds,
                     selectedNodeId: null,
-                    error: null 
+                    error: null,
+                    lastMutation: nextMutation('load-document', 'full'),
                   })
                   // 清空历史记录
                   useHistoryStore.getState().clear()
@@ -800,12 +945,20 @@ export const useDocumentStore = create<DocumentStore>()(
             }
             
             // 默认展开所有节点
-            const allIds = collectAllNodeIds(document.root)
+            const expandedNodeIds = resolveExpandedNodeIdsForDocument(
+              document.root,
+              document.detachedNodes || []
+            )
             set({ 
-              document, 
-              expandedNodeIds: new Set(allIds),
+              document: {
+                ...document,
+                root: syncCollapseStateInTree(document.root, expandedNodeIds),
+                detachedNodes: syncCollapseStateInDetached(document.detachedNodes || [], expandedNodeIds),
+              }, 
+              expandedNodeIds,
               selectedNodeId: null,
-              error: null 
+              error: null,
+              lastMutation: nextMutation('load-document', 'full'),
             })
             // 清空历史记录
             useHistoryStore.getState().clear()
@@ -828,7 +981,8 @@ export const useDocumentStore = create<DocumentStore>()(
             }
             
             set({ 
-              document: { ...document, isModified: false } 
+              document: { ...document, isModified: false },
+              lastMutation: nextMutation('mark-saved', 'none'),
             })
           }
         },
@@ -850,6 +1004,10 @@ export const useDocumentStore = create<DocumentStore>()(
           const description = updates.title 
             ? `修改标题: "${node?.title || ''}" → "${updates.title}"`
             : `更新节点: ${node?.title || nodeId}`
+          const fields = Object.keys(updates)
+          const isVisualOnly =
+            fields.length > 0 &&
+            fields.every((field) => field === 'title' || field === 'content' || field === 'position')
           
           // 添加历史记录
           useHistoryStore.getState().addHistory({
@@ -866,7 +1024,12 @@ export const useDocumentStore = create<DocumentStore>()(
                 detachedNodes: newDetachedNodes, 
                 version: bumpDocumentVersion(document),
                 isModified: true 
-              } 
+              },
+              lastMutation: nextMutation('update-node', isVisualOnly ? 'visual' : 'full', {
+                nodeId,
+                detached: true,
+                fields,
+              }),
             })
           } else {
             // 更新树中的节点
@@ -877,7 +1040,12 @@ export const useDocumentStore = create<DocumentStore>()(
                 root: newRoot, 
                 version: bumpDocumentVersion(document),
                 isModified: true 
-              } 
+              },
+              lastMutation: nextMutation('update-node', isVisualOnly ? 'visual' : 'full', {
+                nodeId,
+                detached: false,
+                fields,
+              }),
             })
           }
         },
@@ -902,7 +1070,8 @@ export const useDocumentStore = create<DocumentStore>()(
                 root: newRoot, 
                 version: bumpDocumentVersion(document),
                 isModified: true 
-              } 
+              },
+              lastMutation: nextMutation('structure-change', 'full', { nodeId }),
             })
           } catch (error) {
             set({ 
@@ -930,7 +1099,8 @@ export const useDocumentStore = create<DocumentStore>()(
               version: bumpDocumentVersion(document),
               isModified: true
             },
-            selectedNodeId: selectedNodeId === nodeId ? null : selectedNodeId
+            selectedNodeId: selectedNodeId === nodeId ? null : selectedNodeId,
+            lastMutation: nextMutation('structure-change', 'full', { nodeId }),
           })
         },
 
@@ -959,7 +1129,8 @@ export const useDocumentStore = create<DocumentStore>()(
               version: bumpDocumentVersion(document),
               isModified: true
             },
-            selectedNodeId: selectedNodeId === nodeId ? null : selectedNodeId
+            selectedNodeId: selectedNodeId === nodeId ? null : selectedNodeId,
+            lastMutation: nextMutation('structure-change', 'full', { nodeId }),
           })
 
           // 自动保存编辑器状态
@@ -1036,7 +1207,8 @@ export const useDocumentStore = create<DocumentStore>()(
               isModified: true
             },
             expandedNodeIds: newExpanded,
-            error: null
+            error: null,
+            lastMutation: nextMutation('structure-change', 'full', { nodeId: newNode.id }),
           })
 
           return newNode.id
@@ -1071,7 +1243,8 @@ export const useDocumentStore = create<DocumentStore>()(
                 version: bumpDocumentVersion(document),
                 isModified: true 
               },
-              error: null
+              error: null,
+              lastMutation: nextMutation('structure-change', 'full', { nodeId, detached: true }),
             })
 
             // 自动保存编辑器状态
@@ -1111,7 +1284,8 @@ export const useDocumentStore = create<DocumentStore>()(
                 version: bumpDocumentVersion(document),
                 isModified: true 
               },
-              error: null
+              error: null,
+              lastMutation: nextMutation('structure-change', 'full', { nodeId, detached: true }),
             })
 
             // 自动保存编辑器状态
@@ -1264,7 +1438,8 @@ export const useDocumentStore = create<DocumentStore>()(
                 version: bumpDocumentVersion(document),
                 isModified: true
               },
-              error: null
+              error: null,
+              lastMutation: nextMutation('structure-change', 'full', { nodeId, detached: false }),
             })
 
             // 自动保存编辑器状态
@@ -1289,7 +1464,8 @@ export const useDocumentStore = create<DocumentStore>()(
                 version: bumpDocumentVersion(document),
                 isModified: true
               },
-              error: null
+              error: null,
+              lastMutation: nextMutation('structure-change', 'full', { nodeId, detached: false }),
             })
 
             // 自动保存编辑器状态
@@ -1357,7 +1533,8 @@ export const useDocumentStore = create<DocumentStore>()(
               version: bumpDocumentVersion(document),
               isModified: true
             },
-            error: null
+            error: null,
+            lastMutation: nextMutation('structure-change', 'full', { nodeId }),
           })
         },
 
@@ -1408,7 +1585,8 @@ export const useDocumentStore = create<DocumentStore>()(
               version: bumpDocumentVersion(document),
               isModified: true
             },
-            error: null
+            error: null,
+            lastMutation: nextMutation('structure-change', 'full', { nodeId }),
           })
         },
 
@@ -1417,14 +1595,34 @@ export const useDocumentStore = create<DocumentStore>()(
         },
 
         toggleNode: (nodeId: string) => {
-          const { expandedNodeIds } = get()
+          const { document, expandedNodeIds } = get()
+          if (!document) return
+
           const newExpanded = new Set(expandedNodeIds)
           if (newExpanded.has(nodeId)) {
             newExpanded.delete(nodeId)
           } else {
             newExpanded.add(nodeId)
           }
-          set({ expandedNodeIds: newExpanded })
+
+          const isCollapsed = !newExpanded.has(nodeId)
+          const inTree = Boolean(findNodeInTree(document.root, nodeId))
+
+          set({
+            document: {
+              ...document,
+              root: inTree
+                ? setNodeCollapsedInTree(document.root, nodeId, isCollapsed)
+                : document.root,
+              detachedNodes: inTree
+                ? document.detachedNodes || []
+                : setNodeCollapsedInDetached(document.detachedNodes || [], nodeId, isCollapsed),
+              version: bumpDocumentVersion(document),
+              isModified: true,
+            },
+            expandedNodeIds: newExpanded,
+            lastMutation: nextMutation('toggle-node', 'full', { nodeId, detached: !inTree }),
+          })
         },
 
         expandAll: () => {
@@ -1432,11 +1630,36 @@ export const useDocumentStore = create<DocumentStore>()(
           if (!document) return
           
           const allIds = collectAllNodeIds(document.root)
-          set({ expandedNodeIds: new Set(allIds) })
+          const expandedNodeIds = new Set(allIds)
+          set({
+            document: {
+              ...document,
+              root: syncCollapseStateInTree(document.root, expandedNodeIds),
+              detachedNodes: syncCollapseStateInDetached(document.detachedNodes || [], expandedNodeIds),
+              version: bumpDocumentVersion(document),
+              isModified: true,
+            },
+            expandedNodeIds,
+            lastMutation: nextMutation('expand-all', 'full'),
+          })
         },
 
         collapseAll: () => {
-          set({ expandedNodeIds: new Set(['root']) })
+          const { document } = get()
+          if (!document) return
+
+          const expandedNodeIds = new Set(['root'])
+          set({
+            document: {
+              ...document,
+              root: syncCollapseStateInTree(document.root, expandedNodeIds),
+              detachedNodes: syncCollapseStateInDetached(document.detachedNodes || [], expandedNodeIds),
+              version: bumpDocumentVersion(document),
+              isModified: true,
+            },
+            expandedNodeIds,
+            lastMutation: nextMutation('collapse-all', 'full'),
+          })
         },
 
         updateMetadata: (metadata: Record<string, string>) => {
@@ -1457,7 +1680,11 @@ export const useDocumentStore = create<DocumentStore>()(
               metadata,
               version: bumpDocumentVersion(document),
               isModified: true
-            }
+            },
+            lastMutation: nextMutation('update-metadata', 'visual', {
+              nodeId: 'root',
+              fields: Object.keys(metadata),
+            }),
           })
         },
 
@@ -1477,7 +1704,8 @@ export const useDocumentStore = create<DocumentStore>()(
               fileName,
               version: bumpDocumentVersion(document),
               isModified: true
-            }
+            },
+            lastMutation: nextMutation('update-file-name', 'visual'),
           })
         },
 
@@ -1496,10 +1724,22 @@ export const useDocumentStore = create<DocumentStore>()(
             newDocument.fileId = document.fileId
             newDocument.detachedNodes = document.detachedNodes || []
             newDocument.version = bumpDocumentVersion(document)
+            const expandedNodeIds = resolveExpandedNodeIdsForDocument(
+              newDocument.root,
+              newDocument.detachedNodes || [],
+              get().expandedNodeIds
+            )
             
             set({ 
-              document: { ...newDocument, isModified: true },
-              error: null 
+              document: {
+                ...newDocument,
+                root: syncCollapseStateInTree(newDocument.root, expandedNodeIds),
+                detachedNodes: syncCollapseStateInDetached(newDocument.detachedNodes || [], expandedNodeIds),
+                isModified: true,
+              },
+              expandedNodeIds,
+              error: null,
+              lastMutation: nextMutation('markdown-sync', 'full'),
             })
             return true
           } catch (error) {
@@ -1515,7 +1755,10 @@ export const useDocumentStore = create<DocumentStore>()(
           if (!applied) {
             return false
           }
-          set((state) => ({ externalRevision: state.externalRevision + 1 }))
+          set((state) => ({
+            externalRevision: state.externalRevision + 1,
+            lastMutation: nextMutation('external-markdown', 'full'),
+          }))
           return true
         },
 
@@ -1549,6 +1792,7 @@ export const useDocumentStore = create<DocumentStore>()(
                   isModified: true,
                 },
                 error: null,
+                lastMutation: nextMutation('structure-change', 'full', { nodeId }),
               })
               return 'node'
             }
@@ -1573,6 +1817,7 @@ export const useDocumentStore = create<DocumentStore>()(
                   isModified: true,
                 },
                 error: null,
+                lastMutation: nextMutation('structure-change', 'full', { nodeId: parentNode.id }),
               })
               return 'parent'
             }
@@ -1637,6 +1882,7 @@ export const useDocumentStore = create<DocumentStore>()(
                   isModified: true
                 },
                 externalRevision: get().externalRevision + 1,
+                lastMutation: nextMutation('history-change', 'full'),
               })
               return true
             }
@@ -1661,6 +1907,7 @@ export const useDocumentStore = create<DocumentStore>()(
                   isModified: true
                 },
                 externalRevision: get().externalRevision + 1,
+                lastMutation: nextMutation('history-change', 'full'),
               })
               return true
             }

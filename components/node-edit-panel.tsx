@@ -18,7 +18,7 @@ import { useGitStore } from '@/stores/gitStore'
 import { useUnsavedChangesStore } from '@/stores/unsavedChangesStore'
 import { useTranslation } from '@/stores/languageStore'
 import { findNodeInTreeOrDetached } from '@/lib/flow-helpers'
-import { persistActiveTabSave } from '@/lib/editor-persistence'
+import { persistActiveTabSave, persistMarkdownToActiveSource } from '@/lib/editor-persistence'
 import { toast } from '@/hooks/use-toast'
 import type { TreeNode } from '@/types/tree'
 import { DeleteNodeDialog, type DeleteMode } from './delete-node-dialog'
@@ -285,22 +285,9 @@ export function NodeEditPanel() {
     const activeGitDocumentId = activeTab?.sourceType === 'git' ? activeTab.fileId || null : null
 
     if (currFileId && !activeGitDocumentId) {
-      useFileSystemStore.getState().saveFileContent(currFileId, latestContent)
-      const currentTabId = useTabsStore.getState().activeTabId
-      if (currentTabId) {
-        useTabsStore.getState().updateTabContent(currentTabId, latestContent)
-        useTabsStore.getState().markTabAsSaved(currentTabId, doc.fileName)
-      }
+      persistMarkdownToActiveSource(latestContent, doc.fileName, { markSaved: true })
     } else if (activeGitDocumentId) {
-      const gitDocumentId = activeGitDocumentId
-      if (gitDocumentId) {
-        useGitStore.getState().updateDraftContent(gitDocumentId, latestContent)
-      }
-      const currentTabId = useTabsStore.getState().activeTabId
-      if (currentTabId) {
-        useTabsStore.getState().updateTabContent(currentTabId, latestContent)
-        useTabsStore.getState().markTabAsModified(currentTabId, true)
-      }
+      persistMarkdownToActiveSource(latestContent, doc.fileName, { markSaved: false })
     } else if (editTemplateId) {
       // 保存模板内容
       useSidebarStore.setState((state) => ({
@@ -396,22 +383,9 @@ export function NodeEditPanel() {
     const activeGitDocumentId = activeTab?.sourceType === 'git' ? activeTab.fileId || null : null
 
     if (currFileId && !activeGitDocumentId) {
-      useFileSystemStore.getState().saveFileContent(currFileId, latestContent)
-      const currentTabId = useTabsStore.getState().activeTabId
-      if (currentTabId) {
-        useTabsStore.getState().updateTabContent(currentTabId, latestContent)
-        useTabsStore.getState().markTabAsSaved(currentTabId, doc.fileName)
-      }
+      persistMarkdownToActiveSource(latestContent, doc.fileName, { markSaved: true })
     } else if (activeGitDocumentId) {
-      const gitDocumentId = activeGitDocumentId
-      if (gitDocumentId) {
-        useGitStore.getState().updateDraftContent(gitDocumentId, latestContent)
-      }
-      const currentTabId = useTabsStore.getState().activeTabId
-      if (currentTabId) {
-        useTabsStore.getState().updateTabContent(currentTabId, latestContent)
-        useTabsStore.getState().markTabAsModified(currentTabId, true)
-      }
+      persistMarkdownToActiveSource(latestContent, doc.fileName, { markSaved: false })
     } else if (editTemplateId) {
       useSidebarStore.setState((state) => ({
         templates: state.templates.map(t =>
@@ -486,10 +460,10 @@ export function NodeEditPanel() {
       clearTimeout(autoSaveTimeoutRef.current)
     }
 
-    // 设置自动保存定时器（0.8秒后保存）
+    // 设置自动保存定时器（1.5秒后保存）
     autoSaveTimeoutRef.current = setTimeout(() => {
       doAutoSave()
-    }, 800)
+    }, 1500)
 
     return () => {
       if (autoSaveTimeoutRef.current) {

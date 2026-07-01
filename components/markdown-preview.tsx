@@ -21,7 +21,7 @@ import { useTranslation } from '@/stores/languageStore'
 import { useAiChatStore } from '@/stores/aiChatStore'
 import { getGitProviderClient } from '@/lib/git/providers'
 import { inferGitFileKind, inferGitFileMimeType, isGitBinaryFileKind } from '@/lib/git/file-kind'
-import { persistMarkdownToActiveSource } from '@/lib/editor-persistence'
+import { applyMarkdownToDocument, persistMarkdownToActiveSource } from '@/lib/editor-persistence'
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
@@ -50,6 +50,15 @@ import { Button } from '@/components/ui/button'
  */
 type PreviewMode = 'preview' | 'edit' | 'live'
 type LivePreviewLayout = 'side-by-side' | 'stacked'
+type EditorSelectionSnapshot = {
+  mode: PreviewMode
+  start: number
+  end: number
+  direction: 'forward' | 'backward' | 'none'
+  scrollTop: number
+  scrollLeft: number
+  shouldRefocus: boolean
+}
 
 const LIVE_PREVIEW_LAYOUT_STORAGE_KEY = 'visualmd-live-preview-layout'
 const PREVIEW_MODE_STORAGE_KEY = 'visualmd-preview-mode'
@@ -476,6 +485,53 @@ export function MarkdownPreview() {
     window.localStorage.setItem(LIVE_PREVIEW_LAYOUT_STORAGE_KEY, nextLayout)
   }, [])
 
+  const captureEditorSelectionSnapshot = useCallback((): EditorSelectionSnapshot | null => {
+    const textarea = mode === 'live' ? liveEditorRef.current : mode === 'edit' ? editTextareaRef.current : null
+    if (!textarea) {
+      return null
+    }
+
+    const activeElement = globalThis.document?.activeElement ?? null
+
+    return {
+      mode,
+      start: textarea.selectionStart ?? 0,
+      end: textarea.selectionEnd ?? 0,
+      direction: textarea.selectionDirection ?? 'none',
+      scrollTop: textarea.scrollTop,
+      scrollLeft: textarea.scrollLeft,
+      shouldRefocus: activeElement === textarea,
+    }
+  }, [mode])
+
+  const restoreEditorSelectionSnapshot = useCallback((
+    snapshot: EditorSelectionSnapshot | null,
+    nextMarkdown: string
+  ) => {
+    if (!snapshot || snapshot.mode === 'preview') {
+      return
+    }
+
+    window.requestAnimationFrame(() => {
+      const textarea = snapshot.mode === 'live' ? liveEditorRef.current : editTextareaRef.current
+      if (!textarea) {
+        return
+      }
+
+      const nextLength = nextMarkdown.length
+      const nextStart = Math.min(snapshot.start, nextLength)
+      const nextEnd = Math.min(snapshot.end, nextLength)
+
+      if (snapshot.shouldRefocus) {
+        textarea.focus({ preventScroll: true })
+      }
+
+      textarea.setSelectionRange(nextStart, nextEnd, snapshot.direction)
+      textarea.scrollTop = snapshot.scrollTop
+      textarea.scrollLeft = snapshot.scrollLeft
+    })
+  }, [])
+
   useEffect(() => {
     return () => {
       if (selectionTimerRef.current !== null) {
@@ -563,26 +619,24 @@ export function MarkdownPreview() {
       clearTimeout(autoSaveTimeoutRef.current)
       autoSaveTimeoutRef.current = null
     }
-    setEditContent(latestMarkdownRef.current)
-    setPersistedEditContent(latestMarkdownRef.current)
+    const sourceMarkdown =
+      activeTab?.savedContent ??
+      activeTab?.content ??
+      latestMarkdownRef.current
+    setEditContent(sourceMarkdown)
+    setPersistedEditContent(sourceMarkdown)
     clearSelectionCandidate()
-  }, [clearSelectionCandidate, documentKey])
+  }, [activeTab?.content, activeTab?.savedContent, clearSelectionCandidate, documentKey])
 
   const commitDraftToDocument = useCallback((nextMarkdown: string) => {
-    const documentStore = useDocumentStore.getState()
-    const currentMarkdown = documentStore.getCurrentMarkdown()
-
-    if (nextMarkdown === currentMarkdown) {
-      return true
-    }
-
-    return documentStore.updateFromMarkdown(nextMarkdown)
+    return applyMarkdownToDocument(nextMarkdown)
   }, [])
 
   const persistEditorDraft = useCallback(() => {
     const nextMarkdown = editContentRef.current
     const activeTab = useTabsStore.getState().getActiveTab()
     const editingTemplateId = useSidebarStore.getState().editingTemplateId
+    const selectionSnapshot = captureEditorSelectionSnapshot()
 
     if (!document || !commitDraftToDocument(nextMarkdown)) {
       return false
@@ -610,8 +664,8 @@ export function MarkdownPreview() {
               ? {
                   ...tab,
                   fileName: latestFileName || tab.fileName,
-                  content: latestMarkdown,
-                  savedContent: latestMarkdown,
+                  content: nextMarkdown,
+                  savedContent: nextMarkdown,
                   isModified: false,
                 }
               : tab
@@ -620,10 +674,11 @@ export function MarkdownPreview() {
       }
 
       documentStore.markAsSaved()
-      editContentRef.current = latestMarkdown
-      persistedEditContentRef.current = latestMarkdown
-      setEditContent(latestMarkdown)
-      setPersistedEditContent(latestMarkdown)
+      editContentRef.current = nextMarkdown
+      persistedEditContentRef.current = nextMarkdown
+      setEditContent(nextMarkdown)
+      setPersistedEditContent(nextMarkdown)
+      restoreEditorSelectionSnapshot(selectionSnapshot, nextMarkdown)
       window.requestAnimationFrame(() => {
         isPersistingDraftRef.current = false
       })
@@ -632,11 +687,12 @@ export function MarkdownPreview() {
     }
 
     if (activeTab?.sourceType === 'git' && activeTab.fileId) {
-      persistMarkdownToActiveSource(latestMarkdown, latestFileName, { markSaved: true })
-      editContentRef.current = latestMarkdown
-      persistedEditContentRef.current = latestMarkdown
-      setEditContent(latestMarkdown)
-      setPersistedEditContent(latestMarkdown)
+      persistMarkdownToActiveSource(nextMarkdown, latestFileName, { markSaved: true })
+      editContentRef.current = nextMarkdown
+      persistedEditContentRef.current = nextMarkdown
+      setEditContent(nextMarkdown)
+      setPersistedEditContent(nextMarkdown)
+      restoreEditorSelectionSnapshot(selectionSnapshot, nextMarkdown)
       window.requestAnimationFrame(() => {
         isPersistingDraftRef.current = false
       })
@@ -645,11 +701,12 @@ export function MarkdownPreview() {
     }
 
     if (activeTab?.fileId) {
-      persistMarkdownToActiveSource(latestMarkdown, latestFileName, { markSaved: true })
-      editContentRef.current = latestMarkdown
-      persistedEditContentRef.current = latestMarkdown
-      setEditContent(latestMarkdown)
-      setPersistedEditContent(latestMarkdown)
+      persistMarkdownToActiveSource(nextMarkdown, latestFileName, { markSaved: true })
+      editContentRef.current = nextMarkdown
+      persistedEditContentRef.current = nextMarkdown
+      setEditContent(nextMarkdown)
+      setPersistedEditContent(nextMarkdown)
+      restoreEditorSelectionSnapshot(selectionSnapshot, nextMarkdown)
       window.requestAnimationFrame(() => {
         isPersistingDraftRef.current = false
       })
@@ -661,7 +718,7 @@ export function MarkdownPreview() {
       isPersistingDraftRef.current = false
     })
     return false
-  }, [commitDraftToDocument, document])
+  }, [captureEditorSelectionSnapshot, commitDraftToDocument, document, restoreEditorSelectionSnapshot])
 
   const gitAssets = useMemo(
     () => collectGitAssetMap(stagedChanges, pendingAssetChanges),
@@ -740,12 +797,17 @@ export function MarkdownPreview() {
 
     const enteringEditing = mode === 'preview' && (newMode === 'edit' || newMode === 'live')
     if (enteringEditing) {
-      setEditContent(markdown)
+      const sourceMarkdown =
+        activeTab?.savedContent ??
+        activeTab?.content ??
+        markdown
+      setEditContent(sourceMarkdown)
+      setPersistedEditContent(sourceMarkdown)
     }
 
     setMode(newMode)
     window.localStorage.setItem(PREVIEW_MODE_STORAGE_KEY, newMode)
-  }, [mode, markdown, persistEditorDraft])
+  }, [activeTab?.content, activeTab?.savedContent, markdown, mode, persistEditorDraft])
 
   // 处理编辑内容变化
   const handleEditChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -831,7 +893,7 @@ export function MarkdownPreview() {
 
     autoSaveTimeoutRef.current = setTimeout(() => {
       persistEditorDraft()
-    }, 800)
+    }, 1500)
 
     return () => {
       if (autoSaveTimeoutRef.current) {
