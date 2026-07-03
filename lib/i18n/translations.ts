@@ -257,6 +257,8 @@ export interface Translations {
     connect: string
     reconnect: string
     connected: string
+    connectFailed: string
+    connectFailedNotFound: string
     loadRepos: string
     reposLoaded: string
     availableBranches: string
@@ -603,6 +605,8 @@ export const translations: Record<Language, Translations> = {
       connect: '连接',
       reconnect: '重新连接',
       connected: '已连接',
+      connectFailed: '连接失败',
+      connectFailedNotFound: '未找到对应仓库资源。请检查 PAT 是否有效，以及平台、用户名/组织、仓库名和分支配置是否填写正确。',
       loadRepos: '加载仓库',
       reposLoaded: '仓库列表已加载',
       availableBranches: '分支',
@@ -945,6 +949,8 @@ export const translations: Record<Language, Translations> = {
       connect: 'Connect',
       reconnect: 'Reconnect',
       connected: 'Connected',
+      connectFailed: 'Connection failed',
+      connectFailedNotFound: 'Repository resource was not found. Check whether the PAT is valid and confirm the provider, owner/namespace, repository, and branch are correct.',
       loadRepos: 'Load Repos',
       reposLoaded: 'Repositories loaded',
       availableBranches: 'Branches',

@@ -12,10 +12,24 @@ import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { useTranslation } from '@/stores/languageStore'
 import { useGitStore } from '@/stores/gitStore'
 import { useSidebarStore } from '@/stores/sidebarStore'
+import { getGitProviderErrorContext } from '@/lib/git/provider-errors'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { toast } from '@/hooks/use-toast'
+
+function buildGitConnectErrorDescription(
+  error: unknown,
+  t: (key: string) => string
+) {
+  const { code, status, message } = getGitProviderErrorContext(error)
+
+  if (code === 'not_found' || status === 404) {
+    return t('git.connectFailedNotFound')
+  }
+
+  return message
+}
 
 export function SettingsPanel() {
   const { getThemeConfig } = useThemeStore()
@@ -38,23 +52,21 @@ export function SettingsPanel() {
     setConfig: setGitConfig,
     getDecryptedToken,
     validateAndLoad: validateGitAndLoad,
-    loadRepos: loadGitRepos,
   } = useGitStore()
 
   const handleGitConnect = async () => {
     try {
       await validateGitAndLoad()
       toast({ title: t('git.connected') })
-    } catch {
-      // git store handles error state/toast elsewhere
+    } catch (error) {
+      toast({
+        title: t('git.connectFailed'),
+        description: buildGitConnectErrorDescription(error, t),
+        variant: 'destructive',
+      })
     }
   }
 
-  const handleGitLoadRepos = async () => {
-    await loadGitRepos()
-    toast({ title: t('git.reposLoaded') })
-  }
-  
   return (
     <div className="flex h-full flex-col" style={{ backgroundColor: themeConfig.sidebar }}>
       {/* 头部 */}
@@ -77,7 +89,7 @@ export function SettingsPanel() {
             </div>
 
             <div
-              className="flex items-center justify-between rounded-md border p-2.5 text-xs"
+              className="flex items-center rounded-md border p-2.5 text-xs"
               style={{
                 backgroundColor: gitConnected ? `${themeConfig.success}10` : `${themeConfig.warning}10`,
                 borderColor: gitConnected ? `${themeConfig.success}30` : `${themeConfig.warning}30`,
@@ -93,13 +105,6 @@ export function SettingsPanel() {
                   {gitConnected ? t('settings.gitConfigured') : t('settings.gitNotConfigured')}
                 </span>
               </div>
-              <button
-                onClick={() => setActivePanel('git')}
-                className="rounded-md px-2 py-1 text-[11px] transition-opacity hover:opacity-80"
-                style={{ color: themeConfig.primary, backgroundColor: `${themeConfig.primary}10` }}
-              >
-                {t('settings.openGitPanel')}
-              </button>
             </div>
 
             <div className="space-y-3 rounded-lg border p-4" style={{ borderColor: themeConfig.border }}>
@@ -221,7 +226,7 @@ export function SettingsPanel() {
                 </Button>
                 <Button
                   variant="outline"
-                  onClick={handleGitLoadRepos}
+                  onClick={() => setActivePanel('git')}
                   disabled={isGitConnecting}
                   className="w-full min-w-0"
                   style={{
@@ -230,7 +235,7 @@ export function SettingsPanel() {
                     backgroundColor: themeConfig.card,
                   }}
                 >
-                  {t('git.loadRepos')}
+                  {t('settings.openGitPanel')}
                 </Button>
               </div>
             </div>

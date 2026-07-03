@@ -164,3 +164,25 @@ export async function withGitProviderError<T>(
     throw normalizeGitProviderError(provider, error)
   }
 }
+
+export function getGitProviderErrorContext(error: unknown): {
+  code?: GitProviderErrorCode
+  status?: number
+  message: string
+} {
+  if (error instanceof GitProviderError) {
+    return {
+      code: error.code,
+      status: error.status,
+      message: error.message,
+    }
+  }
+
+  const message = readMessage(error)
+  const status = readStatus(error)
+
+  return {
+    status,
+    message: message || 'Git operation failed.',
+  }
+}

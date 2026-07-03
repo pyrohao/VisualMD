@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import { CheckCircle2, ChevronRight, LayoutTemplate, MousePointerClick, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -102,7 +103,8 @@ function collectDefaults(
 
 function renderInlineSegments(
   segments: PrototypeInlineSegment[],
-  resolveImageSrc?: (src: string) => string | null
+  resolveImageSrc?: (src: string) => string | null,
+  themeConfig?: { border: string; card: string }
 ) {
   return segments.map((segment, index) => {
     const imageSrc = segment.imageSrc ? (resolveImageSrc?.(segment.imageSrc) || segment.imageSrc) : undefined
@@ -112,6 +114,10 @@ function renderInlineSegments(
         src={imageSrc}
         alt={segment.text}
         className="my-3 max-h-80 max-w-full rounded-xl border object-contain"
+        style={{
+          borderColor: themeConfig ? `${themeConfig.border}99` : undefined,
+          backgroundColor: themeConfig ? `${themeConfig.card}80` : undefined,
+        }}
       />
     ) : segment.code ? (
       <code
@@ -335,12 +341,33 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
     }
   }
 
+  const prototypeTabsListStyle = {
+    '--proto-tabs-list-bg': `${themeConfig.card}cc`,
+  } as CSSProperties
+
+  const prototypeTabsTriggerStyle = {
+    '--proto-tabs-text': themeConfig.text,
+    '--proto-tabs-active-text': themeConfig.heading,
+    '--proto-tabs-active-bg': themeConfig.card,
+    '--proto-tabs-active-border': `${themeConfig.border}cc`,
+    '--proto-tabs-active-shadow': `${themeConfig.primary}14`,
+  } as CSSProperties
+
+  const prototypeSwitchStyle = {
+    '--proto-switch-off-bg': themeConfig.input,
+    '--proto-switch-off-border': themeConfig.border,
+    '--proto-switch-on-bg': `${themeConfig.primary}cc`,
+    '--proto-switch-on-border': `${themeConfig.primary}aa`,
+    '--proto-switch-thumb-off': themeConfig.card,
+    '--proto-switch-thumb-on': themeConfig.buttonText || '#fff',
+  } as CSSProperties
+
   const renderMarkdownBlock = (block: PrototypeMarkdownBlock, stateKey: string) => {
     switch (block.type) {
       case 'paragraph':
         return (
           <p key={block.id} className="text-sm leading-7" style={{ color: themeConfig.text }}>
-            {renderInlineSegments(block.segments, resolvePrototypeImageSrc)}
+            {renderInlineSegments(block.segments, resolvePrototypeImageSrc, themeConfig)}
           </p>
         )
       case 'blockquote':
@@ -354,7 +381,7 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
               color: themeConfig.text,
             }}
           >
-            {renderInlineSegments(block.segments, resolvePrototypeImageSrc)}
+            {renderInlineSegments(block.segments, resolvePrototypeImageSrc, themeConfig)}
           </blockquote>
         )
       case 'list': {
@@ -366,7 +393,7 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
             style={{ color: themeConfig.text }}
           >
             {block.items.map((item, index) => (
-              <li key={`${block.id}-${index}`}>{renderInlineSegments(item, resolvePrototypeImageSrc)}</li>
+              <li key={`${block.id}-${index}`}>{renderInlineSegments(item, resolvePrototypeImageSrc, themeConfig)}</li>
             ))}
           </Tag>
         )
@@ -396,7 +423,7 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
                     color: themeConfig.text,
                   }}
                 >
-                  <span>{renderInlineSegments(item.segments, resolvePrototypeImageSrc)}</span>
+                  <span>{renderInlineSegments(item.segments, resolvePrototypeImageSrc, themeConfig)}</span>
                   {checked && (
                     <span className="flex items-center gap-1 text-xs" style={{ color: themeConfig.success }}>
                       <CheckCircle2 className="h-4 w-4" />
@@ -434,7 +461,7 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
                         className="border-b px-4 py-3 align-top"
                         style={{ borderColor: themeConfig.border, color: themeConfig.text }}
                       >
-                        {renderInlineSegments(parseInlineSegments(cell), resolvePrototypeImageSrc)}
+                        {renderInlineSegments(parseInlineSegments(cell), resolvePrototypeImageSrc, themeConfig)}
                       </td>
                     ))}
                   </tr>
@@ -505,7 +532,7 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
               color: themeConfig.text,
             }}
           >
-            {renderInlineSegments(block.content, resolvePrototypeImageSrc)}
+            {renderInlineSegments(block.content, resolvePrototypeImageSrc, themeConfig)}
           </div>
         )
       case 'input':
@@ -568,11 +595,13 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
               {block.label}
             </p>
             <Switch
+              className="border [--switch-off-bg:var(--proto-switch-off-bg)] [--switch-off-border:var(--proto-switch-off-border)] [--switch-on-bg:var(--proto-switch-on-bg)] [--switch-on-border:var(--proto-switch-on-border)] [--switch-thumb-off:var(--proto-switch-thumb-off)] [--switch-thumb-on:var(--proto-switch-thumb-on)]"
               checked={toggleValues[block.id] ?? block.checked}
               onCheckedChange={(checked) => {
                 setToggleValues((current) => ({ ...current, [block.id]: checked }))
                 setLastAction(`${block.label}: ${checked}`)
               }}
+              style={prototypeSwitchStyle}
             />
           </div>
         )
@@ -616,13 +645,16 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
             className="gap-4"
           >
             <TabsList
-              style={{
-                backgroundColor: themeConfig.background,
-                border: `1px solid ${themeConfig.border}`,
-              }}
+              className="bg-[var(--proto-tabs-list-bg)] shadow-[inset_0_1px_0_rgba(255,255,255,0.16)]"
+              style={prototypeTabsListStyle}
             >
               {block.items.map((item) => (
-                <TabsTrigger key={item} value={item} style={{ color: themeConfig.text }}>
+                <TabsTrigger
+                  key={item}
+                  value={item}
+                  className="text-[var(--proto-tabs-text)] data-[state=active]:border-[var(--proto-tabs-active-border)] data-[state=active]:bg-[var(--proto-tabs-active-bg)] data-[state=active]:text-[var(--proto-tabs-active-text)] data-[state=active]:shadow-[0_6px_16px_var(--proto-tabs-active-shadow)]"
+                  style={prototypeTabsTriggerStyle}
+                >
                   {item}
                 </TabsTrigger>
               ))}

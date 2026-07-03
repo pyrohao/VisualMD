@@ -31,6 +31,7 @@ import { requestNavigationWithUnsavedGuard } from '@/stores/unsavedChangesStore'
 import { useDocumentStore } from '@/stores/documentStore'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { inferGitFileKind, inferGitFileMimeType, isGitBinaryFileKind } from '@/lib/git/file-kind'
+import { getGitProviderErrorContext } from '@/lib/git/provider-errors'
 import { buildGitDocumentId, getGitFileName, joinGitPath, normalizeGitPath } from '@/lib/git/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -49,6 +50,19 @@ type DeleteDialogState =
   | { type: 'delete-file'; path: string }
   | { type: 'delete-folder'; path: string }
   | null
+
+function buildGitConnectErrorDescription(
+  error: unknown,
+  t: (key: string) => string
+) {
+  const { code, status, message } = getGitProviderErrorContext(error)
+
+  if (code === 'not_found' || status === 404) {
+    return t('git.connectFailedNotFound')
+  }
+
+  return message
+}
 
 function GitTreeNode({
   path = '',
@@ -347,7 +361,7 @@ export function GitPanel() {
   }, [clearError, error, t])
 
   const openDraftInTab = (documentId: string, content?: string) => {
-    const draft = drafts[documentId]
+    const draft = useGitStore.getState().drafts[documentId]
     if (!draft) return
 
     const draftContent = content ?? draft.draftContent
@@ -410,8 +424,12 @@ export function GitPanel() {
     try {
       await validateAndLoad()
       toast({ title: t('git.connected') })
-    } catch {
-      // handled by store
+    } catch (error) {
+      toast({
+        title: t('git.connectFailed'),
+        description: buildGitConnectErrorDescription(error, t),
+        variant: 'destructive',
+      })
     }
   }
 
@@ -662,18 +680,20 @@ export function GitPanel() {
             </Button>
           </div>
 
-          <Button
-            onClick={handleConnect}
-            className="w-full"
-            disabled={isConnecting}
-            style={{
-              backgroundColor: themeConfig.primary,
-              color: themeConfig.buttonText || '#fff',
-            }}
-          >
-            {isConnecting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <GitBranch className="mr-2 h-4 w-4" />}
-            {connected ? t('git.reconnect') : t('git.connect')}
-          </Button>
+          {connected && (
+            <Button
+              onClick={handleConnect}
+              className="w-full"
+              disabled={isConnecting}
+              style={{
+                backgroundColor: themeConfig.primary,
+                color: themeConfig.buttonText || '#fff',
+              }}
+            >
+              {isConnecting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <GitBranch className="mr-2 h-4 w-4" />}
+              {t('git.reconnect')}
+            </Button>
+          )}
         </div>
 
         <div

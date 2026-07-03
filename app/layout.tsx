@@ -3,7 +3,6 @@ import type { Metadata } from 'next'
 import { Analytics } from '@vercel/analytics/next'
 import { Toaster } from '@/components/ui/toaster'
 import './globals.css'
-import 'react-diff-view/style/index.css'
 
 export const metadata: Metadata = {
   title: 'Markdown Visual Editor - 可视化Markdown编辑器',
