@@ -1214,6 +1214,10 @@ export const useGitStore = create<GitStore>()(
         },
 
         stageLocalFile: (fileId, repoPath) => {
+          if (!get().connected) {
+            throw new Error('Connect a repository first')
+          }
+
           const file = useFileSystemStore.getState().files.find((item) => item.id === fileId)
           if (!file) return
 

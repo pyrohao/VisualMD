@@ -13,9 +13,14 @@
 import { create } from 'zustand'
 import { devtools, persist } from 'zustand/middleware'
 import { nanoid } from 'nanoid'
-import type { Folder, MarkdownFile, Workspace, DropPosition } from '@/types/file-system'
+import type { Folder, MarkdownFile, Workspace, DropPosition, WorkspaceAsset } from '@/types/file-system'
 import { useDocumentStore } from './documentStore'
 import { useGitStore } from './gitStore'
+import { useTabsStore } from './tabsStore'
+import { buildLocalMarkdownPath, buildRelativeAssetPath, createLocalAssetRecord } from '@/lib/local-image-resolution'
+import { saveLocalWorkspaceAssetBinary, deleteLocalWorkspaceAssetBinary } from '@/lib/local-workspace-storage'
+import { createIndexedDbPersistStorage } from '@/lib/git-store-persist-storage'
+import { exportMarkdownFileWithAssets, exportWorkspaceAsset } from '@/lib/local-workspace-export'
 
 /**
  * 生成唯一的文件名（处理重复）
@@ -69,6 +74,7 @@ interface FileSystemStore {
   folders: Folder[]
   /** 文件列表 */
   files: MarkdownFile[]
+  assets: WorkspaceAsset[]
   /** 当前打开的文件ID */
   currentFileId: string | null
   /** 展开的文件夹ID集合 */
@@ -108,6 +114,9 @@ interface FileSystemStore {
   saveFile: (id: string, content: string) => void
   /** 保存文件内容并标记为已保存 */
   saveFileContent: (id: string, content: string) => void
+  uploadAsset: (fileId: string, file: File) => Promise<{ assetPath: string; relativePath: string }>
+  deleteAsset: (assetPath: string) => Promise<void>
+  exportAsset: (assetPath: string) => Promise<void>
   /** 标记文件为已保存 */
   markFileAsSaved: (id: string) => void
   /** 标记文件为已修改 */
@@ -129,7 +138,7 @@ interface FileSystemStore {
   // ==================== 导出 ====================
   
   /** 导出文件 */
-  exportFile: (id: string) => void
+  exportFile: (id: string) => Promise<void>
   /** 导出文件夹为ZIP */
   exportFolder: (folderId: string) => void
 }
@@ -139,6 +148,96 @@ interface FileSystemStore {
  */
 function getMaxOrder(items: { order: number }[]): number {
   return items.length > 0 ? Math.max(...items.map(i => i.order)) : 0
+}
+
+function ensureMarkdownExtension(name: string) {
+  return name.endsWith('.md') ? name : `${name}.md`
+}
+
+function repairMissingLocalFileRecord(fileId: string, getState: () => FileSystemStore): MarkdownFile | null {
+  const state = getState()
+  const existingFile = state.files.find((item) => item.id === fileId)
+  if (existingFile) {
+    return existingFile
+  }
+
+  const tabsState = useTabsStore.getState()
+  const fallbackTab = tabsState.tabs.find((tab) => tab.sourceType === 'local' && tab.fileId === fileId) || null
+  const documentState = useDocumentStore.getState()
+  const fallbackDocument = documentState.document?.fileId === fileId
+    ? documentState.document
+    : null
+
+  const rawFileName = fallbackTab?.fileName || fallbackDocument?.fileName || ''
+  if (!rawFileName.trim()) {
+    return null
+  }
+
+  const now = Date.now()
+  return {
+    id: fileId,
+    type: 'file',
+    name: ensureMarkdownExtension(rawFileName.trim()),
+    folderId: null,
+    order: getMaxOrder(state.files.filter((item) => item.folderId === null)) + 1,
+    content:
+      fallbackTab?.content ||
+      (typeof documentState.getCurrentMarkdown === 'function'
+        ? documentState.getCurrentMarkdown()
+        : '') ||
+      '',
+    isModified: Boolean(fallbackTab?.isModified || fallbackDocument?.isModified),
+    lastOpenedAt: now,
+    createdAt: now,
+    updatedAt: now,
+  }
+}
+
+async function migrateFileSystemPersistedState(persistedState: unknown) {
+  if (!persistedState || typeof persistedState !== 'object') {
+    return persistedState
+  }
+
+  const state = persistedState as {
+    assets?: Array<WorkspaceAsset & { contentBase64?: string }>
+    expandedFolderIds?: string[] | Set<string>
+  }
+
+  const migratedAssets = Array.isArray(state.assets)
+    ? await Promise.all(state.assets.map(async (asset) => {
+        if (asset.contentBase64) {
+          await saveLocalWorkspaceAssetBinary({
+            id: asset.id,
+            name: asset.name,
+            path: asset.path,
+            contentBase64: asset.contentBase64,
+            mimeType: asset.mimeType,
+            createdAt: asset.createdAt,
+            updatedAt: asset.updatedAt,
+          })
+        }
+
+        return {
+          id: asset.id,
+          name: asset.name,
+          path: asset.path,
+          mimeType: asset.mimeType,
+          createdAt: asset.createdAt,
+          updatedAt: asset.updatedAt,
+        }
+      }))
+    : []
+
+  return {
+    ...state,
+    assets: migratedAssets,
+    expandedFolderIds:
+      state.expandedFolderIds instanceof Set
+        ? Array.from(state.expandedFolderIds)
+        : Array.isArray(state.expandedFolderIds)
+          ? state.expandedFolderIds
+          : [],
+  }
 }
 
 /**
@@ -151,6 +250,7 @@ export const useFileSystemStore = create<FileSystemStore>()(
         // ==================== 初始状态 ====================
         folders: [],
         files: [],
+        assets: [],
         currentFileId: null,
         expandedFolderIds: new Set(),
         
@@ -329,6 +429,68 @@ description:
             })
           }
         },
+
+        uploadAsset: async (fileId, file) => {
+          let { files, folders } = get()
+          let markdownPath = buildLocalMarkdownPath(fileId, files, folders)
+
+          if (!markdownPath) {
+            const repairedFile = repairMissingLocalFileRecord(fileId, get)
+            if (repairedFile) {
+              set((state) => ({
+                files: [...state.files, repairedFile],
+                currentFileId: state.currentFileId ?? repairedFile.id,
+              }))
+              ;({ files, folders } = get())
+              markdownPath = buildLocalMarkdownPath(fileId, files, folders)
+            }
+          }
+
+          if (!markdownPath) {
+            const fallbackTab = useTabsStore.getState().tabs.find(
+              (tab) => tab.sourceType === 'local' && tab.fileId === fileId
+            )
+            if (fallbackTab?.fileName?.trim()) {
+              markdownPath = ensureMarkdownExtension(fallbackTab.fileName.trim())
+            }
+          }
+
+          if (!markdownPath) {
+            throw new Error('Local markdown file not found. Save or reopen the local document and try again.')
+          }
+
+          const nextAsset = await createLocalAssetRecord(markdownPath, file)
+          const relativePath = buildRelativeAssetPath(markdownPath, nextAsset.metadata.path)
+          await saveLocalWorkspaceAssetBinary(nextAsset.binary)
+
+          set((state) => ({
+            assets: [
+              ...state.assets.filter((asset) => asset.path !== nextAsset.metadata.path),
+              nextAsset.metadata,
+            ],
+          }))
+
+          return {
+            assetPath: nextAsset.metadata.path,
+            relativePath,
+          }
+        },
+
+        deleteAsset: async (assetPath) => {
+          await deleteLocalWorkspaceAssetBinary(assetPath)
+          set((state) => ({
+            assets: state.assets.filter((asset) => asset.path !== assetPath),
+          }))
+        },
+
+        exportAsset: async (assetPath) => {
+          const asset = get().assets.find((item) => item.path === assetPath)
+          if (!asset) {
+            throw new Error('Asset not found')
+          }
+
+          await exportWorkspaceAsset(asset)
+        },
         
         markFileAsSaved: (id: string) => {
           const { files } = get()
@@ -464,18 +626,17 @@ description:
         
         // ==================== 导出 ====================
         
-        exportFile: (id: string) => {
-          const { files } = get()
+        exportFile: async (id: string) => {
+          const { files, folders, assets } = get()
           const file = files.find(f => f.id === id)
           if (!file) return
-          
-          const blob = new Blob([file.content], { type: 'text/markdown' })
-          const url = URL.createObjectURL(blob)
-          const a = document.createElement('a')
-          a.href = url
-          a.download = file.name
-          a.click()
-          URL.revokeObjectURL(url)
+
+          const markdownPath = buildLocalMarkdownPath(id, files, folders) || file.name
+          await exportMarkdownFileWithAssets({
+            file,
+            markdownPath,
+            assets,
+          })
         },
         
         exportFolder: (folderId: string) => {
@@ -484,9 +645,17 @@ description:
       }),
       {
         name: 'markdown-workspace',
+        version: 2,
+        storage: createIndexedDbPersistStorage<Partial<Workspace>>({
+          dbName: 'visualmd-workspace',
+          storeName: 'zustand-persist',
+          legacyStorageKey: 'markdown-workspace',
+        }),
+        migrate: (persistedState) => migrateFileSystemPersistedState(persistedState),
         partialize: (state) => ({
           folders: state.folders,
           files: state.files,
+          assets: state.assets,
           currentFileId: state.currentFileId,
           expandedFolderIds: Array.from(state.expandedFolderIds),
         }),

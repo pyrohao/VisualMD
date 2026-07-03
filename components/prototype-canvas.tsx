@@ -26,6 +26,7 @@ import { themeConfigs, useThemeStore } from '@/stores/themeStore'
 import { useTranslation } from '@/stores/languageStore'
 import { useTabsStore } from '@/stores/tabsStore'
 import { useGitStore } from '@/stores/gitStore'
+import { useFileSystemStore } from '@/stores/fileSystemStore'
 import type { DocumentState } from '@/types/tree'
 import {
   parseDocumentToPrototype,
@@ -43,6 +44,13 @@ import {
   resolveGitImageRepoPath,
   resolveGitImageSourceMap,
 } from '@/lib/git-image-resolution'
+import {
+  buildLocalMarkdownPath,
+  collectLocalAssetPathSet,
+  LOCAL_IMAGE_PLACEHOLDER_DATA_URL,
+  resolveLocalImageAssetPath,
+  resolveLocalImageSourceMap,
+} from '@/lib/local-image-resolution'
 
 interface PrototypeCanvasProps {
   document: DocumentState | null
@@ -150,9 +158,19 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
     }
     return activeTab.gitMeta
   })
+  const activeLocalFileId = useTabsStore((state) => {
+    const activeTab = state.tabs.find((item) => item.id === state.activeTabId)
+    if (!activeTab || activeTab.sourceType !== 'local' || !activeTab.fileId) {
+      return null
+    }
+    return activeTab.fileId
+  })
   const gitConfig = useGitStore((state) => state.config)
   const stagedChanges = useGitStore((state) => state.stagedChanges)
   const pendingAssetChanges = useGitStore((state) => state.pendingAssetChanges)
+  const localFiles = useFileSystemStore((state) => state.files)
+  const localFolders = useFileSystemStore((state) => state.folders)
+  const localAssets = useFileSystemStore((state) => state.assets)
   const prototype = useMemo(() => parseDocumentToPrototype(document), [document])
   const [activeSectionId, setActiveSectionId] = useState<string>('')
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({})
@@ -163,6 +181,15 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
   const [dialogState, setDialogState] = useState<DialogState | null>(null)
   const [resolvedImageMap, setResolvedImageMap] = useState<Record<string, string>>({})
   const gitImageCacheRef = useRef<Map<string, string>>(new Map())
+  const localImageCacheRef = useRef<Map<string, string>>(new Map())
+  const localAssetPaths = useMemo(() => collectLocalAssetPathSet(localAssets), [localAssets])
+  const activeLocalMarkdownPath = useMemo(() => {
+    if (!activeLocalFileId) {
+      return null
+    }
+
+    return buildLocalMarkdownPath(activeLocalFileId, localFiles, localFolders)
+  }, [activeLocalFileId, localFiles, localFolders])
 
   useEffect(() => {
     setMounted(true)
@@ -191,7 +218,7 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
   }, [prototype])
 
   useEffect(() => {
-    if (!prototype || !activeGitMeta?.path) {
+    if (!prototype || (!activeGitMeta?.path && !activeLocalMarkdownPath)) {
       return
     }
 
@@ -247,18 +274,27 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
     }
 
     const gitAssets = collectGitAssetMap(stagedChanges, pendingAssetChanges)
-    const runtimeConfig = buildGitImageRuntimeConfig(gitConfig, activeGitMeta)
+    const runtimeConfig = activeGitMeta ? buildGitImageRuntimeConfig(gitConfig, activeGitMeta) : null
 
     let cancelled = false
 
     void (async () => {
-      const nextMap = await resolveGitImageSourceMap({
-        sources: imageSrcList,
-        markdownPath: activeGitMeta.path,
-        gitAssets,
-        runtimeConfig,
-        cache: gitImageCacheRef.current,
-      })
+      const nextMap = activeGitMeta?.path
+        ? await resolveGitImageSourceMap({
+            sources: imageSrcList,
+            markdownPath: activeGitMeta.path,
+            gitAssets,
+            runtimeConfig,
+            cache: gitImageCacheRef.current,
+          })
+        : activeLocalMarkdownPath
+          ? await resolveLocalImageSourceMap({
+              sources: imageSrcList,
+              markdownPath: activeLocalMarkdownPath,
+              assetPaths: localAssetPaths,
+              cache: localImageCacheRef.current,
+            })
+          : {}
       if (cancelled) {
         return
       }
@@ -273,7 +309,7 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
     return () => {
       cancelled = true
     }
-  }, [activeGitMeta, gitConfig, pendingAssetChanges, prototype, stagedChanges])
+  }, [activeGitMeta, activeLocalMarkdownPath, gitConfig, localAssetPaths, pendingAssetChanges, prototype, stagedChanges])
 
   const copy =
     currentLanguage === 'zh'
@@ -311,6 +347,13 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
   const resolvePrototypeImageSrc = (src: string) => {
     if (resolvedImageMap[src]) {
       return resolvedImageMap[src]
+    }
+
+    if (activeLocalMarkdownPath) {
+      const assetPath = resolveLocalImageAssetPath(activeLocalMarkdownPath, src)
+      if (assetPath && localAssetPaths.has(assetPath)) {
+        return LOCAL_IMAGE_PLACEHOLDER_DATA_URL
+      }
     }
 
     if (activeGitMeta?.path && resolveGitImageRepoPath(activeGitMeta.path, src)) {

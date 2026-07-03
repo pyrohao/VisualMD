@@ -33,6 +33,15 @@ export interface MarkdownFile {
   updatedAt: number
 }
 
+export interface WorkspaceAsset {
+  id: string
+  name: string
+  path: string
+  mimeType?: string
+  createdAt: number
+  updatedAt: number
+}
+
 /**
  * 文件系统项（文件夹或文件）
  */
@@ -44,6 +53,7 @@ export type FileSystemItem = Folder | MarkdownFile
 export interface Workspace {
   folders: Folder[]
   files: MarkdownFile[]
+  assets: WorkspaceAsset[]
   currentFileId: string | null
   expandedFolderIds: string[]
 }

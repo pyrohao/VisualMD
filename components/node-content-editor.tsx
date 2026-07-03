@@ -10,6 +10,7 @@ import {
   hasClipboardImage,
 } from '@/lib/clipboard-image'
 import { getGitMarkdownImagePasteResult } from '@/lib/git-asset-paste'
+import { getLocalMarkdownImagePasteResult } from '@/lib/local-asset-paste'
 import { useTabsStore } from '@/stores/tabsStore'
 
 interface NodeContentEditorProps {
@@ -47,6 +48,7 @@ export function NodeContentEditor({
     const target = e.currentTarget
     const activeTab = useTabsStore.getState().getActiveTab()
     const isGitTab = activeTab?.sourceType === 'git' && !!activeTab.fileId
+    const isLocalTab = activeTab?.sourceType === 'local' && !!activeTab.fileId
 
     if (isGitTab && activeTab.fileId) {
       const uploadResult = await getGitMarkdownImagePasteResult({
@@ -70,12 +72,20 @@ export function NodeContentEditor({
       return
     }
 
-    const result = await getMarkdownImagePasteResult({
-      clipboardData: e.clipboardData,
-      value: content,
-      selectionStart: target.selectionStart ?? content.length,
-      selectionEnd: target.selectionEnd ?? content.length,
-    })
+    const result = isLocalTab && activeTab.fileId
+      ? await getLocalMarkdownImagePasteResult({
+          fileId: activeTab.fileId,
+          clipboardData: e.clipboardData,
+          value: content,
+          selectionStart: target.selectionStart ?? content.length,
+          selectionEnd: target.selectionEnd ?? content.length,
+        })
+      : await getMarkdownImagePasteResult({
+          clipboardData: e.clipboardData,
+          value: content,
+          selectionStart: target.selectionStart ?? content.length,
+          selectionEnd: target.selectionEnd ?? content.length,
+        })
 
     if (!result) return
 

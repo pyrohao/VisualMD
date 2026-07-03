@@ -95,6 +95,14 @@ export function FolderItem({
   const handleConfirmCreateFile = (name: string) => {
     if (name.trim()) {
       createFile(name.trim(), folder.id)
+      const nextFileId = useFileSystemStore.getState().currentFileId
+      if (nextFileId) {
+        if (onFileClick) {
+          onFileClick(nextFileId)
+        } else {
+          openFile(nextFileId)
+        }
+      }
       toast({
         title: '文件创建成功',
       })

@@ -1,10 +1,10 @@
-'use client'
+﻿'use client'
 
 /**
- * 文件面板组件
+ * 鏂囦欢闈㈡澘缁勪欢
  *
- * 功能面板中的文件管理界面
- * 从原 FileSidebar 迁移而来
+ * 鍔熻兘闈㈡澘涓殑鏂囦欢绠＄悊鐣岄潰
+ * 浠庡師 FileSidebar 杩佺Щ鑰屾潵
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react'
@@ -17,9 +17,11 @@ import { requestNavigationWithUnsavedGuard } from '@/stores/unsavedChangesStore'
 import { useTranslation } from '@/stores/languageStore'
 import { FolderItem } from '../file-sidebar/folder-item'
 import { FileItem } from '../file-sidebar/file-item'
+import { AssetItem } from '../file-sidebar/asset-item'
 import type { DropPosition } from '@/types/file-system'
 import { toast } from '@/hooks/use-toast'
 import { Button } from '@/components/ui/button'
+import { LOCAL_ASSET_DIRECTORY } from '@/lib/local-image-resolution'
 import {
   Dialog,
   DialogContent,
@@ -36,6 +38,7 @@ export function FilePanel() {
   const {
     folders,
     files,
+    assets,
     currentFileId,
     expandedFolderIds,
     sortedFolders,
@@ -51,29 +54,29 @@ export function FilePanel() {
 
   const { openFileInTab, findTabByFileId, getActiveTab, activeTabId, openFileInCurrentTab } = useTabsStore()
 
-  // 拖拽状态
+  // 鎷栨嫿鐘舵€?
   const [dragOverId, setDragOverId] = useState<string | null>(null)
   const [dragOverPosition, setDragOverPosition] = useState<DropPosition | null>(null)
 
-  // 客户端挂载状态，用于避免 hydration 不匹配
+  // 瀹㈡埛绔寕杞界姸鎬侊紝鐢ㄤ簬閬垮厤 hydration 涓嶅尮閰?
   const [mounted, setMounted] = useState(false)
 
-  // 使用安全的主题配置，避免 SSR 不匹配
+  // 浣跨敤瀹夊叏鐨勪富棰橀厤缃紝閬垮厤 SSR 涓嶅尮閰?
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
 
   useEffect(() => {
     setMounted(true)
   }, [])
 
-  // 根目录拖放状态
+  // 鏍圭洰褰曟嫋鏀剧姸鎬?
   const [isRootDragOver, setIsRootDragOver] = useState(false)
 
-  // 排序状态
+  // 鎺掑簭鐘舵€?
   const [showSortMenu, setShowSortMenu] = useState(false)
   const [sortBy, setSortBy] = useState<'name' | 'updatedAt' | 'createdAt'>('name')
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc')
 
-  // 对话框状态
+  // 瀵硅瘽妗嗙姸鎬?
   const [showFileDialog, setShowFileDialog] = useState(false)
   const [showFolderDialog, setShowFolderDialog] = useState(false)
   const [fileName, setFileName] = useState('')
@@ -85,7 +88,7 @@ export function FilePanel() {
     setMounted(true)
   }, [])
 
-  // 点击外部关闭排序菜单
+  // 鐐瑰嚮澶栭儴鍏抽棴鎺掑簭鑿滃崟
   useEffect(() => {
     if (!showSortMenu) return
 
@@ -97,14 +100,14 @@ export function FilePanel() {
     return () => document.removeEventListener('click', handleClickOutside)
   }, [showSortMenu])
 
-  // 处理排序
+  // 澶勭悊鎺掑簭
   const handleSort = (by: 'name' | 'updatedAt' | 'createdAt', order: 'asc' | 'desc') => {
     setSortBy(by)
     setSortOrder(order)
     setShowSortMenu(false)
   }
 
-  // 排序函数
+  // 鎺掑簭鍑芥暟
   const sortItems = <T extends { name: string; updatedAt: number; createdAt: number }>(items: T[]): T[] => {
     return [...items].sort((a, b) => {
       let comparison = 0
@@ -123,19 +126,21 @@ export function FilePanel() {
     })
   }
 
-  // 获取排序后的文件夹和根目录文件
+  // 鑾峰彇鎺掑簭鍚庣殑鏂囦欢澶瑰拰鏍圭洰褰曟枃浠?
   const sortedFolderList = sortedFolders()
   const rootFiles = getFilesByFolder(null)
+  const [assetsExpanded, setAssetsExpanded] = useState(true)
+  const assetCount = assets.length
 
-  // 处理文件点击 - 在标签页中打开
+  // 澶勭悊鏂囦欢鐐瑰嚮 - 鍦ㄦ爣绛鹃〉涓墦寮€
   const handleFileClick = (fileId: string) => {
-    const file = files.find(f => f.id === fileId)
+    const file = useFileSystemStore.getState().files.find(f => f.id === fileId)
     if (!file) return
 
-    // 检查是否已经在某个标签页打开
+    // 妫€鏌ユ槸鍚﹀凡缁忓湪鏌愪釜鏍囩椤垫墦寮€
     const existingTab = findTabByFileId(fileId)
     if (existingTab) {
-      // 切换到已存在的标签页
+      // 鍒囨崲鍒板凡瀛樺湪鐨勬爣绛鹃〉
       if (existingTab.id === activeTabId) {
         return
       }
@@ -146,45 +151,49 @@ export function FilePanel() {
       return
     }
 
-    // 检查当前是否是空白标签页
+    // 妫€鏌ュ綋鍓嶆槸鍚︽槸绌虹櫧鏍囩椤?
     const activeTab = getActiveTab()
     if (activeTab?.isNew && !activeTab?.content?.trim()) {
-      // 在当前空白标签页打开
+      // 鍦ㄥ綋鍓嶇┖鐧芥爣绛鹃〉鎵撳紑
       void requestNavigationWithUnsavedGuard(() => {
         openFileInCurrentTab(activeTabId!, file.name, file.content, fileId)
       }, file.name)
     } else {
-      // 在新标签页打开
+      // 鍦ㄦ柊鏍囩椤垫墦寮€
       void requestNavigationWithUnsavedGuard(() => {
         openFileInTab(file.name, file.content, fileId)
       }, file.name)
     }
   }
 
-  // 处理创建文件
+  // 澶勭悊鍒涘缓鏂囦欢
   const handleCreateFile = () => {
     setFileName(t('file.untitled') + '.md')
     setShowFileDialog(true)
   }
 
-  // 确认创建文件
+  // 纭鍒涘缓鏂囦欢
   const handleConfirmCreateFile = () => {
     if (fileName.trim()) {
       createFile(fileName.trim(), null)
       setShowFileDialog(false)
+      const nextFileId = useFileSystemStore.getState().currentFileId
+      if (nextFileId) {
+        handleFileClick(nextFileId)
+      }
       toast({
         title: t('toast.fileAdded'),
       })
     }
   }
 
-  // 处理创建文件夹
+  // 澶勭悊鍒涘缓鏂囦欢澶?
   const handleCreateFolder = () => {
     setFolderName(t('file.newFolder'))
     setShowFolderDialog(true)
   }
 
-  // 确认创建文件夹
+  // 纭鍒涘缓鏂囦欢澶?
   const handleConfirmCreateFolder = () => {
     if (folderName.trim()) {
       createFolder(folderName.trim())
@@ -195,7 +204,7 @@ export function FilePanel() {
     }
   }
 
-  // 处理对话框取消
+  // 澶勭悊瀵硅瘽妗嗗彇娑?
   const handleCancelFileDialog = () => {
     setShowFileDialog(false)
     setFileName('')
@@ -206,18 +215,18 @@ export function FilePanel() {
     setFolderName('')
   }
 
-  // 处理文件夹展开/折叠
+  // 澶勭悊鏂囦欢澶瑰睍寮€/鎶樺彔
   const handleToggleFolder = (id: string) => {
     toggleFolder(id)
   }
 
-  // 处理拖拽开始
+  // 澶勭悊鎷栨嫿寮€濮?
   const handleDragStart = useCallback((e: React.DragEvent, id: string, type: 'folder' | 'file') => {
     e.dataTransfer.setData('text/plain', JSON.stringify({ id, type }))
     e.dataTransfer.effectAllowed = 'move'
   }, [])
 
-  // 处理拖拽经过
+  // 澶勭悊鎷栨嫿缁忚繃
   const handleDragOver = useCallback((e: React.DragEvent, id: string, type: 'folder' | 'file') => {
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
@@ -230,14 +239,14 @@ export function FilePanel() {
     setDragOverPosition(position)
   }, [])
 
-  // 处理放置（内部拖拽排序）
+  // 澶勭悊鏀剧疆锛堝唴閮ㄦ嫋鎷芥帓搴忥級
   const handleDrop = useCallback((e: React.DragEvent, targetId: string, type: 'folder' | 'file') => {
     e.preventDefault()
     e.stopPropagation()
 
     const data = e.dataTransfer.getData('text/plain')
     if (!data) {
-      // 没有内部拖拽数据，可能是外部文件拖拽，不处理
+      // 娌℃湁鍐呴儴鎷栨嫿鏁版嵁锛屽彲鑳芥槸澶栭儴鏂囦欢鎷栨嫿锛屼笉澶勭悊
       setDragOverId(null)
       setDragOverPosition(null)
       return
@@ -250,14 +259,14 @@ export function FilePanel() {
         reorderFolders(draggedId, targetId, dragOverPosition || 'after')
       }
     } catch {
-      // 忽略解析错误
+      // 蹇界暐瑙ｆ瀽閿欒
     }
 
     setDragOverId(null)
     setDragOverPosition(null)
   }, [dragOverPosition, reorderFolders])
 
-  // 处理根目录外部文件拖拽
+  // 澶勭悊鏍圭洰褰曞閮ㄦ枃浠舵嫋鎷?
   const handleRootDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     e.stopPropagation()
@@ -277,7 +286,7 @@ export function FilePanel() {
     e.stopPropagation()
     setIsRootDragOver(false)
 
-    // 处理外部文件拖拽到根目录
+    // 澶勭悊澶栭儴鏂囦欢鎷栨嫿鍒版牴鐩綍
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       for (const file of Array.from(e.dataTransfer.files)) {
         if (file.name.endsWith('.md') || file.name.endsWith('.markdown') || file.name.endsWith('.txt')) {
@@ -288,7 +297,7 @@ export function FilePanel() {
     }
   }
 
-  // 判断是否全部展开
+  // 鍒ゆ柇鏄惁鍏ㄩ儴灞曞紑
   const isAllExpanded = sortedFolderList.length > 0 &&
     sortedFolderList.every(f => expandedFolderIds.has(f.id))
 
@@ -306,7 +315,7 @@ export function FilePanel() {
       onDragLeave={handleRootDragLeave}
       onDrop={handleRootDrop}
     >
-      {/* 头部 */}
+      {/* 澶撮儴 */}
       <div
         className="flex items-center justify-between px-4 py-3 border-b"
         style={{ borderColor: themeConfig.border }}
@@ -320,7 +329,7 @@ export function FilePanel() {
             className="font-medium"
             style={{ color: themeConfig.text }}
           >
-            {mounted ? t('sidebar.files') : '文件'}
+            {mounted ? t('sidebar.files') : '鏂囦欢'}
           </span>
         </div>
         <span
@@ -334,29 +343,29 @@ export function FilePanel() {
         </span>
       </div>
 
-      {/* 顶部工具栏 */}
+      {/* 椤堕儴宸ュ叿鏍?*/}
       <div className="flex items-center justify-between px-3 py-2">
         <span className="text-xs font-semibold uppercase tracking-wider opacity-60">
-          {mounted ? t('sidebar.files') : '文件'}
+          {mounted ? t('sidebar.files') : '鏂囦欢'}
         </span>
         <div className="flex items-center gap-0.5">
-          {/* 新建文件 */}
+          {/* 鏂板缓鏂囦欢 */}
           <button
             onClick={handleCreateFile}
             className="p-1.5 rounded hover:bg-white/10 transition-colors"
-            title={mounted ? t('file.newFile') : '新建文件'}
+            title={mounted ? t('file.newFile') : '鏂板缓鏂囦欢'}
           >
             <FilePlus className="w-4 h-4" />
           </button>
-          {/* 新建文件夹 */}
+          {/* 鏂板缓鏂囦欢澶?*/}
           <button
             onClick={handleCreateFolder}
             className="p-1.5 rounded hover:bg-white/10 transition-colors"
-            title={mounted ? t('sidebar.createNewFolder') : '新建文件夹'}
+            title={mounted ? t('sidebar.createNewFolder') : 'New Folder'}
           >
             <FolderPlus className="w-4 h-4" />
           </button>
-          {/* 排序 */}
+          {/* 鎺掑簭 */}
           <div className="relative">
             <button
               onClick={(e) => {
@@ -364,11 +373,11 @@ export function FilePanel() {
                 setShowSortMenu(!showSortMenu)
               }}
               className="p-1.5 rounded hover:bg-white/10 transition-colors"
-              title={mounted ? t('common.sort') : '排序'}
+              title={mounted ? t('common.sort') : '鎺掑簭'}
             >
               <ArrowUpDown className="w-4 h-4" />
             </button>
-            {/* 排序下拉菜单 */}
+            {/* 鎺掑簭涓嬫媺鑿滃崟 */}
             {showSortMenu && (
               <div
                 className="absolute right-0 top-full mt-1 py-1 rounded-lg shadow-lg border min-w-[180px] z-50"
@@ -378,7 +387,7 @@ export function FilePanel() {
                   borderColor: themeConfig.border,
                 }}
               >
-                {/* 文件名排序 */}
+                {/* 鏂囦欢鍚嶆帓搴?*/}
                 <button
                   onClick={() => handleSort('name', 'asc')}
                   className={cn(
@@ -387,7 +396,7 @@ export function FilePanel() {
                   )}
                   style={{ color: sortBy === 'name' && sortOrder === 'asc' ? undefined : themeConfig.text }}
                 >
-                  {mounted ? t('file.nameAZ') : '文件名 (A-Z)'}
+                  {mounted ? t('file.nameAZ') : '鏂囦欢鍚?(A-Z)'}
                   {sortBy === 'name' && sortOrder === 'asc' && <ChevronDown className="w-4 h-4" />}
                 </button>
                 <button
@@ -398,14 +407,14 @@ export function FilePanel() {
                   )}
                   style={{ color: sortBy === 'name' && sortOrder === 'desc' ? undefined : themeConfig.text }}
                 >
-                  {mounted ? t('file.nameZA') : '文件名 (Z-A)'}
+                  {mounted ? t('file.nameZA') : '鏂囦欢鍚?(Z-A)'}
                   {sortBy === 'name' && sortOrder === 'desc' && <ChevronDown className="w-4 h-4" />}
                 </button>
 
-                {/* 分隔线 */}
+                {/* 鍒嗛殧绾?*/}
                 <div className="my-1 border-t" style={{ borderColor: themeConfig.border }} />
 
-                {/* 编辑时间排序 */}
+                {/* 缂栬緫鏃堕棿鎺掑簭 */}
                 <button
                   onClick={() => handleSort('updatedAt', 'desc')}
                   className={cn(
@@ -414,7 +423,7 @@ export function FilePanel() {
                   )}
                   style={{ color: sortBy === 'updatedAt' && sortOrder === 'desc' ? undefined : themeConfig.text }}
                 >
-                  {mounted ? t('file.updatedNewToOld') : '编辑时间 (从新到旧)'}
+                  {mounted ? t('file.updatedNewToOld') : '缂栬緫鏃堕棿 (浠庢柊鍒版棫)'}
                   {sortBy === 'updatedAt' && sortOrder === 'desc' && <ChevronDown className="w-4 h-4" />}
                 </button>
                 <button
@@ -425,14 +434,14 @@ export function FilePanel() {
                   )}
                   style={{ color: sortBy === 'updatedAt' && sortOrder === 'asc' ? undefined : themeConfig.text }}
                 >
-                  {mounted ? t('file.updatedOldToNew') : '编辑时间 (从旧到新)'}
+                  {mounted ? t('file.updatedOldToNew') : '缂栬緫鏃堕棿 (浠庢棫鍒版柊)'}
                   {sortBy === 'updatedAt' && sortOrder === 'asc' && <ChevronDown className="w-4 h-4" />}
                 </button>
 
-                {/* 分隔线 */}
+                {/* 鍒嗛殧绾?*/}
                 <div className="my-1 border-t" style={{ borderColor: themeConfig.border }} />
 
-                {/* 创建时间排序 */}
+                {/* 鍒涘缓鏃堕棿鎺掑簭 */}
                 <button
                   onClick={() => handleSort('createdAt', 'desc')}
                   className={cn(
@@ -441,7 +450,7 @@ export function FilePanel() {
                   )}
                   style={{ color: sortBy === 'createdAt' && sortOrder === 'desc' ? undefined : themeConfig.text }}
                 >
-                  {mounted ? t('file.createdNewToOld') : '创建时间 (从新到旧)'}
+                  {mounted ? t('file.createdNewToOld') : '鍒涘缓鏃堕棿 (浠庢柊鍒版棫)'}
                   {sortBy === 'createdAt' && sortOrder === 'desc' && <ChevronDown className="w-4 h-4" />}
                 </button>
                 <button
@@ -452,17 +461,17 @@ export function FilePanel() {
                   )}
                   style={{ color: sortBy === 'createdAt' && sortOrder === 'asc' ? undefined : themeConfig.text }}
                 >
-                  {mounted ? t('file.createdOldToNew') : '创建时间 (从旧到新)'}
+                  {mounted ? t('file.createdOldToNew') : '鍒涘缓鏃堕棿 (浠庢棫鍒版柊)'}
                   {sortBy === 'createdAt' && sortOrder === 'asc' && <ChevronDown className="w-4 h-4" />}
                 </button>
               </div>
             )}
           </div>
-          {/* 展开/折叠 */}
+          {/* 灞曞紑/鎶樺彔 */}
           <button
             onClick={isAllExpanded ? collapseAll : expandAll}
             className="p-1.5 rounded hover:bg-white/10 transition-colors"
-            title={isAllExpanded ? '折叠全部' : '展开全部'}
+            title={isAllExpanded ? '鎶樺彔鍏ㄩ儴' : '灞曞紑鍏ㄩ儴'}
           >
             {isAllExpanded ? (
               <ChevronDown className="w-4 h-4" />
@@ -473,12 +482,39 @@ export function FilePanel() {
         </div>
       </div>
 
-      {/* 文件列表 */}
+      {/* 鏂囦欢鍒楄〃 */}
       <div className="flex-1 overflow-y-auto px-1">
-        {/* 等待客户端挂载完成后再渲染，避免 hydration 不匹配 */}
+        {/* 绛夊緟瀹㈡埛绔寕杞藉畬鎴愬悗鍐嶆覆鏌擄紝閬垮厤 hydration 涓嶅尮閰?*/}
         {mounted && (
           <>
-            {/* 文件夹列表 */}
+            {/* 鏂囦欢澶瑰垪琛?*/}
+            <div className="mt-2">
+              <button
+                type="button"
+                onClick={() => setAssetsExpanded((current) => !current)}
+                className="flex w-full items-center gap-2 rounded px-2 py-1 text-left transition-colors hover:bg-white/5"
+                style={{ color: themeConfig.text }}
+                title={`${LOCAL_ASSET_DIRECTORY} system assets`}
+              >
+                {assetsExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                <span className="flex-1 text-sm font-medium">{LOCAL_ASSET_DIRECTORY}</span>
+                <span className="text-xs opacity-60">{assetCount}</span>
+              </button>
+              {assetsExpanded && (
+                <div className="mt-1 space-y-0.5 pl-4">
+                  {assetCount > 0 ? (
+                    sortItems(assets).map((asset) => (
+                      <AssetItem key={asset.path} asset={asset} />
+                    ))
+                  ) : (
+                    <div className="px-2 py-1 text-xs opacity-40">
+                      No assets yet
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
             {sortItems(sortedFolderList).map((folder) => (
               <FolderItem
                 key={folder.id}
@@ -496,7 +532,7 @@ export function FilePanel() {
               />
             ))}
 
-            {/* 根目录文件 */}
+            {/* 鏍圭洰褰曟枃浠?*/}
             {sortItems(rootFiles).map((file) => (
               <FileItem
                 key={file.id}
@@ -507,18 +543,19 @@ export function FilePanel() {
               />
             ))}
 
-            {/* 空状态 */}
+
+            {/* 绌虹姸鎬?*/}
             {sortedFolderList.length === 0 && rootFiles.length === 0 && (
               <div className="px-4 py-8 text-center opacity-40">
-                <div className="text-sm mb-1">还没有文件</div>
-                <div className="text-xs">点击上方按钮创建</div>
+                <div className="text-sm mb-1">No files yet</div>
+                <div className="text-xs">Use the buttons above to create one</div>
               </div>
             )}
           </>
         )}
       </div>
 
-      {/* 创建文件对话框 */}
+      {/* 鍒涘缓鏂囦欢瀵硅瘽妗?*/}
       <Dialog open={showFileDialog} onOpenChange={setShowFileDialog}>
         <DialogContent
           className="sm:max-w-[400px]"
@@ -529,10 +566,10 @@ export function FilePanel() {
         >
           <DialogHeader>
             <DialogTitle style={{ color: themeConfig.text }}>
-              {mounted ? t('file.newFile') : '新建文件'}
+              {mounted ? t('file.newFile') : '鏂板缓鏂囦欢'}
             </DialogTitle>
             <DialogDescription style={{ color: themeConfig.textMuted }}>
-              {mounted ? t('file.enterFileName') : '请输入文件名：'}
+              {mounted ? t('file.enterFileName') : 'Enter a file name'}
             </DialogDescription>
           </DialogHeader>
           <div className="mt-4">
@@ -549,7 +586,7 @@ export function FilePanel() {
                   handleCancelFileDialog()
                 }
               }}
-              placeholder={mounted ? t('file.fileName') : '文件名'}
+              placeholder={mounted ? t('file.fileName') : 'File name'}
               className="w-full px-3 py-2 rounded-md border text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
               style={{
                 backgroundColor: themeConfig.background,
@@ -570,7 +607,7 @@ export function FilePanel() {
               }}
               className="hover:opacity-80"
             >
-              {mounted ? t('common.cancel') : '取消'}
+              {mounted ? t('common.cancel') : '鍙栨秷'}
             </Button>
             <Button
               onClick={handleConfirmCreateFile}
@@ -580,13 +617,13 @@ export function FilePanel() {
               }}
               className="hover:opacity-90"
             >
-              {mounted ? t('common.create') : '创建'}
+              {mounted ? t('common.create') : '鍒涘缓'}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* 创建文件夹对话框 */}
+      {/* 鍒涘缓鏂囦欢澶瑰璇濇 */}
       <Dialog open={showFolderDialog} onOpenChange={setShowFolderDialog}>
         <DialogContent
           className="sm:max-w-[400px]"
@@ -597,10 +634,10 @@ export function FilePanel() {
         >
           <DialogHeader>
             <DialogTitle style={{ color: themeConfig.text }}>
-              {mounted ? t('sidebar.createNewFolder') : '新建文件夹'}
+              {mounted ? t('sidebar.createNewFolder') : 'New Folder'}
             </DialogTitle>
             <DialogDescription style={{ color: themeConfig.textMuted }}>
-              {mounted ? t('file.enterFolderName') : '请输入文件夹名称：'}
+              {mounted ? t('file.enterFolderName') : 'Enter a folder name'}
             </DialogDescription>
           </DialogHeader>
           <div className="mt-4">
@@ -617,7 +654,7 @@ export function FilePanel() {
                   handleCancelFolderDialog()
                 }
               }}
-              placeholder={mounted ? t('file.folderName') : '文件夹名称'}
+              placeholder={mounted ? t('file.folderName') : 'Folder name'}
               className="w-full px-3 py-2 rounded-md border text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
               style={{
                 backgroundColor: themeConfig.background,
@@ -638,7 +675,7 @@ export function FilePanel() {
               }}
               className="hover:opacity-80"
             >
-              {mounted ? t('common.cancel') : '取消'}
+              {mounted ? t('common.cancel') : '鍙栨秷'}
             </Button>
             <Button
               onClick={handleConfirmCreateFolder}
@@ -648,7 +685,7 @@ export function FilePanel() {
               }}
               className="hover:opacity-90"
             >
-              {mounted ? t('common.create') : '创建'}
+              {mounted ? t('common.create') : '鍒涘缓'}
             </Button>
           </DialogFooter>
         </DialogContent>

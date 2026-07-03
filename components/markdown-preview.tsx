@@ -32,6 +32,7 @@ import { BookOpen, Columns2, Pencil, Plus, Rows2, SplitSquareHorizontal, X } fro
 import { cn } from '@/lib/utils'
 import { getMarkdownImagePasteResult, hasClipboardImage } from '@/lib/clipboard-image'
 import { getGitMarkdownImagePasteResult } from '@/lib/git-asset-paste'
+import { getLocalMarkdownImagePasteResult } from '@/lib/local-asset-paste'
 import {
   createMarkdownReferenceHighlightPlugin,
   resolvePreviewHighlightRanges,
@@ -42,6 +43,12 @@ import {
   prepareGitHtmlImageSources,
   resolveGitHtmlImageSources,
 } from '@/lib/git-image-resolution'
+import {
+  buildLocalMarkdownPath,
+  collectLocalAssetPathSet,
+  prepareLocalHtmlImageSources,
+  resolveLocalHtmlImageSources,
+} from '@/lib/local-image-resolution'
 import { toast } from '@/hooks/use-toast'
 import { Button } from '@/components/ui/button'
 
@@ -607,6 +614,18 @@ export function MarkdownPreview() {
       selectedReferenceIdSet.has(reference.id)
     )
   }, [currentConversationId, referencesByConversation, selectedReferenceIds])
+  const localFiles = useFileSystemStore((state) => state.files)
+  const localFolders = useFileSystemStore((state) => state.folders)
+  const localAssets = useFileSystemStore((state) => state.assets)
+  const localAssetPaths = useMemo(() => collectLocalAssetPathSet(localAssets), [localAssets])
+  const activeLocalMarkdownPath = useMemo(() => {
+    if (activeTab?.sourceType !== 'local' || !activeTab.fileId) {
+      return null
+    }
+
+    return buildLocalMarkdownPath(activeTab.fileId, localFiles, localFolders)
+  }, [activeTab?.fileId, activeTab?.sourceType, localFiles, localFolders])
+  const localImageCacheRef = useRef<Map<string, string>>(new Map())
 
   useEffect(() => {
     editContentRef.current = editContent
@@ -837,6 +856,19 @@ export function MarkdownPreview() {
     })
   }, [activeGitMeta, gitAssets, gitConfig])
 
+  const resolveLocalImageSources = useCallback(async (rawHtml: string) => {
+    if (!activeLocalMarkdownPath) {
+      return rawHtml
+    }
+
+    return resolveLocalHtmlImageSources({
+      rawHtml,
+      markdownPath: activeLocalMarkdownPath,
+      assetPaths: localAssetPaths,
+      cache: localImageCacheRef.current,
+    })
+  }, [activeLocalMarkdownPath, localAssetPaths])
+
   // 使用 remark 处理 markdown
   useEffect(() => {
     let cancelled = false
@@ -862,12 +894,19 @@ export function MarkdownPreview() {
       const rawHtml = String(result)
       const immediateHtml = activeGitMeta?.path
         ? prepareGitHtmlImageSources(rawHtml, activeGitMeta.path, gitAssets)
-        : rawHtml
+        : activeLocalMarkdownPath
+          ? prepareLocalHtmlImageSources(rawHtml, activeLocalMarkdownPath, localAssetPaths)
+          : rawHtml
       if (!cancelled) {
         setHtml(immediateHtml)
       }
 
-      void resolveGitImageSources(immediateHtml).then((resolvedHtml) => {
+      const resolver = activeGitMeta?.path ? resolveGitImageSources : activeLocalMarkdownPath ? resolveLocalImageSources : null
+      if (!resolver) {
+        return
+      }
+
+      void resolver(immediateHtml).then((resolvedHtml) => {
         if (cancelled || resolvedHtml === immediateHtml) {
           return
         }
@@ -880,7 +919,7 @@ export function MarkdownPreview() {
     return () => {
       cancelled = true
     }
-  }, [activeGitMeta?.path, activeReferences, gitAssets, renderMarkdown, resolveGitImageSources])
+  }, [activeGitMeta?.path, activeLocalMarkdownPath, activeReferences, gitAssets, localAssetPaths, renderMarkdown, resolveGitImageSources, resolveLocalImageSources])
 
   // 处理模式切换
   const handleModeChange = useCallback((newMode: PreviewMode) => {
@@ -1065,6 +1104,7 @@ export function MarkdownPreview() {
     const target = e.currentTarget
     const activeTab = useTabsStore.getState().getActiveTab()
     const isGitTab = activeTab?.sourceType === 'git' && !!activeTab.fileId
+    const isLocalTab = activeTab?.sourceType === 'local' && !!activeTab.fileId
 
     const selectionStart = target.selectionStart ?? sourceValue.length
     const selectionEnd = target.selectionEnd ?? sourceValue.length
@@ -1077,6 +1117,14 @@ export function MarkdownPreview() {
           selectionStart,
           selectionEnd,
         })
+      : isLocalTab && activeTab.fileId
+        ? await getLocalMarkdownImagePasteResult({
+            fileId: activeTab.fileId,
+            clipboardData: e.clipboardData,
+            value: sourceValue,
+            selectionStart,
+            selectionEnd,
+          })
       : await getMarkdownImagePasteResult({
           clipboardData: e.clipboardData,
           value: sourceValue,

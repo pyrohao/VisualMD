@@ -37,13 +37,13 @@ export function FileItem({ file, isActive, isModified, onClick }: FileItemProps)
   const [mounted, setMounted] = useState(false)
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
   const { t } = useTranslation()
+  const { connected: gitConnected, stageLocalFile } = useGitStore()
 
   useEffect(() => {
     setMounted(true)
   }, [])
   
   const { renameFile, deleteFile, exportFile } = useFileSystemStore()
-  const { stageLocalFile } = useGitStore()
 
   // 处理点击
   const handleClick = () => {
@@ -75,11 +75,22 @@ export function FileItem({ file, isActive, isModified, onClick }: FileItemProps)
   }
 
   // 处理导出
-  const handleExport = () => {
-    exportFile(file.id)
+  const handleExport = async () => {
+    await exportFile(file.id)
+    toast({
+      title: t('file.exportSuccess'),
+    })
   }
 
   const handleStageToGit = (repoPath: string) => {
+    if (!gitConnected) {
+      toast({
+        title: t('git.connectFirst'),
+        variant: 'destructive',
+      })
+      return
+    }
+
     const nextPath = repoPath.trim() || file.name
     stageLocalFile(file.id, nextPath)
     toast({
@@ -188,7 +199,7 @@ export function FileItem({ file, isActive, isModified, onClick }: FileItemProps)
           </button>
           <button
             onClick={() => {
-              handleExport()
+              void handleExport()
               setShowContextMenu(false)
             }}
             className="w-full px-4 py-1.5 text-left text-sm hover:bg-white/10 transition-colors"
@@ -197,10 +208,17 @@ export function FileItem({ file, isActive, isModified, onClick }: FileItemProps)
           </button>
           <button
             onClick={() => {
+              if (!gitConnected) {
+                return
+              }
               setShowStagePrompt(true)
               setShowContextMenu(false)
             }}
-            className="w-full px-4 py-1.5 text-left text-sm hover:bg-white/10 transition-colors"
+            disabled={!gitConnected}
+            className={cn(
+              'w-full px-4 py-1.5 text-left text-sm transition-colors',
+              gitConnected ? 'hover:bg-white/10' : 'cursor-not-allowed opacity-40'
+            )}
           >
             {t('git.stageToGit')}
           </button>

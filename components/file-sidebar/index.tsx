@@ -111,6 +111,10 @@ export function FileSidebar() {
   const handleConfirmCreateFile = (name: string) => {
     if (name.trim()) {
       createFile(name.trim(), null)
+      const nextFileId = useFileSystemStore.getState().currentFileId
+      if (nextFileId) {
+        openFile(nextFileId)
+      }
       toast({
         title: '文件创建成功',
       })

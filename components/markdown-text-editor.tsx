@@ -4,9 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Textarea } from './ui/textarea'
 import { ScrollArea } from './ui/scroll-area'
 import { useDocumentStore } from '@/stores/documentStore'
+import { useTabsStore } from '@/stores/tabsStore'
 import { useTranslation } from '@/stores/languageStore'
 import { debounce } from '@/lib/utils'
 import { getMarkdownImagePasteResult, hasClipboardImage } from '@/lib/clipboard-image'
+import { getLocalMarkdownImagePasteResult } from '@/lib/local-asset-paste'
 
 export function MarkdownTextEditor() {
   const { document, updateFromMarkdown } = useDocumentStore()
@@ -40,12 +42,22 @@ export function MarkdownTextEditor() {
     e.preventDefault()
 
     const target = e.currentTarget
-    const result = await getMarkdownImagePasteResult({
-      clipboardData: e.clipboardData,
-      value: localValue,
-      selectionStart: target.selectionStart ?? localValue.length,
-      selectionEnd: target.selectionEnd ?? localValue.length,
-    })
+    const activeTab = useTabsStore.getState().getActiveTab()
+    const isLocalTab = activeTab?.sourceType === 'local' && !!activeTab.fileId
+    const result = isLocalTab && activeTab.fileId
+      ? await getLocalMarkdownImagePasteResult({
+          fileId: activeTab.fileId,
+          clipboardData: e.clipboardData,
+          value: localValue,
+          selectionStart: target.selectionStart ?? localValue.length,
+          selectionEnd: target.selectionEnd ?? localValue.length,
+        })
+      : await getMarkdownImagePasteResult({
+          clipboardData: e.clipboardData,
+          value: localValue,
+          selectionStart: target.selectionStart ?? localValue.length,
+          selectionEnd: target.selectionEnd ?? localValue.length,
+        })
 
     if (!result) return
 
