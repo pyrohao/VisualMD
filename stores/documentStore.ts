@@ -59,6 +59,10 @@ interface DocumentStore {
    * @param fileId 文件ID（用于恢复编辑器状态）
    */
   loadDocument: (content: string, fileName?: string, fileId?: string) => void
+  /**
+   * 清空当前文档
+   */
+  clearDocument: () => void
   
   /**
    * 保存文档（标记为未修改）
@@ -1007,6 +1011,18 @@ export const useDocumentStore = create<DocumentStore>()(
               error: error instanceof Error ? error.message : 'Failed to load document' 
             })
           }
+        },
+
+        clearDocument: () => {
+          activeLoadRevision += 1
+          set({
+            document: null,
+            selectedNodeId: null,
+            expandedNodeIds: new Set(['root']),
+            error: null,
+            lastMutation: nextMutation('load-document', 'full'),
+          })
+          useHistoryStore.getState().clear()
         },
 
         markAsSaved: () => {

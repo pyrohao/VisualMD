@@ -153,7 +153,7 @@ export function MarkdownEditor() {
   } | null>(null)
 
   // 获取Store
-  const { loadDocument, document, selectedNodeId } = useDocumentStore()
+  const { loadDocument, clearDocument, document, selectedNodeId } = useDocumentStore()
   const { currentFileId, openFile, files, initializeWelcomeDocs } = useFileSystemStore()
   const {
     setCurrentDocumentId,
@@ -359,6 +359,7 @@ export function MarkdownEditor() {
     if (!hasActiveTab) {
       setCurrentDocumentId(null)
       useFileSystemStore.setState({ currentFileId: null })
+      clearDocument()
       return
     }
 
@@ -389,7 +390,12 @@ export function MarkdownEditor() {
     }
 
     // 只在标签身份切换时加载文档。内容更新由编辑器/AI 写回事务显式同步，避免 tab 内容变化反复触发 loadDocument。
-    if (document?.fileId !== (activeTabFileId || undefined) || document?.fileName !== activeTabFileName) {
+    const currentDocumentMarkdown = useDocumentStore.getState().getCurrentMarkdown()
+    if (
+      document?.fileId !== (activeTabFileId || undefined) ||
+      document?.fileName !== activeTabFileName ||
+      currentDocumentMarkdown !== activeTabCurrentContent
+    ) {
       loadDocument(activeTabCurrentContent, activeTabFileName, activeTabFileId)
     }
 
@@ -414,6 +420,7 @@ export function MarkdownEditor() {
     activeTabIsTemplate,
     activeTabSourceType,
     activeTabTemplateId,
+    clearDocument,
     document?.fileId,
     document?.fileName,
     hasActiveTab,
