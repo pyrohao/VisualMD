@@ -7,6 +7,8 @@ import { devtools, persist } from 'zustand/middleware'
 import { nanoid } from 'nanoid'
 import type { GitFileKind, GitProvider, GitSourceType } from '@/lib/git/types'
 
+type PersistedTab = Omit<Tab, 'content' | 'savedContent'> & Partial<Pick<Tab, 'content' | 'savedContent'>>
+
 export interface Tab {
   id: string
   fileName: string
@@ -68,6 +70,26 @@ function generateUniqueFileName(existingTabs: Tab[]): string {
 function getInitialContent(content?: string, isBlank?: boolean) {
   if (isBlank) return ''
   return content || '# 新文档\n\n开始编辑...'
+}
+
+function shouldPersistInlineTabContent(tab: Tab) {
+  return !tab.fileId || tab.isTemplate
+}
+
+function toPersistedTab(tab: Tab): PersistedTab {
+  if (shouldPersistInlineTabContent(tab)) {
+    return tab
+  }
+
+  const { content: _content, savedContent, ...rest } = tab
+  if (tab.isModified && typeof savedContent === 'string') {
+    return {
+      ...rest,
+      savedContent,
+    }
+  }
+
+  return rest
 }
 
 export const useTabsStore = create<TabsStore>()(
@@ -352,6 +374,18 @@ export const useTabsStore = create<TabsStore>()(
       }),
       {
         name: 'tabs-store',
+        partialize: (state) => ({
+          activeTabId: state.activeTabId,
+          tabs: state.tabs.map(toPersistedTab),
+        }),
+        onRehydrateStorage: () => (state) => {
+          if (!state) return
+
+          state.tabs = state.tabs.map((tab) => ({
+            content: '',
+            ...tab,
+          }))
+        },
       }
     ),
     { name: 'TabsStore' }

@@ -22,6 +22,7 @@ import { useAiChatStore } from '@/stores/aiChatStore'
 import { getGitProviderClient } from '@/lib/git/providers'
 import { inferGitFileKind, inferGitFileMimeType, isGitBinaryFileKind } from '@/lib/git/file-kind'
 import { applyMarkdownToDocument, persistMarkdownToActiveSource } from '@/lib/editor-persistence'
+import { resolveTabCurrentContent, resolveTabSavedContent } from '@/lib/tab-content'
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
@@ -470,6 +471,7 @@ export function MarkdownPreview() {
     return activeTab.gitMeta
   })
   const gitConfig = useGitStore((state) => state.config)
+  const gitDrafts = useGitStore((state) => state.drafts)
   const stagedChanges = useGitStore((state) => state.stagedChanges)
   const pendingAssetChanges = useGitStore((state) => state.pendingAssetChanges)
   const { theme, getThemeConfig } = useThemeStore()
@@ -617,6 +619,15 @@ export function MarkdownPreview() {
   const localFiles = useFileSystemStore((state) => state.files)
   const localFolders = useFileSystemStore((state) => state.folders)
   const localAssets = useFileSystemStore((state) => state.assets)
+  const activeTabHasSavedContent = activeTab?.savedContent !== undefined
+  const activeTabCurrentContent = useMemo(
+    () => resolveTabCurrentContent(activeTab, { gitDrafts, localFiles }),
+    [activeTab, gitDrafts, localFiles]
+  )
+  const activeTabSavedContent = useMemo(
+    () => resolveTabSavedContent(activeTab, { gitDrafts, localFiles }),
+    [activeTab, gitDrafts, localFiles]
+  )
   const localAssetPaths = useMemo(() => collectLocalAssetPathSet(localAssets), [localAssets])
   const activeLocalMarkdownPath = useMemo(() => {
     if (activeTab?.sourceType !== 'local' || !activeTab.fileId) {
@@ -678,14 +689,13 @@ export function MarkdownPreview() {
       clearTimeout(autoSaveTimeoutRef.current)
       autoSaveTimeoutRef.current = null
     }
-    const sourceMarkdown =
-      activeTab?.savedContent ??
-      activeTab?.content ??
-      latestMarkdownRef.current
+    const sourceMarkdown = activeTabHasSavedContent
+      ? activeTabSavedContent
+      : activeTabCurrentContent || latestMarkdownRef.current
     setEditContent(sourceMarkdown)
     setPersistedEditContent(sourceMarkdown)
     clearSelectionCandidate()
-  }, [activeTab?.content, activeTab?.savedContent, clearSelectionCandidate, documentKey])
+  }, [activeTabCurrentContent, activeTabHasSavedContent, activeTabSavedContent, clearSelectionCandidate, documentKey])
 
   const commitDraftToDocument = useCallback((nextMarkdown: string) => {
     return applyMarkdownToDocument(nextMarkdown)
@@ -932,17 +942,16 @@ export function MarkdownPreview() {
 
     const enteringEditing = mode === 'preview' && (newMode === 'edit' || newMode === 'live')
     if (enteringEditing) {
-      const sourceMarkdown =
-        activeTab?.savedContent ??
-        activeTab?.content ??
-        markdown
+      const sourceMarkdown = activeTabHasSavedContent
+        ? activeTabSavedContent
+        : activeTabCurrentContent || markdown
       setEditContent(sourceMarkdown)
       setPersistedEditContent(sourceMarkdown)
     }
 
     setMode(newMode)
     window.localStorage.setItem(PREVIEW_MODE_STORAGE_KEY, newMode)
-  }, [activeTab?.content, activeTab?.savedContent, markdown, mode, persistEditorDraft])
+  }, [activeTabCurrentContent, activeTabHasSavedContent, activeTabSavedContent, markdown, mode, persistEditorDraft])
 
   // 处理编辑内容变化
   const handleEditChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -965,7 +974,9 @@ export function MarkdownPreview() {
         }
 
         const activeTab = useTabsStore.getState().getActiveTab()
-        const discardContent = activeTab?.savedContent ?? activeTab?.content ?? useDocumentStore.getState().getCurrentMarkdown()
+        const discardContent = activeTabHasSavedContent
+          ? resolveTabSavedContent(activeTab)
+          : resolveTabCurrentContent(activeTab) || useDocumentStore.getState().getCurrentMarkdown()
         editContentRef.current = discardContent
         setEditContent(discardContent)
         setPersistedEditContent(discardContent)
@@ -976,7 +987,7 @@ export function MarkdownPreview() {
     return () => {
       useUnsavedChangesStore.getState().unregisterEditor('markdown-preview')
     }
-  }, [persistEditorDraft])
+  }, [activeTabHasSavedContent, persistEditorDraft])
 
   useEffect(() => {
     const unsavedStore = useUnsavedChangesStore.getState()

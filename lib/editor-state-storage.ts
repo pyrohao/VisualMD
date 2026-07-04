@@ -1,130 +1,122 @@
-/**
- * 编辑器状态存储服务（基于 localStorage）
- * 
- * 提供分离存储方案，将运行时状态（断开节点、节点位置等）
- * 与 Markdown 内容分开保存
- * 
- * 对应技术文档第5章 - 状态管理扩展
- */
-
+import { createIdbStore } from '@/lib/idb'
 import type { TreeNode } from '@/types/tree'
 
-/**
- * 节点位置信息
- */
 export interface NodePosition {
   x: number
   y: number
 }
 
-/**
- * 编辑器状态（保存到 localStorage）
- */
 export interface EditorState {
-  /** 关联的文件ID */
   fileId: string
-  /** 断开的节点数组 */
   detachedNodes: TreeNode[]
-  /** 节点位置映射 */
   nodePositions: Record<string, NodePosition>
-  /** 展开的节点ID集合 */
   expandedNodeIds: string[]
-  /** 最后修改时间 */
   lastModified: number
-  /** 版本号（用于未来兼容性） */
   version: number
 }
 
-/**
- * 状态存储版本号
- */
 const STATE_VERSION = 1
-
-/**
- * localStorage 键名前缀
- */
 const STORAGE_KEY_PREFIX = 'markdown-editor:state:'
+const editorStateStore = createIdbStore<EditorState>('visualmd-workspace', 'editor-states')
+const editorStateCache = new Map<string, EditorState | null>()
 
-/**
- * 生成存储键名
- * @param fileId 文件ID
- * @returns localStorage 键名
- */
-function getStorageKey(fileId: string): string {
+function getStorageKey(fileId: string) {
   return `${STORAGE_KEY_PREFIX}${fileId}`
 }
 
-/**
- * 保存编辑器状态
- * @param state 编辑器状态
- */
-export function saveEditorState(state: EditorState): void {
-  try {
-    const key = getStorageKey(state.fileId)
-    const data = JSON.stringify(state)
-    localStorage.setItem(key, data)
-  } catch (error) {
-    console.error('Failed to save editor state:', error)
+function normalizeEditorState(state: EditorState): EditorState {
+  return {
+    ...state,
+    version: state.version || STATE_VERSION,
+    detachedNodes: Array.isArray(state.detachedNodes) ? state.detachedNodes : [],
+    nodePositions: state.nodePositions || {},
+    expandedNodeIds: Array.isArray(state.expandedNodeIds) ? state.expandedNodeIds : [],
   }
 }
 
-/**
- * 加载编辑器状态
- * @param fileId 文件ID
- * @returns 编辑器状态或null
- */
-export function loadEditorState(fileId: string): EditorState | null {
+function readLegacyState(fileId: string) {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
   try {
-    const key = getStorageKey(fileId)
-    const data = localStorage.getItem(key)
-    
+    const data = window.localStorage.getItem(getStorageKey(fileId))
     if (!data) {
       return null
     }
-    
-    const state = JSON.parse(data) as EditorState
-    
-    // 版本兼容性检查
-    if (!state.version) {
-      state.version = 1
-    }
-    
-    // 确保必要字段存在
-    if (!state.detachedNodes) {
-      state.detachedNodes = []
-    }
-    if (!state.nodePositions) {
-      state.nodePositions = {}
-    }
-    if (!state.expandedNodeIds) {
-      state.expandedNodeIds = []
-    }
-    
-    return state
+
+    return normalizeEditorState(JSON.parse(data) as EditorState)
   } catch (error) {
-    console.error('Failed to load editor state:', error)
+    console.error('Failed to load legacy editor state:', error)
     return null
   }
 }
 
-/**
- * 删除编辑器状态
- * @param fileId 文件ID
- */
-export function deleteEditorState(fileId: string): void {
+function removeLegacyState(fileId: string) {
+  if (typeof window === 'undefined') {
+    return
+  }
+
   try {
-    const key = getStorageKey(fileId)
-    localStorage.removeItem(key)
+    window.localStorage.removeItem(getStorageKey(fileId))
   } catch (error) {
-    console.error('Failed to delete editor state:', error)
+    console.error('Failed to delete legacy editor state:', error)
   }
 }
 
-/**
- * 创建新的编辑器状态
- * @param fileId 文件ID
- * @returns 新的编辑器状态
- */
+export function saveEditorState(state: EditorState): void {
+  const normalizedState = normalizeEditorState({
+    ...state,
+    lastModified: Date.now(),
+  })
+  editorStateCache.set(normalizedState.fileId, normalizedState)
+
+  void editorStateStore.set(normalizedState.fileId, normalizedState).catch((error) => {
+    console.error('Failed to save editor state:', error)
+  })
+}
+
+export async function loadEditorState(fileId: string): Promise<EditorState | null> {
+  const cachedState = editorStateCache.get(fileId)
+  if (cachedState !== undefined) {
+    return cachedState
+  }
+
+  try {
+    const indexedState = await editorStateStore.get(fileId)
+    if (indexedState) {
+      const normalizedState = normalizeEditorState(indexedState)
+      editorStateCache.set(fileId, normalizedState)
+      return normalizedState
+    }
+  } catch (error) {
+    console.error('Failed to load editor state from IndexedDB:', error)
+  }
+
+  const legacyState = readLegacyState(fileId)
+  if (legacyState) {
+    editorStateCache.set(fileId, legacyState)
+    void editorStateStore.set(fileId, legacyState).then(() => {
+      removeLegacyState(fileId)
+    }).catch((error) => {
+      console.error('Failed to migrate legacy editor state:', error)
+    })
+    return legacyState
+  }
+
+  editorStateCache.set(fileId, null)
+  return null
+}
+
+export function deleteEditorState(fileId: string): void {
+  editorStateCache.delete(fileId)
+  removeLegacyState(fileId)
+
+  void editorStateStore.remove(fileId).catch((error) => {
+    console.error('Failed to delete editor state:', error)
+  })
+}
+
 export function createEditorState(fileId: string): EditorState {
   return {
     fileId,
@@ -136,58 +128,29 @@ export function createEditorState(fileId: string): EditorState {
   }
 }
 
-/**
- * 清理过期的编辑器状态（可选，用于定期清理）
- * @param maxAge 最大保存时间（毫秒），默认30天
- */
-export function cleanupExpiredStates(maxAge: number = 30 * 24 * 60 * 60 * 1000): void {
+export async function cleanupExpiredStates(maxAge: number = 30 * 24 * 60 * 60 * 1000): Promise<void> {
+  const now = Date.now()
+
   try {
-    const now = Date.now()
-    
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i)
-      
-      if (key && key.startsWith(STORAGE_KEY_PREFIX)) {
-        try {
-          const data = localStorage.getItem(key)
-          if (data) {
-            const state = JSON.parse(data) as EditorState
-            
-            // 如果状态过期，删除它
-            if (now - state.lastModified > maxAge) {
-              localStorage.removeItem(key)
-            }
-          }
-        } catch {
-          // 解析失败，删除损坏的数据
-          localStorage.removeItem(key)
-        }
+    const entries = await editorStateStore.getAll()
+    await Promise.all(entries.map(async ({ key, value }) => {
+      const normalizedState = normalizeEditorState(value)
+      if (now - normalizedState.lastModified > maxAge) {
+        editorStateCache.delete(key)
+        await editorStateStore.remove(key)
       }
-    }
+    }))
   } catch (error) {
-    console.error('Failed to cleanup expired states:', error)
+    console.error('Failed to cleanup expired editor states:', error)
   }
 }
 
-/**
- * 获取所有保存的状态文件ID
- * @returns 文件ID数组
- */
-export function getAllStoredFileIds(): string[] {
-  const fileIds: string[] = []
-  
+export async function getAllStoredFileIds(): Promise<string[]> {
   try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i)
-      
-      if (key && key.startsWith(STORAGE_KEY_PREFIX)) {
-        const fileId = key.substring(STORAGE_KEY_PREFIX.length)
-        fileIds.push(fileId)
-      }
-    }
+    const entries = await editorStateStore.getAll()
+    return entries.map((entry) => entry.key)
   } catch (error) {
     console.error('Failed to get stored file IDs:', error)
+    return []
   }
-  
-  return fileIds
 }

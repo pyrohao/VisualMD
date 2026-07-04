@@ -386,21 +386,50 @@ export function FlowCanvas() {
   const [contextMenuOpen, setContextMenuOpen] = useState(false)
   const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 })
   const lastAppliedMutationId = useRef<number>(0)
+  const lastGraphContextRef = useRef<{
+    documentVersion: number
+    layoutMode: string
+    themeKey: string
+  }>({
+    documentVersion: -1,
+    layoutMode: '',
+    themeKey: '',
+  })
 
   // ????????????
   useEffect(() => {
     if (!document) {
       lastAppliedMutationId.current = 0
+      lastGraphContextRef.current = {
+        documentVersion: -1,
+        layoutMode: '',
+        themeKey: '',
+      }
       setNodes([])
       setEdges([])
       return
     }
 
-    if (lastMutation.id === lastAppliedMutationId.current) {
+    const themeKey = [
+      themeConfig.background,
+      themeConfig.card,
+      themeConfig.text,
+      themeConfig.border,
+      themeConfig.primary,
+      themeConfig.accent,
+    ].join('|')
+
+    const graphContextChanged =
+      lastGraphContextRef.current.documentVersion !== document.version ||
+      lastGraphContextRef.current.layoutMode !== layoutMode ||
+      lastGraphContextRef.current.themeKey !== themeKey
+    const mutationChanged = lastMutation.id !== lastAppliedMutationId.current
+
+    if (!mutationChanged && !graphContextChanged) {
       return
     }
 
-    if (lastMutation.scope === 'visual') {
+    if (mutationChanged && !graphContextChanged && lastMutation.scope === 'visual') {
       const patchedNodes = applyVisualMutationToNodes(
         nodes,
         document,
@@ -425,6 +454,11 @@ export function FlowCanvas() {
         }
 
         lastAppliedMutationId.current = lastMutation.id
+        lastGraphContextRef.current = {
+          documentVersion: document.version,
+          layoutMode,
+          themeKey,
+        }
         return
       }
     }
@@ -440,6 +474,11 @@ export function FlowCanvas() {
     setNodes(nextGraph.nodes)
     setEdges(nextGraph.edges)
     lastAppliedMutationId.current = lastMutation.id
+    lastGraphContextRef.current = {
+      documentVersion: document.version,
+      layoutMode,
+      themeKey,
+    }
   }, [document, lastMutation, layoutMode, nodeCallbacks, nodes, selectedEdgeId, selectedNodeId, setEdges, setNodes, themeConfig])
 
   // 当选中的边变化时，更新已有边的样式

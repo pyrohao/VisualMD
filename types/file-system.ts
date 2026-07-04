@@ -56,6 +56,7 @@ export interface Workspace {
   assets: WorkspaceAsset[]
   currentFileId: string | null
   expandedFolderIds: string[]
+  hasInitializedWelcomeDocs: boolean
 }
 
 /**

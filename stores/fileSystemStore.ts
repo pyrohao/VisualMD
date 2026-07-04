@@ -21,6 +21,7 @@ import { buildLocalMarkdownPath, buildRelativeAssetPath, createLocalAssetRecord 
 import { saveLocalWorkspaceAssetBinary, deleteLocalWorkspaceAssetBinary } from '@/lib/local-workspace-storage'
 import { createIndexedDbPersistStorage } from '@/lib/git-store-persist-storage'
 import { exportMarkdownFileWithAssets, exportWorkspaceAsset } from '@/lib/local-workspace-export'
+import type { WelcomeDocumentSeed } from '@/lib/default-documents'
 
 /**
  * 生成唯一的文件名（处理重复）
@@ -79,6 +80,8 @@ interface FileSystemStore {
   currentFileId: string | null
   /** 展开的文件夹ID集合 */
   expandedFolderIds: Set<string>
+  /** 是否已完成首次欢迎文档初始化 */
+  hasInitializedWelcomeDocs: boolean
   
   // ==================== 计算属性 ====================
   
@@ -108,6 +111,8 @@ interface FileSystemStore {
   createFile: (name: string, folderId?: string | null) => void
   /** 导入文件 */
   importFile: (name: string, content: string, folderId?: string | null) => void
+  /** 仅在首次使用时初始化欢迎文档 */
+  initializeWelcomeDocs: (documents: ReadonlyArray<WelcomeDocumentSeed>) => void
   /** 打开文件 */
   openFile: (id: string) => void
   /** 保存文件（标记为已修改） */
@@ -201,6 +206,7 @@ async function migrateFileSystemPersistedState(persistedState: unknown) {
   const state = persistedState as {
     assets?: Array<WorkspaceAsset & { contentBase64?: string }>
     expandedFolderIds?: string[] | Set<string>
+    hasInitializedWelcomeDocs?: boolean
   }
 
   const migratedAssets = Array.isArray(state.assets)
@@ -237,6 +243,10 @@ async function migrateFileSystemPersistedState(persistedState: unknown) {
         : Array.isArray(state.expandedFolderIds)
           ? state.expandedFolderIds
           : [],
+    hasInitializedWelcomeDocs:
+      typeof state.hasInitializedWelcomeDocs === 'boolean'
+        ? state.hasInitializedWelcomeDocs
+        : true,
   }
 }
 
@@ -253,6 +263,7 @@ export const useFileSystemStore = create<FileSystemStore>()(
         assets: [],
         currentFileId: null,
         expandedFolderIds: new Set(),
+        hasInitializedWelcomeDocs: false,
         
         // ==================== 计算属性 ====================
 
@@ -388,6 +399,58 @@ description:
             updatedAt: now,
           }
           set({ files: [...files, newFile], currentFileId: newFile.id })
+        },
+
+        initializeWelcomeDocs: (documents) => {
+          const { hasInitializedWelcomeDocs, files, folders, assets, currentFileId } = get()
+
+          if (hasInitializedWelcomeDocs) {
+            return
+          }
+
+          const normalizedDocuments = documents
+            .map((document) => {
+              const rawName = document.name.trim()
+              return {
+                name: rawName ? ensureMarkdownExtension(rawName) : '',
+                content: document.content,
+              }
+            })
+            .filter((document) => document.name.length > 0 && document.content.trim().length > 0)
+
+          if (files.length > 0 || folders.length > 0 || assets.length > 0 || normalizedDocuments.length === 0) {
+            set({ hasInitializedWelcomeDocs: true })
+            return
+          }
+
+          const now = Date.now()
+          const nextFiles = [...files]
+          const importedFiles: MarkdownFile[] = []
+
+          normalizedDocuments.forEach((document, index) => {
+            const fileName = generateUniqueFileName(nextFiles, document.name, null)
+            const newFile: MarkdownFile = {
+              id: nanoid(),
+              type: 'file',
+              name: fileName,
+              folderId: null,
+              order: getMaxOrder(nextFiles.filter((file) => file.folderId === null)) + 1,
+              content: document.content,
+              isModified: false,
+              lastOpenedAt: now + index,
+              createdAt: now + index,
+              updatedAt: now + index,
+            }
+
+            nextFiles.push(newFile)
+            importedFiles.push(newFile)
+          })
+
+          set({
+            files: nextFiles,
+            currentFileId: importedFiles[importedFiles.length - 1]?.id ?? currentFileId,
+            hasInitializedWelcomeDocs: true,
+          })
         },
         
         openFile: (id: string) => {
@@ -645,7 +708,7 @@ description:
       }),
       {
         name: 'markdown-workspace',
-        version: 2,
+        version: 3,
         storage: createIndexedDbPersistStorage<Partial<Workspace>>({
           dbName: 'visualmd-workspace',
           storeName: 'zustand-persist',
@@ -658,6 +721,7 @@ description:
           assets: state.assets,
           currentFileId: state.currentFileId,
           expandedFolderIds: Array.from(state.expandedFolderIds),
+          hasInitializedWelcomeDocs: state.hasInitializedWelcomeDocs,
         }),
         onRehydrateStorage: () => (state) => {
           // 将数组恢复为 Set

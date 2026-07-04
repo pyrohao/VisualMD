@@ -944,11 +944,11 @@ export function AiChatDock({ onClose: _onClose }: AiChatDockProps) {
             }}
             placeholder={
               currentLanguage === 'zh'
-                ? '围绕引用内容提问，或要求修改当前块'
-                : 'Ask about the references or request a document edit'
+                ? '和你的 AI 对话，自由创建或修改文档'
+                : 'Chat with your AI to freely create or edit documents'
             }
-            className="min-h-12 w-full min-w-0 resize-none border-0 bg-transparent p-0 text-[15px] leading-6 shadow-none outline-none focus-visible:ring-0"
-            style={{ color: themeConfig.text }}
+            className="h-24 w-full min-w-0 resize-none overflow-y-auto border-0 bg-transparent p-0 text-[15px] leading-6 shadow-none outline-none focus-visible:ring-0"
+            style={{ color: themeConfig.text, fieldSizing: 'fixed' }}
           />
 
           <div className="mt-3 flex min-w-0 items-center justify-between gap-3">

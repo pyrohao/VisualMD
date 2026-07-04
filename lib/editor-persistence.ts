@@ -3,6 +3,7 @@ import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { useGitStore } from '@/stores/gitStore'
 import { useTabsStore } from '@/stores/tabsStore'
 import { inferGitFileKind, isGitBinaryFileKind } from '@/lib/git/file-kind'
+import { resolveTabSavedContent } from '@/lib/tab-content'
 
 export function applyMarkdownToDocument(markdown: string, options: { external?: boolean } = {}) {
   const documentStore = useDocumentStore.getState() as {
@@ -177,7 +178,7 @@ export function discardActiveTabChanges() {
 
   if (!activeTab) return
 
-  const discardContent = activeTab.savedContent ?? activeTab.content
+  const discardContent = resolveTabSavedContent(activeTab)
   const activeGitKind =
     activeTab.gitMeta?.fileKind || (activeTab.gitMeta?.path ? inferGitFileKind(activeTab.gitMeta.path) : 'text')
 

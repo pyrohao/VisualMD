@@ -11,7 +11,7 @@
  */
 
 import { create } from 'zustand'
-import { devtools, persist } from 'zustand/middleware'
+import { devtools } from 'zustand/middleware'
 import { nanoid } from 'nanoid'
 import type {
   TreeNode,
@@ -869,6 +869,7 @@ export const useDocumentStore = create<DocumentStore>()(
   devtools(
     (set, get) => {
       let mutationId = 0
+      let activeLoadRevision = 0
       const nextMutation = (
         type: DocumentMutationType,
         scope: DocumentMutationScope,
@@ -908,11 +909,50 @@ export const useDocumentStore = create<DocumentStore>()(
         loadDocument: (content: string, fileName?: string, fileId?: string) => {
           try {
             const document = parseMarkdown(content, fileName)
+            const loadRevision = ++activeLoadRevision
             
             // 如果有 fileId，尝试恢复编辑器状态
             if (fileId) {
               document.fileId = fileId
-              const savedState = loadEditorState(fileId)
+              void loadEditorState(fileId).then((savedState) => {
+                if (!savedState) {
+                  return
+                }
+
+                const currentDocument = get().document
+                if (
+                  loadRevision !== activeLoadRevision ||
+                  !currentDocument ||
+                  currentDocument.fileId !== fileId
+                ) {
+                  return
+                }
+
+                const nextDetachedNodes = savedState.detachedNodes || []
+                const nextExpandedNodeIds = resolveExpandedNodeIdsForDocument(
+                  currentDocument.root,
+                  nextDetachedNodes,
+                  savedState.expandedNodeIds && savedState.expandedNodeIds.length > 0
+                    ? savedState.expandedNodeIds
+                    : undefined
+                )
+
+                set({
+                  document: {
+                    ...currentDocument,
+                    root: syncCollapseStateInTree(currentDocument.root, nextExpandedNodeIds),
+                    detachedNodes: syncCollapseStateInDetached(nextDetachedNodes, nextExpandedNodeIds),
+                  },
+                  expandedNodeIds: nextExpandedNodeIds,
+                  selectedNodeId: null,
+                  error: null,
+                  lastMutation: nextMutation('load-document', 'full'),
+                })
+                useHistoryStore.getState().clear()
+              }).catch((error) => {
+                console.error('Failed to hydrate editor state:', error)
+              })
+              const savedState = null
               
               if (savedState) {
                 // 恢复断开节点
@@ -1925,7 +1965,7 @@ export const useDocumentStore = create<DocumentStore>()(
       }
     },
     {
-      name: 'document-store'
+      name: 'DocumentStore'
     }
   )
 )

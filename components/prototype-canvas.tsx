@@ -397,12 +397,12 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
   } as CSSProperties
 
   const prototypeSwitchStyle = {
-    '--proto-switch-off-bg': themeConfig.input,
-    '--proto-switch-off-border': themeConfig.border,
-    '--proto-switch-on-bg': `${themeConfig.primary}cc`,
-    '--proto-switch-on-border': `${themeConfig.primary}aa`,
-    '--proto-switch-thumb-off': themeConfig.card,
-    '--proto-switch-thumb-on': themeConfig.buttonText || '#fff',
+    '--switch-off-bg': themeConfig.input,
+    '--switch-off-border': themeConfig.border,
+    '--switch-on-bg': `${themeConfig.primary}cc`,
+    '--switch-on-border': `${themeConfig.primary}aa`,
+    '--switch-thumb-off': themeConfig.card,
+    '--switch-thumb-on': themeConfig.buttonText || '#fff',
   } as CSSProperties
 
   const renderMarkdownBlock = (block: PrototypeMarkdownBlock, stateKey: string) => {
@@ -638,7 +638,7 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
               {block.label}
             </p>
             <Switch
-              className="border [--switch-off-bg:var(--proto-switch-off-bg)] [--switch-off-border:var(--proto-switch-off-border)] [--switch-on-bg:var(--proto-switch-on-bg)] [--switch-on-border:var(--proto-switch-on-border)] [--switch-thumb-off:var(--proto-switch-thumb-off)] [--switch-thumb-on:var(--proto-switch-thumb-on)]"
+              className="border"
               checked={toggleValues[block.id] ?? block.checked}
               onCheckedChange={(checked) => {
                 setToggleValues((current) => ({ ...current, [block.id]: checked }))
