@@ -340,11 +340,10 @@ function buildDraftRecord(
   } satisfies AgentDraft
 }
 
-function getReferenceFingerprint(reference: Pick<AiDocReferenceSnapshot, 'anchorPath' | 'startBlockIndex' | 'blockCount' | 'expectedText'>) {
+function getReferenceFingerprint(reference: Pick<AiDocReferenceSnapshot, 'startOffset' | 'endOffset' | 'expectedText'>) {
   return JSON.stringify([
-    reference.anchorPath,
-    reference.startBlockIndex,
-    reference.blockCount,
+    reference.startOffset,
+    reference.endOffset,
     reference.expectedText,
   ])
 }
@@ -377,8 +376,8 @@ function buildUserAgentMessage(args: {
     .map((reference, index) => {
       return [
         `Reference ${index + 1}`,
-        `anchorPath: ${reference.anchorPath.join(' > ') || 'root'}`,
-        `blockType: ${reference.blockType}`,
+        `startOffset: ${reference.startOffset}`,
+        `endOffset: ${reference.endOffset}`,
         '<selected_text>',
         reference.expectedText,
         '</selected_text>',
@@ -1002,8 +1001,6 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
   },
 
   addEditorSelectionReference: async (selectionStart, selectionEnd, markdownOverride, versionOverride) => {
-    if (get().selectionCandidate) return
-
     const markdown = markdownOverride ?? useDocumentStore.getState().getCurrentMarkdown()
     const document = useDocumentStore.getState().document
     if (!document) return
@@ -1094,6 +1091,8 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
     let messages: AgentMessage[] = []
     const generatedDocuments = new Map<string, GeneratedDocumentSession>()
     const generatedDocumentPreviewSyncStateByToolCall = new Map<string, GeneratedDocumentPreviewSyncState>()
+    let streamedAssistantText = ''
+    let streamFlushTimer: ReturnType<typeof setTimeout> | null = null
 
     try {
       await saveDirtyEditors()
@@ -1107,6 +1106,11 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
 
       const input = get().draftInput.trim()
       if (!input) return
+
+      if (get().selectionCandidate) {
+        await get().commitSelectionCandidate()
+        conversationId = get().currentConversationId
+      }
 
       const settings = useSettingsStore.getState()
       const providerConfig = settings.getActiveProviderConfig()
@@ -1194,6 +1198,28 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         },
       }))
 
+      const flushStreamedAssistantText = (force = false) => {
+        const nextText = streamedAssistantText
+        if (!nextText && !force) {
+          return
+        }
+
+        set((state) => ({
+          sendingStatus: 'AI 姝ｅ湪鍥炲...',
+          visibleMessagesByConversation: {
+            ...state.visibleMessagesByConversation,
+            [conversationId]: getVisibleMessages([
+              ...(state.messagesByConversation[conversationId] || messages),
+              {
+                ...pendingAssistantMessage,
+                message: nextText,
+                displayMessage: nextText,
+              },
+            ]),
+          },
+        }))
+      }
+
       const result = await runAgentReActLoop({
         providerConfig: {
           ...providerConfig,
@@ -1205,6 +1231,15 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         messages: runtimeMessages,
         tools: createDefaultAgentTools(),
         markdown: documentStore.getCurrentMarkdown(),
+        selectedReference: references.at(-1)
+          ? {
+              id: references.at(-1)?.id,
+              startOffset: references.at(-1)?.startOffset,
+              endOffset: references.at(-1)?.endOffset,
+              expectedText: references.at(-1)?.expectedText,
+              excerpt: references.at(-1)?.excerpt,
+            }
+          : null,
         maxTurns: 5,
         signal: runContext.controller.signal,
         onGeneratedDocumentEvent: async (event) => {
@@ -1359,22 +1394,23 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         },
         onAssistantTextDelta: (text) => {
           if (!isCurrentRun()) return
-          set((state) => ({
-            sendingStatus: 'AI 正在回复...',
-            visibleMessagesByConversation: {
-              ...state.visibleMessagesByConversation,
-              [conversationId]: getVisibleMessages([
-                ...(state.messagesByConversation[conversationId] || messages),
-                {
-                  ...pendingAssistantMessage,
-                  message: text,
-                  displayMessage: text,
-                },
-              ]),
-            },
-          }))
+          streamedAssistantText = text
+          if (streamFlushTimer) {
+            return
+          }
+
+          streamFlushTimer = setTimeout(() => {
+            streamFlushTimer = null
+            flushStreamedAssistantText()
+          }, 48)
         },
       })
+
+      if (streamFlushTimer) {
+        clearTimeout(streamFlushTimer)
+        streamFlushTimer = null
+      }
+      flushStreamedAssistantText(true)
 
       if (!isCurrentRun()) {
         return
@@ -1452,6 +1488,10 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         },
       }))
     } catch (error) {
+      if (streamFlushTimer) {
+        clearTimeout(streamFlushTimer)
+        streamFlushTimer = null
+      }
       generatedDocumentPreviewSyncStateByToolCall.forEach((_, toolCallId) => {
         cancelGeneratedDocumentPreviewSync(generatedDocumentPreviewSyncStateByToolCall, toolCallId)
       })
@@ -1480,6 +1520,10 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         },
       }))
     } finally {
+      if (streamFlushTimer) {
+        clearTimeout(streamFlushTimer)
+        streamFlushTimer = null
+      }
       generatedDocumentPreviewSyncStateByToolCall.forEach((_, toolCallId) => {
         cancelGeneratedDocumentPreviewSync(generatedDocumentPreviewSyncStateByToolCall, toolCallId)
       })

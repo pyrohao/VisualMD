@@ -1,6 +1,5 @@
 import type { AgentToolContext, AgentToolResult } from './types'
 import { AIService } from '@/lib/ai-service'
-import { findNearestText, splitParagraphs, tokenScore } from './text'
 
 export interface AgentToolDefinition {
   name: string
@@ -65,20 +64,16 @@ export const defaultAgentToolDefinitions: AgentToolDefinition[] = [
     },
   },
   {
-    name: 'semantic_tool',
-    description: 'Locate the most likely nearby paragraph when exact replacement fails.',
+    name: 'find_tool',
+    description: 'Locate exact literal text in the current document and return up to three candidate matches.',
     argumentsSchema: {
       type: 'object',
-      description: 'Arguments for semantic recovery after an apply_tool failure.',
+      description: 'Arguments for exact literal text lookup in the current Markdown document.',
       additionalProperties: false,
       properties: {
         query: {
           type: 'string',
-          description: 'Required. Describe the target paragraph or the meaning of the content that should be found.',
-        },
-        nearText: {
-          type: 'string',
-          description: 'Optional. Nearby failed text or local context used to bias the search toward the intended region.',
+          description: 'Required. Provide the exact literal text fragment to search for in the current Markdown document.',
         },
       },
       required: ['query'],
@@ -109,6 +104,30 @@ export const defaultAgentToolDefinitions: AgentToolDefinition[] = [
 export async function executeApplyTool(args: Record<string, unknown>, context: AgentToolContext): Promise<AgentToolResult> {
   const oldString = typeof args.oldString === 'string' ? args.oldString : ''
   const newString = typeof args.newString === 'string' ? args.newString : ''
+  const selectedReference = context.selectedReference
+
+  const selectedStart = typeof selectedReference?.startOffset === 'number' ? selectedReference.startOffset : null
+  const selectedEnd = typeof selectedReference?.endOffset === 'number' ? selectedReference.endOffset : null
+  const selectedExpectedText = typeof selectedReference?.expectedText === 'string' ? selectedReference.expectedText : ''
+
+  if (selectedStart !== null && selectedEnd !== null && selectedStart >= 0 && selectedEnd >= selectedStart) {
+    const currentSelectedText = context.markdown.slice(selectedStart, selectedEnd)
+    if (currentSelectedText === selectedExpectedText) {
+      return {
+        ok: true,
+        message: 'apply_tool succeeded using the live selection anchor. The current document markdown has been updated. Do not repeat the same edit. Next, briefly confirm the change to the user or continue with the next requested task.',
+        nextMarkdown: `${context.markdown.slice(0, selectedStart)}${newString}${context.markdown.slice(selectedEnd)}`,
+        metadata: {
+          matchCount: 1,
+          selectedStart,
+          selectedEnd,
+          nextStep: 'Briefly confirm the edit or continue with the next user-requested task.',
+          shouldReplyToUser: true,
+          usedSelectionAnchor: true,
+        },
+      }
+    }
+  }
 
   if (!oldString) {
     return {
@@ -116,6 +135,8 @@ export async function executeApplyTool(args: Record<string, unknown>, context: A
       message: 'apply_tool failed: oldString is required. Ask the model to provide an exact source fragment before retrying apply_tool.',
       metadata: {
         matchCount: 0,
+        selectedStart,
+        selectedEnd,
         nextStep: 'Provide exact oldString and retry apply_tool.',
       },
     }
@@ -126,14 +147,16 @@ export async function executeApplyTool(args: Record<string, unknown>, context: A
     return {
       ok: false,
       message: matchCount === 0
-        ? 'apply_tool failed: oldString not found. Use semantic_tool to find the closest matching paragraph or choose a different exact fragment.'
+        ? 'apply_tool failed: oldString not found. Use find_tool to locate exact candidate fragments or choose a different exact fragment.'
         : 'apply_tool failed: oldString matched multiple times. Narrow the target fragment and retry apply_tool with a unique exact match.',
       metadata: {
         matchCount,
         failedText: oldString,
         contextPreview: context.markdown.slice(0, 400),
+        selectedStart,
+        selectedEnd,
         nextStep: matchCount === 0
-          ? 'Use semantic_tool or choose a different exact fragment.'
+          ? 'Use find_tool or choose a different exact fragment.'
           : 'Retry apply_tool with a smaller unique exact fragment.',
       },
     }
@@ -151,40 +174,64 @@ export async function executeApplyTool(args: Record<string, unknown>, context: A
   }
 }
 
-export async function executeSemanticTool(args: Record<string, unknown>, context: AgentToolContext): Promise<AgentToolResult> {
+export async function executeFindTool(args: Record<string, unknown>, context: AgentToolContext): Promise<AgentToolResult> {
   const query = typeof args.query === 'string' ? args.query : ''
-  const nearText = typeof args.nearText === 'string' ? args.nearText : context.lastFailedContext || null
-  const nearIndex = findNearestText(context.markdown, nearText)
-  const blocks = splitParagraphs(context.markdown)
-
-  const ranked = blocks
-    .map((block) => {
-      const similarity = tokenScore(query, block.text)
-      const distance = nearIndex === null ? 0 : Math.abs(block.start - nearIndex)
-      return { ...block, similarity, distance }
-    })
-    .sort((left, right) => right.similarity - left.similarity || left.distance - right.distance)
-
-  const best = ranked[0]
-  if (!best || best.similarity <= 0) {
+  if (!query) {
     return {
       ok: false,
-      message: 'semantic_tool failed: no semantic candidate found. Ask the user for a more specific target or explain that the intended paragraph could not be located.',
+      message: 'find_tool failed: query is required. Provide an exact literal text fragment before retrying.',
       metadata: {
-        nextStep: 'Ask for clarification or explain that no suitable target was found.',
+        nextStep: 'Provide an exact literal text fragment and retry find_tool.',
+      },
+    }
+  }
+
+  const results: Array<{
+    startOffset: number
+    endOffset: number
+    matchText: string
+    preview: string
+  }> = []
+
+  let fromIndex = 0
+  while (fromIndex < context.markdown.length && results.length < 3) {
+    const matchIndex = context.markdown.indexOf(query, fromIndex)
+    if (matchIndex < 0) {
+      break
+    }
+
+    const matchEnd = matchIndex + query.length
+    const previewStart = Math.max(0, matchIndex - 80)
+    const previewEnd = Math.min(context.markdown.length, matchEnd + 80)
+    results.push({
+      startOffset: matchIndex,
+      endOffset: matchEnd,
+      matchText: context.markdown.slice(matchIndex, matchEnd),
+      preview: context.markdown.slice(previewStart, previewEnd),
+    })
+    fromIndex = matchEnd
+  }
+
+  if (results.length === 0) {
+    return {
+      ok: false,
+      message: 'find_tool failed: no exact literal match was found. Ask the user for a more precise fragment or explain that the text could not be located.',
+      metadata: {
+        query,
+        nextStep: 'Ask for clarification or explain that no exact literal match was found.',
       },
     }
   }
 
   return {
     ok: true,
-    message: 'semantic_tool succeeded. A likely candidate paragraph was found. Use that candidate as oldString in apply_tool if the user still wants an edit.',
+    message: 'find_tool succeeded. Exact literal candidates were found. Use one returned candidate as oldString in apply_tool if it matches the intended target.',
     metadata: {
       query,
-      nearText,
-      candidate: best.text,
-      candidates: ranked.slice(0, 3).map((item) => item.text),
-      nextStep: 'Use the candidate as oldString in apply_tool if it matches the user intent.',
+      candidate: results[0].matchText,
+      candidates: results.map((item) => item.matchText),
+      results,
+      nextStep: 'Use one returned candidate as oldString in apply_tool if it matches the user intent.',
     },
   }
 }
@@ -282,7 +329,7 @@ function normalizeMarkdownFileName(fileName: string) {
 
 const defaultAgentToolExecutors: Record<string, AgentToolExecutor> = {
   apply_tool: executeApplyTool,
-  semantic_tool: executeSemanticTool,
+  find_tool: executeFindTool,
   generate_document_tool: executeGenerateDocumentTool,
 }
 

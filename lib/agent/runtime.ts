@@ -4,7 +4,7 @@ import { createAIService } from '@/lib/ai-service'
 import { buildAgentTranscript } from './model'
 import { parseAgentModelResponse } from './json'
 import { buildAgentSystemPrompt, buildAgentToolsPrompt } from './prompt'
-import type { AgentGeneratedDocumentEvent, AgentMessage, AgentToolContext, AgentToolResult } from './types'
+import type { AgentGeneratedDocumentEvent, AgentMessage, AgentReferenceContext, AgentToolContext, AgentToolResult } from './types'
 import { buildInvalidToolArgumentsResult, validateToolArguments, type AgentTool } from './tools'
 
 export interface AgentRuntimeTurnOptions {
@@ -13,6 +13,7 @@ export interface AgentRuntimeTurnOptions {
   messages: AgentMessage[]
   tools: AgentTool[]
   markdown: string
+  selectedReference?: AgentReferenceContext | null
   maxTurns?: number
   onAssistantTextDelta?: (text: string) => void
   onGeneratedDocumentEvent?: (event: AgentGeneratedDocumentEvent) => void | Promise<void>
@@ -148,6 +149,7 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
   let markdown = options.markdown
   let stopReason: AgentRuntimeTurnResult['stoppedBecause'] = 'tool-limit'
   let lastFailedContext: string | null = null
+  let consecutiveFindToolCalls = 0
   const requiresApplyTool = likelyRequiresApplyTool(options.messages)
   const suppressFirstTurnAssistantStream = likelyRequestsDocumentGeneration(options.messages) || requiresApplyTool
 
@@ -232,6 +234,45 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
     }
     const tool = options.tools.find((item) => item.name === toolCall.name)
 
+    if (toolCall.name === 'find_tool' && consecutiveFindToolCalls >= 3) {
+      const limitResult: AgentToolResult = {
+        ok: false,
+        message: 'find_tool failed: search limit exceeded for this run. Stop calling find_tool and ask the user for a more precise target or explain that the text could not be located.',
+        metadata: {
+          nextStep: 'Ask the user for a more precise target or explain that the text could not be located.',
+          limitExceeded: true,
+        },
+      }
+
+      const assistantHistoryMessage: AgentMessage = {
+        id: nanoid(),
+        conversationId,
+        role: 'assistant',
+        message: serializeToolCallForHistory(toolCall),
+        createdAt: Date.now(),
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        state: 'done',
+      }
+      const toolHistoryMessage: AgentMessage = {
+        id: nanoid(),
+        conversationId,
+        role: 'tool',
+        message: serializeToolResultForHistory(toolCall.name, limitResult),
+        createdAt: Date.now(),
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        state: 'failed',
+        error: limitResult.message,
+      }
+      messages.push(assistantHistoryMessage, toolHistoryMessage)
+      modelMessages.push(
+        { ...assistantHistoryMessage, message: serializeToolCallForModel(toolCall) },
+        { ...toolHistoryMessage, message: serializeToolResultForModel(limitResult) }
+      )
+      continue
+    }
+
     const assistantHistoryMessage: AgentMessage = {
       id: nanoid(),
       conversationId,
@@ -252,6 +293,7 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
     const toolResult = await runTool(tool, toolCall.arguments, {
       markdown,
       lastFailedContext,
+      selectedReference: options.selectedReference,
       providerConfig: options.providerConfig,
       signal: options.signal,
       toolCallId: toolCall.id,
@@ -264,6 +306,12 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
         : typeof toolCall.arguments.oldString === 'string'
           ? toolCall.arguments.oldString
           : lastFailedContext
+    }
+
+    if (toolCall.name === 'find_tool') {
+      consecutiveFindToolCalls += 1
+    } else if (toolResult.ok && toolCall.name === 'apply_tool') {
+      consecutiveFindToolCalls = 0
     }
 
     if (toolResult.ok && toolResult.nextMarkdown) {
@@ -306,7 +354,7 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
       return { messages, appliedMarkdown: markdown, previousMarkdown, appliedToolCallIds, appliedTools, generatedFiles, stoppedBecause: 'invalid-tool' }
     }
 
-    if (!toolResult.ok && toolCall.name !== 'semantic_tool') {
+    if (!toolResult.ok && toolCall.name !== 'find_tool') {
       continue
     }
   }

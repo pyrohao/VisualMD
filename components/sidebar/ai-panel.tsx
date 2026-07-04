@@ -5,6 +5,7 @@ import { CheckCircle, Cpu, Eye, EyeOff, Key, Plus, RefreshCw, Settings, TestTube
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { PROVIDER_TEMPLATES, useSettingsStore, type AIProviderProtocol } from '@/stores/settingsStore'
 import { createAIService } from '@/lib/ai-service'
+import { useTranslation } from '@/stores/languageStore'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -18,6 +19,7 @@ export function AIPanel() {
   const [isCustomChannel, setIsCustomChannel] = useState(false)
   const [customPreviousProviderId, setCustomPreviousProviderId] = useState<string | null>(null)
   const { getThemeConfig } = useThemeStore()
+  const { t } = useTranslation()
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
   const {
     activeProviderId,
@@ -61,7 +63,7 @@ export function AIPanel() {
     setCustomPreviousProviderId(currentConfig.id)
     const providerId = addCustomProvider('openai-compatible')
     setActiveProvider(providerId)
-    updateProviderConfig(providerId, { name: '自定义 OpenAI' })
+    updateProviderConfig(providerId, { name: t('aiPanel.customOpenAI') })
     setIsCustomChannel(true)
   }
 
@@ -69,7 +71,7 @@ export function AIPanel() {
     setIsCustomChannel(false)
     setCustomPreviousProviderId(null)
     if (showToast) {
-      toast({ title: '自定义渠道已保存' })
+      toast({ title: t('aiPanel.customChannelSaved') })
     }
   }
 
@@ -106,7 +108,7 @@ export function AIPanel() {
   const testConnection = async () => {
     const apiKey = getDecryptedApiKey(currentConfig.id)
     if (!currentConfig.baseUrl || !currentConfig.model || !apiKey) {
-      toast({ title: 'AI 配置不完整', variant: 'destructive' })
+      toast({ title: t('aiPanel.configIncomplete'), variant: 'destructive' })
       return
     }
 
@@ -121,9 +123,9 @@ export function AIPanel() {
         saveCustomChannel(false)
       }
       toast({
-        title: result.success ? '连接成功' : '连接失败',
+        title: result.success ? t('settings.connectionSuccess') : t('settings.connectionFailed'),
         description: result.success && isCustomChannel
-          ? '连接成功，已自动保存自定义渠道。'
+          ? t('aiPanel.connectionSavedCustom')
           : result.message,
         variant: result.success ? undefined : 'destructive',
       })
@@ -135,7 +137,7 @@ export function AIPanel() {
   const refreshModels = async () => {
     const apiKey = getDecryptedApiKey(currentConfig.id)
     if (!currentConfig.baseUrl || !apiKey) {
-      toast({ title: '请先填写 API 地址和密钥', variant: 'destructive' })
+      toast({ title: t('aiPanel.fillApiAddressAndKey'), variant: 'destructive' })
       return
     }
 
@@ -143,11 +145,11 @@ export function AIPanel() {
     try {
       const models = await createAIService(getRuntimeConfig()).listModels()
       updateProviderModels(currentConfig.id, models.map((model) => model.id))
-      toast({ title: `已刷新 ${models.length} 个模型` })
+      toast({ title: t('aiPanel.modelsRefreshed').replace('{count}', String(models.length)) })
     } catch (error) {
       toast({
-        title: '模型列表刷新失败',
-        description: error instanceof Error ? error.message : '请手动填写模型名称',
+        title: t('aiPanel.refreshModelsFailed'),
+        description: error instanceof Error ? error.message : t('aiPanel.enterModelNameManually'),
         variant: 'destructive',
       })
     } finally {
@@ -160,7 +162,7 @@ export function AIPanel() {
       <div className="flex h-14 items-center border-b px-4" style={{ borderColor: themeConfig.border }}>
         <Settings className="mr-2 h-5 w-5" style={{ color: themeConfig.primary }} />
         <h2 className="text-sm font-semibold" style={{ color: themeConfig.heading }}>
-          AI 配置
+          {t('aiPanel.title')}
         </h2>
       </div>
 
@@ -180,7 +182,11 @@ export function AIPanel() {
               ) : (
                 <XCircle className="h-3.5 w-3.5" />
               )}
-              <span>{connectedProviders.length ? `已连接 ${connectedProviders.length} 个渠道` : '暂无已连接渠道'}</span>
+              <span>
+                {connectedProviders.length
+                  ? t('aiPanel.connectedChannels').replace('{count}', String(connectedProviders.length))
+                  : t('aiPanel.noConnectedChannels')}
+              </span>
             </div>
             {!!connectedProviders.length && (
               <div className="mt-2 flex flex-wrap gap-1.5">
@@ -190,7 +196,7 @@ export function AIPanel() {
                     className="max-w-full truncate rounded border px-2 py-1 text-[11px]"
                     style={{ borderColor: `${themeConfig.success}40`, color: themeConfig.success }}
                   >
-                    {provider.name} · {provider.model || '未选择模型'}
+                    {provider.name} · {provider.model || t('aiPanel.noModelSelected')}
                   </span>
                 ))}
               </div>
@@ -201,7 +207,7 @@ export function AIPanel() {
             <div className="flex items-center justify-between">
               <div className="flex min-w-0 items-center gap-2 text-sm font-medium" style={{ color: themeConfig.heading }}>
                 <Cpu className="h-4 w-4 shrink-0" />
-                <span className="truncate">连接参数</span>
+                <span className="truncate">{t('aiPanel.connectionParameters')}</span>
               </div>
               {isSavedCustomProvider && (
                 <button
@@ -209,7 +215,7 @@ export function AIPanel() {
                   onClick={() => removeProvider(currentConfig.id)}
                   disabled={providers.length <= 1}
                   className="rounded-md p-1 disabled:opacity-40"
-                  title="删除渠道"
+                  title={t('aiPanel.removeChannel')}
                   style={{ color: themeConfig.textMuted }}
                 >
                   <Trash2 className="h-4 w-4" />
@@ -220,12 +226,12 @@ export function AIPanel() {
             {!isCustomChannel && (
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <Label className="text-xs" style={{ color: themeConfig.textMuted }}>选择连接渠道</Label>
+                  <Label className="text-xs" style={{ color: themeConfig.textMuted }}>{t('aiPanel.selectChannel')}</Label>
                   <button
                     type="button"
                     onClick={createCustomChannel}
                     className="rounded-md border p-1.5"
-                    title="自定义渠道"
+                    title={t('aiPanel.customChannel')}
                     style={{ borderColor: themeConfig.border, color: themeConfig.text }}
                   >
                     <Plus className="h-3.5 w-3.5" />
@@ -240,7 +246,7 @@ export function AIPanel() {
                   className="h-9 w-full rounded-md border px-2 text-xs outline-none"
                   style={{ backgroundColor: themeConfig.input, borderColor: themeConfig.border, color: themeConfig.text }}
                 >
-                  <option value="">选择预设渠道...</option>
+                  <option value="">{t('aiPanel.selectPresetChannel')}</option>
                   {presetTemplates.map((template) => (
                     <option key={template.id} value={template.id}>
                       {template.name}
@@ -253,7 +259,7 @@ export function AIPanel() {
             {isCustomChannel && (
               <div className="space-y-1.5">
                 <Label className="text-xs" style={{ color: themeConfig.textMuted }}>
-                  渠道名称 <span style={{ color: themeConfig.error }}>*</span>
+                  {t('aiPanel.channelName')} <span style={{ color: themeConfig.error }}>*</span>
                 </Label>
                 <Input
                   value={currentConfig.name}
@@ -265,7 +271,7 @@ export function AIPanel() {
             )}
 
             <div className="space-y-1.5">
-              <Label className="text-xs" style={{ color: themeConfig.textMuted }}>接口类型</Label>
+              <Label className="text-xs" style={{ color: themeConfig.textMuted }}>{t('aiPanel.protocol')}</Label>
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
@@ -342,7 +348,7 @@ export function AIPanel() {
                   style={{ color: themeConfig.primary }}
                 >
                   <RefreshCw className={`h-3.5 w-3.5 ${isRefreshingModels ? 'animate-spin' : ''}`} />
-                  刷新
+                  {t('aiPanel.refresh')}
                 </button>
               </div>
               <Input
@@ -361,7 +367,7 @@ export function AIPanel() {
 
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label className="text-xs" style={{ color: themeConfig.textMuted }}>Temperature</Label>
+                <Label className="text-xs" style={{ color: themeConfig.textMuted }}>{t('aiPanel.temperature')}</Label>
                 <Input
                   type="number"
                   min="0"
@@ -374,7 +380,7 @@ export function AIPanel() {
                 />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs" style={{ color: themeConfig.textMuted }}>Max Tokens</Label>
+                <Label className="text-xs" style={{ color: themeConfig.textMuted }}>{t('aiPanel.maxTokens')}</Label>
                 <Input
                   type="number"
                   min="256"
@@ -400,7 +406,7 @@ export function AIPanel() {
               ) : (
                 <TestTube className="mr-2 h-4 w-4" />
               )}
-              测试连接
+              {t('settings.testConnection')}
             </Button>
 
             {isCustomChannel && (
@@ -411,13 +417,13 @@ export function AIPanel() {
                 onClick={cancelCustomChannel}
                 style={{ backgroundColor: themeConfig.card, borderColor: themeConfig.border, color: themeConfig.text }}
               >
-                取消
+                {t('common.cancel')}
               </Button>
             )}
 
             <div className="flex items-center gap-2 text-xs" style={{ color: themeConfig.textMuted }}>
               <Key className="h-3.5 w-3.5" />
-              密钥仅加密保存在本地浏览器。
+              {t('aiPanel.localKeyStorage')}
             </div>
           </div>
         </div>

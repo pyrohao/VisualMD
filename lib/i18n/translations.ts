@@ -245,6 +245,31 @@ export interface Translations {
     gitConfigured: string
     gitNotConfigured: string
   }
+  aiPanel: {
+    title: string
+    customOpenAI: string
+    customChannelSaved: string
+    configIncomplete: string
+    connectionSavedCustom: string
+    fillApiAddressAndKey: string
+    modelsRefreshed: string
+    refreshModelsFailed: string
+    enterModelNameManually: string
+    connectedChannels: string
+    noConnectedChannels: string
+    noModelSelected: string
+    connectionParameters: string
+    removeChannel: string
+    selectChannel: string
+    customChannel: string
+    selectPresetChannel: string
+    channelName: string
+    protocol: string
+    refresh: string
+    temperature: string
+    maxTokens: string
+    localKeyStorage: string
+  }
   git: {
     provider: string
     token: string
@@ -593,6 +618,31 @@ export const translations: Record<Language, Translations> = {
       gitConfigured: 'Git 配置已填写，可在这里直接连接仓库',
       gitNotConfigured: '请先填写 Git 平台、访问令牌和仓库信息',
     },
+    aiPanel: {
+      title: 'AI 配置',
+      customOpenAI: '自定义 OpenAI',
+      customChannelSaved: '自定义渠道已保存',
+      configIncomplete: 'AI 配置不完整',
+      connectionSavedCustom: '连接成功，已自动保存自定义渠道。',
+      fillApiAddressAndKey: '请先填写 API 地址和密钥',
+      modelsRefreshed: '已刷新 {count} 个模型',
+      refreshModelsFailed: '模型列表刷新失败',
+      enterModelNameManually: '请手动填写模型名称',
+      connectedChannels: '已连接 {count} 个渠道',
+      noConnectedChannels: '暂无已连接渠道',
+      noModelSelected: '未选择模型',
+      connectionParameters: '连接参数',
+      removeChannel: '删除渠道',
+      selectChannel: '选择连接渠道',
+      customChannel: '自定义渠道',
+      selectPresetChannel: '选择预设渠道...',
+      channelName: '渠道名称',
+      protocol: '接口类型',
+      refresh: '刷新',
+      temperature: 'Temperature',
+      maxTokens: 'Max Tokens',
+      localKeyStorage: '密钥仅加密保存在本地浏览器。',
+    },
     git: {
       provider: '平台',
       token: '访问令牌',
@@ -936,6 +986,31 @@ export const translations: Record<Language, Translations> = {
       openGitSettings: 'Open Git Settings',
       gitConfigured: 'Git configuration is ready. Connect to a repository from here.',
       gitNotConfigured: 'Fill in provider, token, and repository first.',
+    },
+    aiPanel: {
+      title: 'AI Configuration',
+      customOpenAI: 'Custom OpenAI',
+      customChannelSaved: 'Custom channel saved',
+      configIncomplete: 'AI configuration is incomplete',
+      connectionSavedCustom: 'Connection succeeded and the custom channel was saved automatically.',
+      fillApiAddressAndKey: 'Enter the API URL and key first',
+      modelsRefreshed: 'Refreshed {count} models',
+      refreshModelsFailed: 'Failed to refresh model list',
+      enterModelNameManually: 'Enter the model name manually',
+      connectedChannels: '{count} connected channel(s)',
+      noConnectedChannels: 'No connected channels',
+      noModelSelected: 'No model selected',
+      connectionParameters: 'Connection Parameters',
+      removeChannel: 'Remove channel',
+      selectChannel: 'Select Channel',
+      customChannel: 'Custom Channel',
+      selectPresetChannel: 'Select a preset channel...',
+      channelName: 'Channel Name',
+      protocol: 'Protocol',
+      refresh: 'Refresh',
+      temperature: 'Temperature',
+      maxTokens: 'Max Tokens',
+      localKeyStorage: 'Keys are encrypted and stored only in this browser.',
     },
     git: {
       provider: 'Provider',

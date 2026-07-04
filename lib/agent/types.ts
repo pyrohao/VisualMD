@@ -94,6 +94,7 @@ export type AgentGeneratedDocumentEvent =
 export interface AgentToolContext {
   markdown: string
   lastFailedContext?: string | null
+  selectedReference?: AgentReferenceContext | null
   providerConfig?: import('@/stores/settingsStore').ProviderConfig
   signal?: AbortSignal
   toolCallId?: string
@@ -102,6 +103,8 @@ export interface AgentToolContext {
 
 export interface AgentReferenceContext {
   id?: string
+  startOffset?: number
+  endOffset?: number
   anchorPath?: string[]
   blockType?: string
   excerpt?: string

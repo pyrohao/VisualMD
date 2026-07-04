@@ -115,22 +115,30 @@ function trimRange(content: string, start: number, end: number) {
 }
 
 function expandRangeToCompleteMarkdownImages(content: string, start: number, end: number) {
-  const imagePattern = /!\[[^\]\n]*\]\((?:\\.|[^)\n])+\)/g
   let nextStart = start
   let nextEnd = end
-  let match: RegExpExecArray | null
+  const imageStart = content.lastIndexOf('![', start)
 
-  while ((match = imagePattern.exec(content)) !== null) {
-    const imageStart = match.index
-    const imageEnd = imageStart + match[0].length
-    if (nextEnd <= imageStart || nextStart >= imageEnd) {
-      continue
-    }
-
-    nextStart = Math.min(nextStart, imageStart)
-    nextEnd = Math.max(nextEnd, imageEnd)
+  if (imageStart < 0) {
+    return { start: nextStart, end: nextEnd }
   }
 
+  const imageMiddle = content.indexOf('](', imageStart)
+  if (imageMiddle < 0 || imageMiddle > end + 2) {
+    return { start: nextStart, end: nextEnd }
+  }
+
+  const imageEnd = content.indexOf(')', imageMiddle + 2)
+  if (imageEnd < 0 || imageEnd < start) {
+    return { start: nextStart, end: nextEnd }
+  }
+
+  if (end <= imageStart || start >= imageEnd + 1) {
+    return { start: nextStart, end: nextEnd }
+  }
+
+  nextStart = imageStart
+  nextEnd = imageEnd + 1
   return { start: nextStart, end: nextEnd }
 }
 
@@ -290,43 +298,7 @@ export function buildMarkdownBlockIndex(content: string, _version = 1): AiDocBlo
   return blocks
 }
 
-function findBlocksForSelection(blocks: AiDocBlock[], selectionStart: number, selectionEnd: number) {
-  const overlapping = blocks.filter(
-    (block) => selectionEnd > block.startOffset && selectionStart < block.endOffset
-  )
-
-  if (!overlapping.length) {
-    return null
-  }
-
-  return overlapping
-}
-
-function findBlockForOffset(blocks: AiDocBlock[], offset: number) {
-  return blocks.find((block) => offset >= block.startOffset && offset <= block.endOffset) || null
-}
-
-function createFallbackSelectionBlock(selectionStart: number, selectionEnd: number): AiDocBlock {
-  return {
-    blockId: `selection::${selectionStart}:${selectionEnd}`,
-    blockType: 'paragraph',
-    titlePath: [],
-    headingLevel: 0,
-    headingText: '',
-    startOffset: selectionStart,
-    endOffset: selectionEnd,
-    text: '',
-    excerpt: '',
-    blockIndex: -1,
-  }
-}
-
-function createExactSelectionSnapshot(
-  blocks: AiDocBlock[],
-  markdown: string,
-  selectionStart: number,
-  selectionEnd: number
-) {
+function createExactSelectionSnapshot(markdown: string, selectionStart: number, selectionEnd: number) {
   const trimmed = trimRange(markdown, Math.min(selectionStart, selectionEnd), Math.max(selectionStart, selectionEnd))
   const { start, end } = expandRangeToCompleteMarkdownImages(markdown, trimmed.start, trimmed.end)
   if (start === end) {
@@ -334,18 +306,12 @@ function createExactSelectionSnapshot(
   }
 
   const selectedText = markdown.slice(start, end)
-  const firstBlock =
-    findBlockForOffset(blocks, start) ||
-    blocks.find((block) => end > block.startOffset && start < block.endOffset) ||
-    createFallbackSelectionBlock(start, end)
-
-  const overlapping = findBlocksForSelection(blocks, start, end) || [firstBlock]
 
   return {
-    anchorPath: firstBlock.titlePath,
-    blockType: firstBlock.blockType,
-    startBlockIndex: overlapping[0]?.blockIndex ?? firstBlock.blockIndex,
-    blockCount: overlapping.length,
+    anchorPath: [],
+    blockType: 'paragraph',
+    startBlockIndex: -1,
+    blockCount: 1,
     startOffset: start,
     endOffset: end,
     expectedText: selectedText,
@@ -360,11 +326,10 @@ export function createReferenceSnapshot(options: {
   selectionEnd: number
   version: number
 }) {
-  const { markdown, selectionStart, selectionEnd, version } = options
-  const blocks = buildMarkdownBlockIndex(markdown, version)
+  const { markdown, selectionStart, selectionEnd } = options
 
   if (typeof selectionStart === 'number' && typeof selectionEnd === 'number' && selectionStart !== selectionEnd) {
-    return createExactSelectionSnapshot(blocks, markdown, selectionStart, selectionEnd)
+    return createExactSelectionSnapshot(markdown, selectionStart, selectionEnd)
   }
 
   return null
@@ -375,13 +340,18 @@ function blockPathFor(block: AiDocBlock) {
 }
 
 export function resolveReferenceSnapshot(reference: AiDocReferenceSnapshot, markdown: string, version: number) {
-  const blocks = buildMarkdownBlockIndex(markdown, version)
-  const startOffset = markdown.indexOf(reference.expectedText)
-  if (startOffset < 0) {
+  const startOffset = reference.startOffset
+  const endOffset = reference.endOffset
+  if (startOffset < 0 || endOffset < startOffset) {
     return null
   }
 
-  const endOffset = startOffset + reference.expectedText.length
+  const currentText = markdown.slice(startOffset, endOffset)
+  if (currentText !== reference.expectedText) {
+    return null
+  }
+
+  const blocks = buildMarkdownBlockIndex(markdown, version)
   return {
     startOffset,
     endOffset,
@@ -412,11 +382,12 @@ export function applyDocumentChatAction(markdown: string, reference: AiDocRefere
     return markdown
   }
 
-  if (action.oldString !== reference.expectedText) {
-    return markdown
+  const selectedText = markdown.slice(reference.startOffset, reference.endOffset)
+  if (selectedText === reference.expectedText) {
+    return `${markdown.slice(0, reference.startOffset)}${action.newString}${markdown.slice(reference.endOffset)}`
   }
 
-  if (countExactMatches(markdown, action.oldString) !== 1) {
+  if (action.oldString !== reference.expectedText || countExactMatches(markdown, action.oldString) !== 1) {
     return markdown
   }
 

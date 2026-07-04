@@ -1053,7 +1053,6 @@ export function MarkdownPreview() {
     if (!textarea) return
 
     const submitSelection = () => {
-      if (useAiChatStore.getState().selectionCandidate) return
       const sourceMarkdown = textarea.value
       const selectionStart = textarea.selectionStart ?? 0
       const selectionEnd = textarea.selectionEnd ?? 0
