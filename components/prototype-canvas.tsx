@@ -112,7 +112,7 @@ function collectDefaults(
 function renderInlineSegments(
   segments: PrototypeInlineSegment[],
   resolveImageSrc?: (src: string) => string | null,
-  themeConfig?: { border: string; card: string }
+  themeConfig?: { border: string; card: string; link: string }
 ) {
   return segments.map((segment, index) => {
     const imageSrc = segment.imageSrc ? (resolveImageSrc?.(segment.imageSrc) || segment.imageSrc) : undefined
@@ -134,6 +134,17 @@ function renderInlineSegments(
       >
         {segment.text}
       </code>
+    ) : segment.linkHref ? (
+      <a
+        key={index}
+        href={segment.linkHref}
+        target="_blank"
+        rel="noreferrer"
+        className="underline underline-offset-4 transition-opacity hover:opacity-80"
+        style={{ color: themeConfig?.link }}
+      >
+        {segment.text}
+      </a>
     ) : segment.bold ? (
       <strong key={index}>{segment.text}</strong>
     ) : segment.italic ? (

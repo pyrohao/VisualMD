@@ -11,6 +11,7 @@ export interface PrototypeInlineSegment {
   italic?: boolean
   code?: boolean
   imageSrc?: string
+  linkHref?: string
 }
 
 export interface PrototypeTableRow {
@@ -79,7 +80,7 @@ function parseAttributes(input: string): Record<string, string> {
 
 export function parseInlineSegments(text: string): PrototypeInlineSegment[] {
   const segments: PrototypeInlineSegment[] = []
-  const tokenPattern = /(`[^`]+`|!\[[^\]]*\]\([^)]+\)|\*\*[^*]+\*\*|\*[^*]+\*)/g
+  const tokenPattern = /(`[^`]+`|!\[[^\]]*\]\([^)]+\)|\[[^\]]+\]\([^)]+\)|\*\*[^*]+\*\*|\*[^*]+\*)/g
   let lastIndex = 0
 
   for (const match of text.matchAll(tokenPattern)) {
@@ -91,9 +92,12 @@ export function parseInlineSegments(text: string): PrototypeInlineSegment[] {
     }
 
     const imageMatch = token.match(/^!\[([^\]]*)\]\(([^)]+)\)$/)
+    const linkMatch = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/)
 
     if (imageMatch) {
       segments.push({ text: imageMatch[1], imageSrc: imageMatch[2].trim() })
+    } else if (linkMatch) {
+      segments.push({ text: linkMatch[1], linkHref: linkMatch[2].trim() })
     } else if (token.startsWith('**') && token.endsWith('**')) {
       segments.push({ text: token.slice(2, -2), bold: true })
     } else if (token.startsWith('`') && token.endsWith('`')) {

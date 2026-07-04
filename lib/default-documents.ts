@@ -11,35 +11,36 @@ description: Feature overview and onboarding guide for first-time users
 
 # Welcome to VisualMD
 
-VisualMD is a free, online, open-source visual editor for Markdown, inspired by everyday Markdown workflows. This update focuses on the feedback from the previous version and improves both capability and usability: image support, multiple layouts, prototype mode, live edit/preview, Git collaboration with conflict handling, and AI-powered document generation and rewriting. It now feels much closer to a complete Markdown workspace. Enjoy it!
+[VisualMD](https://github.com/pyrohao/VisualMD) is a free, online, open-source visual editor for Markdown, inspired by everyday Markdown workflows. This update is built around feedback from the previous version and focuses on making the experience stronger and more complete: image support, multiple layouts, prototype mode, live edit/preview, Git collaboration with conflict handling, and AI-powered document generation and rewriting. It now feels much closer to a complete Markdown workspace. Enjoy it!
+
+## Why VisualMD
+
+- For many Markdown workflows, the real pain is not writing itself. It is the constant switching between the browser, a local editor, a notes app, and a Git client. VisualMD pulls writing, structure editing, preview, and versioning much closer together inside one browser workflow.
+- Many people assume a good Markdown experience must depend on local desktop software, a complicated setup, or even paid tools. VisualMD is built on the idea that many of those workflows can already be handled comfortably here.
+- Researching, copying content from webpages, pasting snippets, and continuing to edit usually feels fragmented. One of VisualMD's advantages is that you can keep most of that loop inside the browser.
+- If you still want to return to your own toolchain later, you are not locked in. Documents can still be exported and continued in tools like Obsidian.
 
 ## Quick Start
 
-If you only want to understand the most important part of VisualMD first, remember these three flows:
-
 - **Markdown -> Tree**: turn one Markdown document into an editable tree structure, so you can shape the structure before polishing the content.
-- **AI -> Markdown**: tell AI what you want, let it generate a Markdown draft, then continue editing it yourself.
-- **Markdown -> Git Commit**: move the final result directly into the Git workflow and turn writing into meaningful commits.
-
-This is also the recommended path in the current version: write or generate Markdown first, organize it next, then push it into Git.
+- **AI -> Markdown**: tell AI what you want to write or revise, let it generate Markdown, then continue editing it yourself.
+- **Markdown -> Git Commit**: push the result of writing, rewriting, and organizing directly into Git as part of your versioned workflow.
 
 ## What's New
 
 The strongest part of this version is not a single isolated feature. It is the fact that **multi-layout editing, live preview, AI assistance, and Git collaboration** now work inside one workflow.
 
-### 1. Multi-layout Editing
+### 1. Multi-layout Support
 
-- **Mind Map mode**: best for building structure first, dragging levels around, and splitting content into sections.
-- **Split mode**: write on the left, inspect the result on the right.
-- **Prototype mode**: render Markdown into a lightweight page prototype when you need a quick UI sketch or demo.
+- VisualMD supports four layouts: single-side, dual-side, and top-down arrangements, so you can switch flexibly based on the scenario.
 
-These views all point to the same Markdown content, so you can switch freely without maintaining multiple copies.
+These views all point to the same Markdown content, so you can switch at any time without maintaining multiple copies.
 
 ### 2. Live Editing and Preview
 
-- Mind map, source editing, and preview stay centered around the same content.
+- Mind map, prototype, and preview stay synchronized around the same content.
 - It is built for changing structure while checking the final reading result at the same time.
-- If your main task is writing, Split mode is usually the fastest entry point.
+- If your main task is writing documents, Split mode is usually the smoothest entry point.
 
 ### 3. AI Assistance
 
@@ -57,77 +58,16 @@ These views all point to the same Markdown content, so you can switch freely wit
 
 ### 5. Image Support
 
-- Local documents and Git documents both support direct image paste.
+- Local and Git documents support direct image paste or embedded image links.
 - Local workspace images are stored in the system asset directory and referenced through Markdown image syntax.
 - Local images can also be exported to the browser local machine.
 - Important: **if you add a local Markdown file to Git and it references local asset paths, those images will not be added to Git automatically.**
 
-## Recommended First Workflow
-
-1. Create or open a Markdown document.
-2. Start in **Mind Map mode** to shape the structure, then switch to **Split mode** to check the reading result.
-3. Use AI when you need drafting, rewriting, or explanation.
-4. Configure GitHub or Gitee when you are ready for collaboration or version control.
-5. Only switch to Prototype mode when you actually need a page sketch and want to add \`@proto\` commands.
-
-## Prototype Syntax
-
-Prototype mode is a supporting capability, not the main highlight of this release. Use it when you already have Markdown content and want to quickly add some UI and interaction flavor.
-
-You only need to remember one rule: **write normal Markdown, and insert \`@proto\` commands where you need UI controls.**
-
-### Supported Definitions
-
-- \`@proto input label="" placeholder="" type=""\`: single-line input
-- \`@proto textarea label="" placeholder=""\`: multi-line input
-- \`@proto button text="" action="" intent="primary|secondary" goto="" target="" dialog=""\`: button
-- \`@proto toggle label="" checked="true|false"\`: switch
-- \`@proto tabs items="A|B|C"\`: tabs
-- \`@proto card title="" description=""\` or \`desc=""\`: info card
-- \`@proto stat label="" value=""\`: stat block
-- \`@proto note text=""\` or \`content=""\`: note block
-
-Besides these commands, Prototype mode also supports normal Markdown content including paragraphs, blockquotes, ordered and unordered lists, checklists, tables, fenced code blocks, and inline bold, italic, code, and images.
-
-### Prototype Example
-
-\`\`\`md
-# Account Center
-
-This page prototype demonstrates a login and registration flow.
-
-@proto tabs items="Login|Register"
-@proto card title="Welcome back" description="Sign in with your account and continue to your workspace"
-@proto input label="Email" placeholder="name@example.com" type="email"
-@proto input label="Password" placeholder="Enter your password" type="password"
-@proto toggle label="Remember me" checked="true"
-@proto button text="Sign In" action="login" intent="primary"
-@proto button text="Forgot Password" intent="secondary" goto="Password Recovery"
-
-> New users can switch to the "Register" tab to create an account.
-
-@proto card title="Create a new account" description="After registration, you can sync documents, prototypes, and your Git workspace"
-@proto input label="Username" placeholder="Enter a username"
-@proto input label="Registration Email" placeholder="register@example.com" type="email"
-@proto input label="Set Password" placeholder="At least 8 characters" type="password"
-@proto input label="Confirm Password" placeholder="Enter the password again" type="password"
-@proto toggle label="Agree to the Terms and Privacy Policy" checked="false"
-@proto button text="Register and Start" action="register" intent="primary"
-
-- [ ] Complete email verification
-- [ ] Add third-party login options
-
-| Section | Description |
-| --- | --- |
-| Login Form | Supports account and password sign-in |
-| Registration Form | Supports new account creation |
-\`\`\`
-
 ## Git Usage
 
-Git is one of the core capabilities of the current system. If you want your documents to be part of real collaboration and version control, configure it early.
+Git is one of the key capabilities in the current system. If you want your documents to truly enter collaboration and version control, it is worth configuring early.
 
-### What You Need
+### What You Need to Prepare
 
 - Platform type: **GitHub** or **Gitee**
 - PAT / Token
@@ -137,12 +77,12 @@ Git is one of the core capabilities of the current system. If you want your docu
 
 ### PAT Permission Advice
 
-Make sure the token has at least read and write access to repository contents, otherwise both connection and later commits may fail.
+Make sure the token has at least read and write access to repository contents. Otherwise both connection and commit operations may fail.
 
-- **GitHub**: in most cases you need read/write access for \`Contents\`.
+- **GitHub**: in most cases you need read/write permissions related to \`Contents\`.
 - **Gitee**: you also need repository read/write style permissions that cover repository access and push operations.
 
-### If Connection Fails, Check These First
+### Check These First If Connection Fails
 
 In the current system, Git providers often return **404** when the repository is not found, the branch is wrong, or permissions are insufficient. If connection does not succeed, check these first:
 
@@ -153,11 +93,11 @@ In the current system, Git providers often return **404** when the repository is
 
 ## AI Usage
 
-AI is also one of the key capabilities in this release. It works best as a document accelerator, not as a standalone chat box.
+AI is also one of the key capabilities in this release. It works best as a document accelerator rather than a standalone chat tool.
 
 ### Typical Uses
 
-- Describe what you want and let AI generate a new Markdown document.
+- Describe what you need and let AI generate a new Markdown document.
 - Continue, expand, rewrite, or polish the current document.
 - Ask AI to explain, summarize, or restructure a selected passage.
 
@@ -189,6 +129,59 @@ If Git is already configured, AI-generated documents can continue into the Git w
 
 If a local Markdown document references local asset images, adding that Markdown file to Git does not automatically add those images to the repository. To commit them, make sure the images have entered the repository-side asset path through the Git workflow.
 
+## Prototype Syntax
+
+Prototype mode is a supporting capability, not the main highlight of this release. It is best used when you already have Markdown content and want to quickly add a bit of page structure and interaction.
+
+You only need to remember one rule: **write normal Markdown, then insert \`@proto\` commands where you need UI controls.**
+
+### Supported Definitions
+
+- \`@proto input label="" placeholder="" type=""\`: single-line input
+- \`@proto textarea label="" placeholder=""\`: multi-line input
+- \`@proto button text="" action="" intent="primary|secondary" goto="" target="" dialog=""\`: button
+- \`@proto toggle label="" checked="true|false"\`: switch
+- \`@proto tabs items="A|B|C"\`: tabs
+- \`@proto card title="" description=""\` or \`desc=""\`: info card
+- \`@proto stat label="" value=""\`: stat block
+- \`@proto note text=""\` or \`content=""\`: note block
+
+Besides these commands, Prototype mode also supports normal Markdown content, including paragraphs, blockquotes, ordered and unordered lists, checklists, tables, fenced code blocks, and inline bold, italic, code, links, and images.
+
+### Prototype Example
+
+\`\`\`md
+### Account Center
+
+This page prototype demonstrates a login and registration flow.
+
+@proto tabs items="Login|Register"
+@proto card title="Welcome back" description="Sign in with your account and continue to your workspace"
+@proto input label="Email" placeholder="name@example.com" type="email"
+@proto input label="Password" placeholder="Enter your password" type="password"
+@proto toggle label="Remember me" checked="true"
+@proto button text="Sign In" action="login" intent="primary"
+@proto button text="Forgot Password" intent="secondary" goto="Password Recovery"
+
+> New users can switch to the "Register" tab to create an account.
+
+@proto card title="Create a new account" description="After registration, you can sync documents, prototypes, and your Git workspace"
+@proto input label="Username" placeholder="Enter your username"
+@proto input label="Registration Email" placeholder="register@example.com" type="email"
+@proto input label="Set Password" placeholder="At least 8 characters" type="password"
+@proto input label="Confirm Password" placeholder="Enter the password again" type="password"
+@proto toggle label="Agree to the Terms and Privacy Policy" checked="false"
+@proto button text="Register and Start" action="register" intent="primary"
+
+- [ ] Complete email verification
+- [ ] Add third-party login options
+
+| Section | Description |
+| --- | --- |
+| Login Form | Supports account and password sign-in |
+| Registration Form | Supports new account creation |
+\`\`\`
+
 ## Practical Notes
 
 - The welcome documents are created only once on the first workspace load. If you delete them later, they will not be recreated automatically.
@@ -206,6 +199,13 @@ description: 首次使用时的功能总览与操作提示
 # 欢迎使用 VisualMD
 
 [VisualMD](https://github.com/pyrohao/VisualMD) 是一个免费、在线、开源的 Markdown 可视化编辑器，灵感源于日常中对 Markdown 的使用。本次更新针对上个版本大家的反馈和建议，着重增强了功能和使用体验！新增图片支持、多布局切换、原型模式、实时编辑预览、Git 协作与冲突解决、AI 文档生成与修改。现在，它更像一个完整 md 的工作台了！Enjoy it!
+
+## 为什么是 VisualMD
+
+- 很多 Markdown 工作流的麻烦，不在写作本身，而在于要在浏览器、本地编辑器、笔记软件、Git 工具之间来回切换。VisualMD 把写作、整理结构、预览和版本管理尽量收进同一个浏览器工作流里。
+- 很多人默认“好用的 Markdown 体验”必须依赖本地软件、复杂环境，甚至付费工具。VisualMD 想做的是：很多原本你以为只能在本地桌面软件里舒服完成的事，其实在这里也能直接完成。
+- 平时查资料、复制网页内容、粘贴片段、继续编辑，最大的问题往往不是功能不够，而是切换太碎。VisualMD 的优势就在于，你可以基本一直停留在浏览器里完成这条链路。
+- 如果你后面仍然想接回自己的工具链，也不会被锁住。文档依然可以导出，再配合 Obsidian 之类的软件继续使用。
 
 ## 快速开始
 
@@ -338,7 +338,7 @@ AI 也是当前版本的重点能力，建议把它当成“文档加速器”�
 ### 原型示例
 
 \`\`\`md
-# 账号中心
+### 账号中心
 
 这是一个用于演示登录与注册流程的页面原型。
 

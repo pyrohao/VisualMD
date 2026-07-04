@@ -27,7 +27,9 @@ import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
 import remarkGfm from 'remark-gfm'
+import remarkMath from 'remark-math'
 import remarkRehype from 'remark-rehype'
+import rehypeKatex from 'rehype-katex'
 import rehypeStringify from 'rehype-stringify'
 import { BookOpen, Columns2, Pencil, Plus, Rows2, SplitSquareHorizontal, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -891,6 +893,7 @@ export function MarkdownPreview() {
       const processor = unified()
         .use(remarkParse)
         .use(remarkGfm)
+        .use(remarkMath)
 
       if (referenceHighlightRanges.length > 0) {
         processor.use(createMarkdownReferenceHighlightPlugin(referenceHighlightRanges))
@@ -898,6 +901,7 @@ export function MarkdownPreview() {
       
       const result = await processor
         .use(remarkRehype, { allowDangerousHtml: true })
+        .use(rehypeKatex)
         .use(rehypeStringify, { allowDangerousHtml: true })
         .process(content)
       
