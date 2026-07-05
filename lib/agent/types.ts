@@ -20,6 +20,14 @@ export interface AgentConversation {
   messageCount: number
 }
 
+export interface AgentExecutionTargetRecord {
+  conversationId: string
+  documentId: string
+  tabId: string | null
+  sourceType: 'local' | 'git' | 'unknown'
+  updatedAt: number
+}
+
 export interface AgentDraft {
   conversationId: string
   inputText: string
@@ -35,6 +43,7 @@ export interface AgentReferenceRecord {
   conversationId: string
   documentId: string | null
   tabId: string | null
+  sourceType?: 'local' | 'git' | 'unknown'
   stale: boolean
   createdAt: number
   anchorPath: string[]

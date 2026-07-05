@@ -7,9 +7,12 @@ const storage = vi.hoisted(() => ({
   messages: new Map<string, AgentMessage[]>(),
   drafts: new Map<string, AgentDraft>(),
   references: new Map<string, any[]>(),
+  executionTargets: new Map<string, any>(),
   ui: new Map<string, string>(),
   documentSessions: new Map<string, any>(),
   documentMarkdown: '# Doc\n\nSelected text.',
+  activeTab: { id: 'tab-1', fileId: 'file-1', sourceType: 'local', fileName: 'doc.md', content: '# Doc\n\nSelected text.', isModified: false } as any,
+  tabs: [] as any[],
   applyExternalMarkdown: vi.fn((markdown: string) => {
     storage.documentMarkdown = markdown
     return true
@@ -28,7 +31,7 @@ const storage = vi.hoisted(() => ({
   stageLocalFile: vi.fn(),
   updateDraftContent: vi.fn(),
   currentFileId: null as string | null,
-  files: [] as Array<{ id: string; name: string }>,
+  files: [] as Array<{ id: string; name: string; content?: string }>,
   gitConnected: false,
   currentGitDocumentId: null as string | null,
   gitDrafts: {} as Record<string, any>,
@@ -58,7 +61,9 @@ vi.mock('@/lib/agent', async (importOriginal) => {
     listAgentConversations: vi.fn(async () => storage.conversations),
     listAgentMessages: vi.fn(async (conversationId: string) => storage.messages.get(conversationId) || []),
     listAgentReferences: vi.fn(async (conversationId: string) => storage.references.get(conversationId) || []),
+    listAgentExecutionTargets: vi.fn(async () => Array.from(storage.executionTargets.values())),
     getAgentDraft: vi.fn(async (conversationId: string) => storage.drafts.get(conversationId) || null),
+    getAgentExecutionTarget: vi.fn(async (conversationId: string) => storage.executionTargets.get(conversationId) || null),
     getAgentUiState: vi.fn(async (key: string) => storage.ui.get(key) || null),
     saveAgentConversation: vi.fn(async (conversation: AgentConversation) => {
       storage.conversations = [conversation, ...storage.conversations.filter((item) => item.id !== conversation.id)]
@@ -66,6 +71,10 @@ vi.mock('@/lib/agent', async (importOriginal) => {
     }),
     saveAgentDraft: vi.fn(async (draft: AgentDraft) => {
       storage.drafts.set(draft.conversationId, draft)
+      return true
+    }),
+    saveAgentExecutionTarget: vi.fn(async (target: any) => {
+      storage.executionTargets.set(target.conversationId, target)
       return true
     }),
     saveAgentMessage: vi.fn(async (message: AgentMessage) => {
@@ -97,6 +106,10 @@ vi.mock('@/lib/agent', async (importOriginal) => {
       storage.messages.delete(conversationId)
       storage.drafts.delete(conversationId)
       storage.references.delete(conversationId)
+      storage.executionTargets.delete(conversationId)
+    }),
+    deleteAgentExecutionTarget: vi.fn(async (conversationId: string) => {
+      storage.executionTargets.delete(conversationId)
     }),
     saveAgentUiState: vi.fn(async (key: string, value: string) => {
       storage.ui.set(key, value)
@@ -191,7 +204,9 @@ vi.mock('@/stores/documentStore', () => ({
 vi.mock('@/stores/tabsStore', () => ({
   useTabsStore: {
     getState: () => ({
-      getActiveTab: () => ({ id: 'tab-1', fileId: 'file-1', sourceType: 'local' }),
+      tabs: storage.tabs,
+      getActiveTab: () => storage.activeTab,
+      findTabByFileId: (fileId: string) => storage.tabs.find((tab) => tab.fileId === fileId) || null,
       openFileInTab: storage.openFileInTab,
       openGitFileInTab: storage.openGitFileInTab,
       updateTabContent: storage.updateTabContent,
@@ -205,6 +220,7 @@ vi.mock('@/stores/fileSystemStore', () => ({
   useFileSystemStore: {
     getState: () => ({
       currentFileId: storage.currentFileId,
+      files: storage.files,
       saveFile: storage.saveFile,
       saveFileContent: storage.saveFileContent,
       renameFile: vi.fn(),
@@ -260,13 +276,16 @@ describe('ai chat store hook adapter', () => {
     storage.messages.clear()
     storage.drafts.clear()
     storage.references.clear()
+    storage.executionTargets.clear()
     storage.ui.clear()
     storage.documentSessions.clear()
     storage.documentMarkdown = '# Doc\n\nSelected text.'
+    storage.activeTab = { id: 'tab-1', fileId: 'file-1', sourceType: 'local', fileName: 'doc.md', content: '# Doc\n\nSelected text.', isModified: false }
+    storage.tabs = [storage.activeTab]
     storage.applyExternalMarkdown.mockClear()
     storage.markAsSaved.mockClear()
     storage.currentFileId = null
-    storage.files = []
+    storage.files = [{ id: 'file-1', name: 'doc.md', content: '# Doc\n\nSelected text.' }]
     storage.importFile.mockClear()
     storage.loadDocument.mockClear()
     storage.saveFile.mockClear()
@@ -284,10 +303,21 @@ describe('ai chat store hook adapter', () => {
     storage.gitDrafts = {}
     storage.importFile.mockImplementation((name: string) => {
       storage.currentFileId = 'generated-file-1'
-      storage.files = [...storage.files, { id: 'generated-file-1', name }]
+      storage.files = [...storage.files, { id: 'generated-file-1', name, content: '' }]
     })
-    storage.openFileInTab.mockReturnValue('generated-tab-1')
+    storage.openFileInTab.mockImplementation((fileName: string, content: string, fileId?: string) => {
+      const nextTab = { id: 'generated-tab-1', fileId: fileId || 'generated-file-1', sourceType: 'local', fileName, content, isModified: false }
+      storage.tabs = [...storage.tabs.filter((tab) => tab.id !== nextTab.id), nextTab]
+      storage.activeTab = nextTab
+      return nextTab.id
+    })
     storage.openGitFileInTab.mockReturnValue('generated-git-tab-1')
+    storage.updateTabContent.mockImplementation((tabId: string, content: string) => {
+      storage.tabs = storage.tabs.map((tab) => tab.id === tabId ? { ...tab, content } : tab)
+      if (storage.activeTab?.id === tabId) {
+        storage.activeTab = { ...storage.activeTab, content }
+      }
+    })
     storage.stageLocalFile.mockImplementation((fileId: string, repoPath: string) => {
       storage.currentGitDocumentId = `git:github:owner/repo:main:${repoPath}`
       storage.gitDrafts[storage.currentGitDocumentId] = {
@@ -432,6 +462,29 @@ describe('ai chat store hook adapter', () => {
     expect(useAiChatStore.getState().isSending).toBe(false)
   })
 
+  it('keeps selected edits bound to the original document after switching tabs', async () => {
+    const { useAiChatStore } = await import('@/stores/aiChatStore')
+    await useAiChatStore.getState().createConversation()
+    await useAiChatStore.getState().addEditorSelectionReference(7, 20, '# Doc\n\nSelected text.', 1)
+    await useAiChatStore.getState().commitSelectionCandidate()
+
+    storage.tabs = [
+      ...storage.tabs,
+      { id: 'tab-2', fileId: 'file-2', sourceType: 'local', fileName: 'other.md', content: '# Other\n\nBody', isModified: false },
+    ]
+    storage.activeTab = storage.tabs[1]
+    storage.files = [
+      { id: 'file-1', name: 'doc.md', content: '# Doc\n\nSelected text.' },
+      { id: 'file-2', name: 'other.md', content: '# Other\n\nBody' },
+    ]
+
+    await useAiChatStore.getState().setDraftInput('润色')
+    await useAiChatStore.getState().sendMessage()
+
+    expect(storage.saveFileContent).toHaveBeenCalledWith('file-1', '# Doc\n\nChanged text.')
+    expect(storage.saveFileContent).not.toHaveBeenCalledWith('file-2', '# Doc\n\nChanged text.')
+  })
+
   it('undoes the last automatically applied tool change from the stack', async () => {
     const { useAiChatStore } = await import('@/stores/aiChatStore')
     await useAiChatStore.getState().createConversation()
@@ -501,6 +554,77 @@ describe('ai chat store hook adapter', () => {
     expect(messages.at(-1)?.error).toContain('AI 工具写回失败')
     expect(state.toolUndoStackByConversation['conversation-1']).toHaveLength(0)
     expect(storage.saveFileContent).not.toHaveBeenCalledWith('file-1', '# Doc\n\nChanged text.')
+  })
+
+  it('fails cleanly when the bound execution target document was deleted', async () => {
+    const { useAiChatStore } = await import('@/stores/aiChatStore')
+    await useAiChatStore.getState().createConversation()
+    await useAiChatStore.getState().addEditorSelectionReference(7, 20, '# Doc\n\nSelected text.', 1)
+    await useAiChatStore.getState().commitSelectionCandidate()
+
+    storage.activeTab = null
+    storage.tabs = []
+    storage.files = []
+
+    await useAiChatStore.getState().setDraftInput('继续修改')
+    await useAiChatStore.getState().sendMessage()
+
+    const messages = useAiChatStore.getState().messagesByConversation['conversation-1']
+    expect(messages.at(-1)?.role).toBe('assistant')
+    expect(messages.at(-1)?.state).toBe('failed')
+    expect(messages.at(-1)?.error).toContain('目标文档已不存在')
+  })
+
+  it('ignores stale execution targets for plain chat when there is no active document', async () => {
+    const agent = await import('@/lib/agent')
+    vi.mocked(agent.runAgentReActLoop).mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'user-1',
+          conversationId: 'conversation-1',
+          role: 'user',
+          message: 'Task type: ask\nUser request:\n你好\n\nSelected document text:\nNone',
+          createdAt: 1,
+          state: 'done',
+        },
+        {
+          id: 'assistant-1',
+          conversationId: 'conversation-1',
+          role: 'assistant',
+          message: '已收到',
+          createdAt: 2,
+          state: 'done',
+        },
+      ],
+      appliedMarkdown: '',
+      previousMarkdown: '',
+      appliedToolCallIds: [],
+      appliedTools: [],
+      generatedFiles: [],
+      stoppedBecause: 'assistant-text',
+    })
+
+    const { useAiChatStore } = await import('@/stores/aiChatStore')
+    await useAiChatStore.getState().createConversation()
+
+    storage.executionTargets.set('conversation-1', {
+      conversationId: 'conversation-1',
+      documentId: 'deleted-file',
+      tabId: 'deleted-tab',
+      sourceType: 'local',
+      updatedAt: Date.now(),
+    })
+    storage.activeTab = null
+    storage.tabs = []
+    storage.files = []
+
+    await useAiChatStore.getState().setDraftInput('你好')
+    await useAiChatStore.getState().sendMessage()
+
+    const messages = useAiChatStore.getState().messagesByConversation['conversation-1']
+    expect(messages.at(-1)?.role).toBe('assistant')
+    expect(messages.at(-1)?.message).toBe('已收到')
+    expect(messages.at(-1)?.state).toBe('done')
   })
 
   it('renames conversations', async () => {

@@ -6,19 +6,23 @@ import {
   createAgentConversationId,
   createDefaultAgentTools,
   deleteAgentConversation,
+  deleteAgentExecutionTarget,
   deleteAgentReference,
   deleteAgentDocumentSession,
+  getAgentExecutionTarget,
   getAgentDraft,
   getAgentDocumentSession,
   getAgentUiState,
   listAgentConversations,
   listAgentDocumentSessions,
+  listAgentExecutionTargets,
   listAgentMessages,
   listAgentReferences,
   runAgentReActLoop,
   saveAgentConversation,
   saveAgentDocumentSession,
   saveAgentDraft,
+  saveAgentExecutionTarget,
   saveAgentMessage,
   saveAgentMessages,
   saveAgentReference,
@@ -27,6 +31,7 @@ import {
   type AgentConversation,
   type AgentDocumentSessionRecord,
   type AgentDraft,
+  type AgentExecutionTargetRecord,
   type AgentMessage,
 } from '@/lib/agent'
 import {
@@ -51,8 +56,15 @@ export type AiReferenceRecord = AiDocReferenceSnapshot & {
   conversationId: string
   documentId: string | null
   tabId: string | null
+  sourceType?: 'local' | 'git' | 'unknown'
   stale: boolean
   createdAt: number
+}
+
+type DocumentIdentity = {
+  documentId: string | null
+  tabId: string | null
+  sourceType: 'local' | 'git' | 'unknown'
 }
 
 type GeneratedDocumentStatus = 'streaming' | 'ready' | 'failed'
@@ -78,9 +90,6 @@ type GeneratedDocumentPreviewSyncState = {
 }
 
 type UiConversationRecord = AgentConversation & {
-  documentId: string | null
-  tabId: string | null
-  sourceType: 'local' | 'git' | 'unknown'
   taskType: AiDocTaskType
   status: 'active'
   providerId: string
@@ -97,6 +106,10 @@ export interface ToolUndoRecord {
   id: string
   conversationId: string
   toolCallId: string
+  documentId: string | null
+  tabId: string | null
+  sourceType: 'local' | 'git' | 'unknown'
+  fileName?: string | null
   previousMarkdown: string
   appliedMarkdown: string
   createdAt: number
@@ -111,6 +124,7 @@ interface AiChatStore {
   toolUndoStackByConversation: Record<string, ToolUndoRecord[]>
   referencesByConversation: Record<string, AiReferenceRecord[]>
   draftsByConversation: Record<string, AgentDraft>
+  executionTargetsByConversation: Record<string, DocumentIdentity>
   generatedDocumentSessionsByConversation: Record<string, GeneratedDocumentSession>
   taskType: AiDocTaskType
   selectionCandidate: AiDocReferenceSnapshot | null
@@ -188,11 +202,185 @@ function isGitCreationAvailable() {
 
 function getCurrentDocumentIdentity() {
   const activeTab = useTabsStore.getState().getActiveTab()
-  return {
+  return normalizeDocumentIdentity({
     tabId: activeTab?.id || null,
     documentId: activeTab?.fileId || null,
     sourceType: activeTab?.sourceType || 'unknown',
-  } as const
+  })
+}
+
+function normalizeDocumentIdentity(identity?: Partial<DocumentIdentity> | null): DocumentIdentity {
+  return {
+    documentId: typeof identity?.documentId === 'string' ? identity.documentId : null,
+    tabId: typeof identity?.tabId === 'string' ? identity.tabId : null,
+    sourceType:
+      identity?.sourceType === 'local' || identity?.sourceType === 'git'
+        ? identity.sourceType
+        : 'unknown',
+  }
+}
+
+function hasDocumentIdentity(identity?: Partial<DocumentIdentity> | null): identity is DocumentIdentity {
+  return Boolean(identity?.documentId)
+}
+
+function getOpenTabForIdentity(identity?: Partial<DocumentIdentity> | null) {
+  const normalized = normalizeDocumentIdentity(identity)
+  const tabsState = useTabsStore.getState() as typeof useTabsStore extends { getState: () => infer T } ? T : never
+  const activeTab = typeof (tabsState as { getActiveTab?: () => unknown }).getActiveTab === 'function'
+    ? (tabsState as { getActiveTab: () => { id: string; fileId?: string | null; sourceType?: string } | null }).getActiveTab()
+    : null
+
+  if (
+    activeTab?.fileId === normalized.documentId &&
+    (normalized.sourceType === 'unknown' || (activeTab.sourceType || 'unknown') === normalized.sourceType)
+  ) {
+    return activeTab
+  }
+
+  const tabs = Array.isArray((tabsState as { tabs?: unknown[] }).tabs)
+    ? ((tabsState as { tabs?: Array<{ id: string; fileId?: string | null; sourceType?: string }> }).tabs || [])
+    : []
+
+  if (normalized.tabId) {
+    const matchedById = tabs.find((tab) => tab.id === normalized.tabId) || null
+    if (matchedById) {
+      return matchedById
+    }
+  }
+
+  if (!normalized.documentId) {
+    return null
+  }
+
+  if (typeof (tabsState as { findTabByFileId?: (fileId: string) => unknown }).findTabByFileId === 'function') {
+    const matched = (tabsState as { findTabByFileId: (fileId: string) => unknown }).findTabByFileId(normalized.documentId)
+    if (matched) {
+      return matched as typeof tabs[number]
+    }
+  }
+
+  return tabs.find((tab) =>
+    tab.fileId === normalized.documentId &&
+    (normalized.sourceType === 'unknown' || (tab.sourceType || 'unknown') === normalized.sourceType)
+  ) || null
+}
+
+function resolveMarkdownForIdentity(identity?: Partial<DocumentIdentity> | null) {
+  const normalized = normalizeDocumentIdentity(identity)
+  if (!normalized.documentId) {
+    return ''
+  }
+
+  const tabsState = useTabsStore.getState()
+  const activeTab = tabsState.getActiveTab()
+  if (
+    activeTab?.fileId === normalized.documentId &&
+    normalizeDocumentIdentity(activeTab).sourceType === normalized.sourceType
+  ) {
+    return useDocumentStore.getState().getCurrentMarkdown()
+  }
+
+  const targetTab = getOpenTabForIdentity(normalized) as {
+    content?: string
+    isModified?: boolean
+    sourceType?: string
+  } | null
+  if (targetTab && typeof targetTab.content === 'string' && (targetTab.isModified || normalized.sourceType === 'unknown')) {
+    return targetTab.content
+  }
+
+  const gitDraft = useGitStore.getState().drafts[normalized.documentId]
+  if (gitDraft) {
+    return gitDraft.draftContent
+  }
+
+  const localFiles = Array.isArray((useFileSystemStore.getState() as { files?: unknown }).files)
+    ? ((useFileSystemStore.getState() as { files: Array<{ id: string; content: string }> }).files || [])
+    : []
+  const localFile = localFiles.find((item) => item.id === normalized.documentId)
+  return localFile?.content || targetTab?.content || ''
+}
+
+function resolveFileNameForIdentity(identity?: Partial<DocumentIdentity> | null) {
+  const normalized = normalizeDocumentIdentity(identity)
+  if (!normalized.documentId) {
+    return null
+  }
+
+  if (
+    isIdentityCurrentlyActive(normalized) &&
+    useDocumentStore.getState().document?.fileName
+  ) {
+    return useDocumentStore.getState().document?.fileName || null
+  }
+
+  const targetTab = getOpenTabForIdentity(normalized) as { fileName?: string } | null
+  if (targetTab?.fileName) {
+    return targetTab.fileName
+  }
+
+  const gitDraft = useGitStore.getState().drafts[normalized.documentId]
+  if (gitDraft?.name) {
+    return gitDraft.name
+  }
+
+  const localFiles = Array.isArray((useFileSystemStore.getState() as { files?: unknown }).files)
+    ? ((useFileSystemStore.getState() as { files: Array<{ id: string; name: string }> }).files || [])
+    : []
+  const localFile = localFiles.find((item) => item.id === normalized.documentId)
+  return localFile?.name || null
+}
+
+function isIdentityCurrentlyActive(identity?: Partial<DocumentIdentity> | null) {
+  const normalized = normalizeDocumentIdentity(identity)
+  if (!normalized.documentId) {
+    return false
+  }
+
+  const activeTab = useTabsStore.getState().getActiveTab()
+  const activeIdentity = normalizeDocumentIdentity(activeTab)
+  return activeTab?.fileId === normalized.documentId && activeIdentity.sourceType === normalized.sourceType
+}
+
+function documentIdentityExists(identity?: Partial<DocumentIdentity> | null) {
+  const normalized = normalizeDocumentIdentity(identity)
+  if (!normalized.documentId) {
+    return false
+  }
+
+  if (isIdentityCurrentlyActive(normalized) || getOpenTabForIdentity(normalized)) {
+    return true
+  }
+
+  if (normalized.sourceType === 'git') {
+    return Boolean(useGitStore.getState().drafts[normalized.documentId])
+  }
+
+  const fileSystemState = useFileSystemStore.getState() as { files?: Array<{ id: string }> }
+  return (fileSystemState.files || []).some((file) => file.id === normalized.documentId)
+}
+
+function toExecutionTargetRecord(
+  conversationId: string,
+  identity?: Partial<DocumentIdentity> | null
+): AgentExecutionTargetRecord | null {
+  const normalized = normalizeDocumentIdentity(identity)
+  if (!normalized.documentId) {
+    return null
+  }
+
+  return {
+    conversationId,
+    documentId: normalized.documentId,
+    tabId: normalized.tabId,
+    sourceType: normalized.sourceType,
+    updatedAt: Date.now(),
+  }
+}
+
+function fromExecutionTargetRecord(record?: AgentExecutionTargetRecord | null) {
+  return normalizeDocumentIdentity(record)
 }
 
 function toUiConversation(conversation: AgentConversation): UiConversationRecord {
@@ -200,9 +388,6 @@ function toUiConversation(conversation: AgentConversation): UiConversationRecord
   const providerConfig = settings.getActiveProviderConfig()
   return {
     ...conversation,
-    documentId: null,
-    tabId: null,
-    sourceType: 'unknown',
     taskType: 'ask',
     status: 'active',
     providerId: providerConfig.id,
@@ -255,6 +440,8 @@ function getVisibleMessages(messages: AgentMessage[]): VisibleAgentMessage[] {
 function createToolUndoRecord(args: {
   conversationId: string
   toolCallId: string
+  identity: DocumentIdentity
+  fileName?: string | null
   previousMarkdown: string
   appliedMarkdown: string
 }) {
@@ -262,6 +449,10 @@ function createToolUndoRecord(args: {
     id: `tool-undo-${args.toolCallId}`,
     conversationId: args.conversationId,
     toolCallId: args.toolCallId,
+    documentId: args.identity.documentId,
+    tabId: args.identity.tabId,
+    sourceType: args.identity.sourceType,
+    fileName: args.fileName || null,
     previousMarkdown: args.previousMarkdown,
     appliedMarkdown: args.appliedMarkdown,
     createdAt: Date.now(),
@@ -361,6 +552,7 @@ function buildReferenceRecord(snapshot: AiDocReferenceSnapshot, conversationId: 
     conversationId,
     documentId: identity.documentId,
     tabId: identity.tabId,
+    sourceType: identity.sourceType,
     stale: false,
     createdAt: Date.now(),
   }
@@ -405,6 +597,30 @@ function buildUserAgentMessage(args: {
 async function syncCurrentDraft(store: Pick<AiChatStore, 'currentConversationId' | 'draftInput' | 'taskType' | 'selectedReferenceIds'>) {
   if (!store.currentConversationId) return
   await saveAgentDraft(buildDraftRecord(store.currentConversationId, store.taskType, store.draftInput, store.selectedReferenceIds))
+}
+
+async function persistExecutionTarget(
+  conversationId: string,
+  identity?: Partial<DocumentIdentity> | null
+) {
+  const record = toExecutionTargetRecord(conversationId, identity)
+  if (record) {
+    await saveAgentExecutionTarget(record)
+  } else {
+    await deleteAgentExecutionTarget(conversationId)
+  }
+
+  const nextIdentity = record ? fromExecutionTargetRecord(record) : normalizeDocumentIdentity(null)
+  useAiChatStore.setState((state) => ({
+    executionTargetsByConversation: record
+      ? {
+          ...state.executionTargetsByConversation,
+          [conversationId]: nextIdentity,
+        }
+      : Object.fromEntries(
+          Object.entries(state.executionTargetsByConversation).filter(([key]) => key !== conversationId)
+        ),
+  }))
 }
 
 function uniqueGeneratedFileName(fileName: string) {
@@ -665,11 +881,105 @@ async function moveGeneratedDocumentToGit(session: GeneratedDocumentSession) {
   useGitStore.getState().stageLocalFile(created.fileId, normalizedPath)
 }
 
+function syncTabPersistState(args: {
+  identity: DocumentIdentity
+  markdown: string
+  fileName?: string | null
+  markSaved: boolean
+}) {
+  const targetTab = getOpenTabForIdentity(args.identity) as {
+    id: string
+    fileName?: string
+  } | null
+  if (!targetTab) {
+    return
+  }
+
+  const tabsStore = useTabsStore.getState()
+  tabsStore.updateTabContent(targetTab.id, args.markdown)
+  if (args.markSaved) {
+    tabsStore.markTabAsSaved(targetTab.id, args.fileName || targetTab.fileName)
+    return
+  }
+
+  tabsStore.markTabAsModified(targetTab.id, true)
+}
+
+async function persistMarkdownToTargetIdentity(
+  markdown: string,
+  identity: DocumentIdentity,
+  fileName?: string | null,
+  options: { markSaved?: boolean; markDocumentSaved?: boolean } = {}
+) {
+  if (!identity.documentId) {
+    return false
+  }
+
+  if (!documentIdentityExists(identity)) {
+    throw new Error('AI 工具写回失败：目标文档已不存在，可能已被删除。请重新打开文档或重新选择内容。')
+  }
+
+  const markSaved = options.markSaved === true
+  const markDocumentSaved = options.markDocumentSaved ?? markSaved
+  const nextFileName = fileName || resolveFileNameForIdentity(identity)
+  const isActiveTarget = isIdentityCurrentlyActive(identity)
+
+  if (isActiveTarget) {
+    const applied = applyMarkdownToDocument(markdown, { external: true })
+    if (!applied) {
+      return false
+    }
+  }
+
+  if (identity.sourceType === 'git') {
+    const gitStore = useGitStore.getState()
+    if (!gitStore.drafts[identity.documentId]) {
+      gitStore.setCurrentDocumentId(identity.documentId)
+    }
+    gitStore.updateDraftContent(identity.documentId, markdown)
+  } else {
+    const fileStore = useFileSystemStore.getState()
+    if (markSaved) {
+      fileStore.saveFileContent(identity.documentId, markdown)
+    } else {
+      fileStore.saveFile(identity.documentId, markdown)
+    }
+  }
+
+  syncTabPersistState({
+    identity,
+    markdown,
+    fileName: nextFileName,
+    markSaved,
+  })
+
+  if (isActiveTarget) {
+    if (markDocumentSaved) {
+      useDocumentStore.getState().markAsSaved()
+    }
+  }
+
+  return true
+}
+
 async function applyMarkdownTransaction(
   nextMarkdown: string,
+  identity: DocumentIdentity,
   nextFileName?: string,
   options: { markSaved?: boolean } = {}
 ) {
+  const normalizedIdentity = normalizeDocumentIdentity(identity)
+  if (normalizedIdentity.documentId) {
+    const persisted = await persistMarkdownToTargetIdentity(nextMarkdown, normalizedIdentity, nextFileName, {
+      markSaved: options.markSaved,
+      markDocumentSaved: options.markSaved,
+    })
+    if (!persisted) {
+      throw new Error('AI 工具写回失败：目标文档写回失败。')
+    }
+    return nextMarkdown
+  }
+
   const applied = applyMarkdownToDocument(nextMarkdown, { external: true })
   if (!applied) {
     throw new Error('AI 工具写回失败：文档解析失败。')
@@ -715,6 +1025,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
   toolUndoStackByConversation: {},
   referencesByConversation: {},
   draftsByConversation: {},
+  executionTargetsByConversation: {},
   generatedDocumentSessionsByConversation: {},
   taskType: 'ask',
   selectionCandidate: null,
@@ -733,8 +1044,9 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
   initialize: async () => {
     set({ isLoading: true, error: null })
     try {
-      const [agentConversations, documentSessions, lastOpenConversationId, chatTemperature, chatMaxTokens, chatHistoryRounds] = await Promise.all([
+      const [agentConversations, executionTargets, documentSessions, lastOpenConversationId, chatTemperature, chatMaxTokens, chatHistoryRounds] = await Promise.all([
         listAgentConversations(),
+        listAgentExecutionTargets(),
         listAgentDocumentSessions(),
         getAgentUiState('last_open_conversation_id'),
         getAgentUiState('chat_temperature'),
@@ -751,7 +1063,11 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       const visibleMessagesByConversation: Record<string, VisibleAgentMessage[]> = {}
       const referencesByConversation: Record<string, AiReferenceRecord[]> = {}
       const draftsByConversation: Record<string, AgentDraft> = {}
+      const executionTargetsByConversation: Record<string, DocumentIdentity> = {}
       const generatedDocumentSessionsByConversation: Record<string, GeneratedDocumentSession> = {}
+      for (const executionTarget of executionTargets) {
+        executionTargetsByConversation[executionTarget.conversationId] = fromExecutionTargetRecord(executionTarget)
+      }
       for (const session of documentSessions) {
         generatedDocumentSessionsByConversation[session.conversationId] = fromGeneratedDocumentRecord(session)
       }
@@ -775,6 +1091,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         toolUndoStackByConversation: {},
         draftsByConversation,
         referencesByConversation,
+        executionTargetsByConversation,
         generatedDocumentSessionsByConversation,
         taskType: (currentDraft?.taskType as AiDocTaskType) || 'ask',
         draftInput: currentDraft?.inputText || '',
@@ -793,10 +1110,13 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
   },
 
   openConversation: async (conversationId) => {
-    const messages = await listAgentMessages(conversationId)
-    const references = (await listAgentReferences(conversationId)) as AiReferenceRecord[]
-    const draft = await getAgentDraft(conversationId)
-    const session = await getAgentDocumentSession(conversationId)
+    const [messages, references, draft, session, executionTarget] = await Promise.all([
+      listAgentMessages(conversationId),
+      listAgentReferences(conversationId) as Promise<AiReferenceRecord[]>,
+      getAgentDraft(conversationId),
+      getAgentDocumentSession(conversationId),
+      getAgentExecutionTarget(conversationId),
+    ])
     set((state) => ({
       currentConversationId: conversationId,
       messagesByConversation: {
@@ -819,6 +1139,14 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         ...state.referencesByConversation,
         [conversationId]: references,
       },
+      executionTargetsByConversation: executionTarget
+        ? {
+            ...state.executionTargetsByConversation,
+            [conversationId]: fromExecutionTargetRecord(executionTarget),
+          }
+        : Object.fromEntries(
+            Object.entries(state.executionTargetsByConversation).filter(([key]) => key !== conversationId)
+          ),
       draftsByConversation: draft
         ? {
             ...state.draftsByConversation,
@@ -883,6 +1211,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
     await Promise.all([
       deleteAgentConversation(conversationId),
       deleteAgentDocumentSession(conversationId),
+      deleteAgentExecutionTarget(conversationId),
     ])
     set((state) => {
       const nextMessages = { ...state.messagesByConversation }
@@ -895,6 +1224,8 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       delete nextReferences[conversationId]
       const nextDrafts = { ...state.draftsByConversation }
       delete nextDrafts[conversationId]
+      const nextExecutionTargets = { ...state.executionTargetsByConversation }
+      delete nextExecutionTargets[conversationId]
       const nextGeneratedDocumentSessions = { ...state.generatedDocumentSessionsByConversation }
       delete nextGeneratedDocumentSessions[conversationId]
       const conversations = state.conversations.filter((item) => item.id !== conversationId)
@@ -907,6 +1238,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         toolUndoStackByConversation: nextToolUndoStack,
         referencesByConversation: nextReferences,
         draftsByConversation: nextDrafts,
+        executionTargetsByConversation: nextExecutionTargets,
         generatedDocumentSessionsByConversation: nextGeneratedDocumentSessions,
         draftInput: currentConversationId ? nextDrafts[currentConversationId]?.inputText || '' : '',
         selectedReferenceIds: currentConversationId ? nextDrafts[currentConversationId]?.selectedReferenceIds?.slice(-1) || [] : [],
@@ -1016,12 +1348,17 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
     set((state) => {
       const currentConversationId = state.currentConversationId
       const currentReferences = currentConversationId ? state.referencesByConversation[currentConversationId] || [] : []
-      const nextFingerprint = getReferenceFingerprint(snapshot)
       const isDuplicate = hasDuplicateReference(snapshot, currentReferences)
 
       if (isDuplicate) {
         return {
           selectionCandidate: null,
+        }
+      }
+
+      if (state.selectionCandidate) {
+        return {
+          selectionCandidate: state.selectionCandidate,
         }
       }
 
@@ -1048,6 +1385,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
     const record = buildReferenceRecord(snapshot, conversationId)
     await Promise.all(currentReferences.map((reference) => deleteAgentReference(reference.id)))
     await saveAgentReference(record)
+    await persistExecutionTarget(conversationId, record)
     set((state) => {
       return {
         referencesByConversation: {
@@ -1097,13 +1435,6 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
     try {
       await saveDirtyEditors()
 
-      const documentStore = useDocumentStore.getState()
-      const document = documentStore.document
-      if (!document) {
-        set({ error: 'No active document' })
-        return
-      }
-
       const input = get().draftInput.trim()
       if (!input) return
 
@@ -1123,6 +1454,32 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       conversationId = conversationId || (await get().createConversation())
       if (!conversationId) return
 
+      const selectedReferenceId = get().selectedReferenceIds.at(-1)
+      const references = (get().referencesByConversation[conversationId] || []).filter((reference) =>
+        reference.id === selectedReferenceId
+      )
+      const activeIdentity = getCurrentDocumentIdentity()
+      const referenceIdentity = references.at(-1)
+        ? normalizeDocumentIdentity(references.at(-1))
+        : null
+      const targetIdentity = hasDocumentIdentity(referenceIdentity)
+        ? normalizeDocumentIdentity(referenceIdentity)
+        : hasDocumentIdentity(activeIdentity)
+            ? normalizeDocumentIdentity(activeIdentity)
+            : normalizeDocumentIdentity(null)
+      const targetMarkdown = hasDocumentIdentity(targetIdentity)
+        ? resolveMarkdownForIdentity(targetIdentity)
+        : ''
+      const targetFileName = resolveFileNameForIdentity(targetIdentity)
+
+      if (hasDocumentIdentity(referenceIdentity)) {
+        await persistExecutionTarget(conversationId, referenceIdentity)
+      }
+
+      if (hasDocumentIdentity(targetIdentity) && !documentIdentityExists(targetIdentity)) {
+        throw new Error('当前对话绑定的目标文档已不存在，可能已被删除。请重新打开文档或重新选择内容后再试。')
+      }
+
       const runContext = beginConversationRun(conversationId)
       runId = runContext.runId
       const isCurrentRun = () => isConversationRunActive(conversationId as string, runId as string)
@@ -1136,10 +1493,6 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         }
       })
 
-      const selectedReferenceId = get().selectedReferenceIds.at(-1)
-      const references = (get().referencesByConversation[conversationId] || []).filter((reference) =>
-        reference.id === selectedReferenceId
-      )
       const userMessage = buildUserAgentMessage({
         conversationId,
         taskType: get().taskType,
@@ -1230,7 +1583,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         apiKey,
         messages: runtimeMessages,
         tools: createDefaultAgentTools(),
-        markdown: documentStore.getCurrentMarkdown(),
+        markdown: targetMarkdown,
         selectedReference: references.at(-1)
           ? {
               id: references.at(-1)?.id,
@@ -1431,8 +1784,10 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
           type: 'batch',
           description: 'AI agent document edit',
         })
-        const nextDocument = useDocumentStore.getState().document
-        const committedMarkdown = await applyMarkdownTransaction(result.appliedMarkdown, nextDocument?.fileName, { markSaved: true })
+        if (!hasDocumentIdentity(targetIdentity)) {
+          throw new Error('AI 工具写回失败：当前没有激活文档。无选区编辑或追加内容时，请先打开目标文档。')
+        }
+        const committedMarkdown = await applyMarkdownTransaction(result.appliedMarkdown, targetIdentity, targetFileName, { markSaved: true })
         const appliedToolCallId = result.appliedTools.at(-1)?.toolCallId || result.appliedToolCallIds.at(-1)
         const previousMarkdown = result.appliedTools[0]?.previousMarkdown || result.previousMarkdown
 
@@ -1441,6 +1796,8 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
             createToolUndoRecord({
               conversationId,
               toolCallId: appliedToolCallId,
+              identity: targetIdentity,
+              fileName: targetFileName,
               previousMarkdown,
               appliedMarkdown: committedMarkdown,
             }),
@@ -1495,7 +1852,10 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       generatedDocumentPreviewSyncStateByToolCall.forEach((_, toolCallId) => {
         cancelGeneratedDocumentPreviewSync(generatedDocumentPreviewSyncStateByToolCall, toolCallId)
       })
-      if (!conversationId || !runId || !isConversationRunActive(conversationId, runId)) {
+      if (!conversationId) {
+        return
+      }
+      if (runId && !isConversationRunActive(conversationId, runId)) {
         return
       }
       const failedConversationId = conversationId || get().currentConversationId || ''
@@ -1567,8 +1927,12 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       type: 'batch',
       description: 'Undo AI agent document edit',
     })
-    const nextDocument = useDocumentStore.getState().document
-    await applyMarkdownTransaction(target.previousMarkdown, nextDocument?.fileName, { markSaved: true })
+    await applyMarkdownTransaction(
+      target.previousMarkdown,
+      normalizeDocumentIdentity(target),
+      target.fileName,
+      { markSaved: true }
+    )
 
     set((state) => ({
       toolUndoStackByConversation: {

@@ -1,6 +1,14 @@
 import { nanoid } from 'nanoid'
 import { createIdbStore } from '@/lib/idb'
-import type { AgentConversation, AgentDocumentSessionRecord, AgentDraft, AgentMessage, AgentReferenceRecord, AgentUiState } from './types'
+import type {
+  AgentConversation,
+  AgentDocumentSessionRecord,
+  AgentDraft,
+  AgentExecutionTargetRecord,
+  AgentMessage,
+  AgentReferenceRecord,
+  AgentUiState,
+} from './types'
 
 const DB_NAME = 'visualmd-agent'
 const conversationsStore = createIdbStore<AgentConversation>(DB_NAME, 'conversations')
@@ -9,6 +17,7 @@ const referencesStore = createIdbStore<AgentReferenceRecord>(DB_NAME, 'reference
 const draftsStore = createIdbStore<AgentDraft>(DB_NAME, 'drafts')
 const uiStateStore = createIdbStore<AgentUiState>(DB_NAME, 'ui_state')
 const documentSessionsStore = createIdbStore<AgentDocumentSessionRecord>(DB_NAME, 'document_sessions')
+const executionTargetsStore = createIdbStore<AgentExecutionTargetRecord>(DB_NAME, 'execution_targets')
 
 export function createAgentConversationId() {
   return nanoid()
@@ -91,6 +100,7 @@ export async function deleteAgentConversation(conversationId: string) {
   await draftsStore.remove(conversationId)
   await messagesStore.remove(conversationId)
   await documentSessionsStore.remove(conversationId)
+  await executionTargetsStore.remove(conversationId)
   await Promise.all(
     references
       .map((entry) => entry.value)
@@ -122,6 +132,24 @@ export async function deleteAgentDocumentSession(conversationId: string) {
 
 export async function listAgentDocumentSessions() {
   return (await documentSessionsStore.getAll())
+    .map((entry) => entry.value)
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+}
+
+export async function saveAgentExecutionTarget(record: AgentExecutionTargetRecord) {
+  return executionTargetsStore.set(record.conversationId, record)
+}
+
+export async function getAgentExecutionTarget(conversationId: string) {
+  return executionTargetsStore.get(conversationId)
+}
+
+export async function deleteAgentExecutionTarget(conversationId: string) {
+  return executionTargetsStore.remove(conversationId)
+}
+
+export async function listAgentExecutionTargets() {
+  return (await executionTargetsStore.getAll())
     .map((entry) => entry.value)
     .sort((left, right) => right.updatedAt - left.updatedAt)
 }
