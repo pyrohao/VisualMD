@@ -24,7 +24,11 @@ export function renderAgentMessageXml(message: AgentMessage) {
 }
 
 export function buildAgentTranscript(messages: AgentMessage[]) {
-  return messages.map(renderAgentMessageXml).join('\n')
+  return [
+    '<context>',
+    messages.map(renderAgentMessageXml).join('\n'),
+    '</context>',
+  ].join('\n')
 }
 
 export function splitAssistantThinking(raw: string) {

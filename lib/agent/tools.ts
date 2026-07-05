@@ -17,7 +17,7 @@ export interface AgentTool extends AgentToolDefinition {
 }
 
 export interface AgentToolValidationError {
-  code: 'invalid-arguments' | 'missing-required' | 'unexpected-property' | 'invalid-type'
+  code: 'invalid-arguments' | 'missing-required' | 'unexpected-property' | 'invalid-type' | 'empty-string'
   field?: string
   expectedType?: AgentToolJsonSchemaProperty['type']
   actualType?: string
@@ -40,12 +40,13 @@ export interface AgentToolJsonSchema {
 export interface AgentToolJsonSchemaProperty {
   type: 'string' | 'number' | 'integer' | 'boolean' | 'object' | 'array'
   description: string
+  allowEmpty?: boolean
 }
 
 export const defaultAgentToolDefinitions: AgentToolDefinition[] = [
   {
     name: 'apply_tool',
-    description: 'Edit the current document by replacing one exact text fragment.',
+    description: 'Recover a failed edit by replacing one exact text fragment in the current document.',
     argumentsSchema: {
       type: 'object',
       description: 'Arguments for an exact replacement in the current Markdown document.',
@@ -53,11 +54,11 @@ export const defaultAgentToolDefinitions: AgentToolDefinition[] = [
       properties: {
         oldString: {
           type: 'string',
-          description: 'Required. Copy the exact source text from the current document. Use the smallest complete fragment that satisfies the request, and preserve literal Markdown such as image syntax unless the user explicitly asks to change it.',
+          description: 'Required. Non-empty exact source text copied from the current document. Use the smallest complete fragment that satisfies the request, and preserve literal Markdown such as image syntax unless the user explicitly asks to change it.',
         },
         newString: {
           type: 'string',
-          description: 'Required. Replacement text only. Keep unchanged Markdown content verbatim when the edit touches surrounding text.',
+          description: 'Required. Non-empty replacement text only. Keep unchanged Markdown content verbatim when the edit touches surrounding text.',
         },
       },
       required: ['oldString', 'newString'],
@@ -73,7 +74,7 @@ export const defaultAgentToolDefinitions: AgentToolDefinition[] = [
       properties: {
         query: {
           type: 'string',
-          description: 'Required. Provide the exact literal text fragment to search for in the current Markdown document.',
+          description: 'Required. Provide one non-empty exact literal text fragment to search for in the current Markdown document.',
         },
       },
       required: ['query'],
@@ -89,11 +90,11 @@ export const defaultAgentToolDefinitions: AgentToolDefinition[] = [
       properties: {
         fileName: {
           type: 'string',
-          description: 'Required. Target Markdown file name. It must include the `.md` suffix.',
+          description: 'Required. Non-empty target Markdown file name. It must include the `.md` suffix.',
         },
         prompt: {
           type: 'string',
-          description: 'Required. The document-generation instruction used to create the new file content. Use this tool only for brand-new files, not for normal chat or edits to the current document. After one successful generation, do not call this tool again unless the user explicitly asked for multiple separate files.',
+          description: 'Required. Non-empty document-generation instruction used to create the new file content. Use this tool only for brand-new files, not for normal chat or edits to the current document. After one successful generation, do not call this tool again unless the user explicitly asked for multiple separate files.',
         },
       },
       required: ['fileName', 'prompt'],
@@ -109,8 +110,13 @@ export async function executeApplyTool(args: Record<string, unknown>, context: A
   const selectedStart = typeof selectedReference?.startOffset === 'number' ? selectedReference.startOffset : null
   const selectedEnd = typeof selectedReference?.endOffset === 'number' ? selectedReference.endOffset : null
   const selectedExpectedText = typeof selectedReference?.expectedText === 'string' ? selectedReference.expectedText : ''
+  const hasLiveSelectionAnchor =
+    selectedStart !== null &&
+    selectedEnd !== null &&
+    selectedStart >= 0 &&
+    selectedEnd >= selectedStart
 
-  if (selectedStart !== null && selectedEnd !== null && selectedStart >= 0 && selectedEnd >= selectedStart) {
+  if (hasLiveSelectionAnchor) {
     const currentSelectedText = context.markdown.slice(selectedStart, selectedEnd)
     if (currentSelectedText === selectedExpectedText) {
       return {
@@ -129,7 +135,7 @@ export async function executeApplyTool(args: Record<string, unknown>, context: A
     }
   }
 
-  if (!oldString) {
+  if (!oldString && !hasLiveSelectionAnchor) {
     return {
       ok: false,
       message: 'apply_tool failed: oldString is required. Ask the model to provide an exact source fragment before retrying apply_tool.',
@@ -404,6 +410,23 @@ export function validateToolArguments(
         },
       }
     }
+
+    if (
+      property.type === 'string' &&
+      typeof value === 'string' &&
+      !property.allowEmpty &&
+      !value.trim()
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: 'empty-string',
+          field,
+          expectedType: property.type,
+          actualType: 'empty-string',
+        },
+      }
+    }
   }
 
   return { ok: true }
@@ -438,6 +461,14 @@ export function buildInvalidToolArgumentsResult(
     return {
       ok: false,
       message: `Invalid arguments for ${tool.name}: unexpected field(s) ${error.extraFields?.map((field) => `"${field}"`).join(', ')}.`,
+      metadata: { validationError: error },
+    }
+  }
+
+  if (error.code === 'empty-string') {
+    return {
+      ok: false,
+      message: `Invalid arguments for ${tool.name}: field "${error.field}" must be a non-empty string.`,
       metadata: { validationError: error },
     }
   }

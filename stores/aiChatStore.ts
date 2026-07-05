@@ -1429,7 +1429,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         set({ sendingStatus: '正在应用工具结果...' })
         useHistoryStore.getState().addHistory({
           type: 'batch',
-          description: 'AI agent apply_tool',
+          description: 'AI agent document edit',
         })
         const nextDocument = useDocumentStore.getState().document
         const committedMarkdown = await applyMarkdownTransaction(result.appliedMarkdown, nextDocument?.fileName, { markSaved: true })
@@ -1565,7 +1565,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
 
     useHistoryStore.getState().addHistory({
       type: 'batch',
-      description: 'Undo AI agent apply_tool',
+      description: 'Undo AI agent document edit',
     })
     const nextDocument = useDocumentStore.getState().document
     await applyMarkdownTransaction(target.previousMarkdown, nextDocument?.fileName, { markSaved: true })

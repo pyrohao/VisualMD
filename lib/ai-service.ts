@@ -143,6 +143,41 @@ function buildStreamedAssistantText(reasoning: string, answer: string) {
   return combineReasoningAndAnswer(reasoning, answer)
 }
 
+function extractChatCompletionsStreamDelta(data: any) {
+  return {
+    reasoningDelta: normalizeModelTextContent(
+      data.choices?.[0]?.delta?.reasoning_content ?? data.reasoning_content ?? data.reasoning?.text
+    ),
+    contentDelta: normalizeModelTextContent(
+      data.choices?.[0]?.delta?.content ?? data.content ?? data.message?.content ?? data.text
+    ),
+  }
+}
+
+function extractResponsesStreamDelta(data: any) {
+  return {
+    reasoningDelta: normalizeModelTextContent(
+      data.reasoning_content ?? data.reasoning?.text ?? data.delta?.reasoning_content ?? data.reasoning
+    ),
+    contentDelta: normalizeModelTextContent(
+      data.delta?.content ?? data.delta ?? data.text ?? data.output_text ?? data.content ?? data.message?.content
+    ),
+  }
+}
+
+function parseStreamPayloadLine(line: string) {
+  const trimmed = line.trim()
+  if (!trimmed || trimmed.startsWith('event:') || trimmed.startsWith(':')) {
+    return null
+  }
+
+  if (trimmed.startsWith('data:')) {
+    return trimmed.slice(5).trim()
+  }
+
+  return trimmed
+}
+
 function extractOpenAIContent(data: any) {
   const message = data.choices?.[0]?.message
   return combineReasoningAndAnswer(
@@ -571,17 +606,15 @@ export class AIService {
       buffer = lines.pop() || ''
 
       for (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed || !trimmed.startsWith('data:')) continue
-        const payload = trimmed.slice(5).trim()
+        const payload = parseStreamPayloadLine(line)
+        if (!payload) continue
         if (payload === '[DONE]') {
           return buildStreamedAssistantText(reasoningText, answerText)
         }
 
         try {
           const data = JSON.parse(payload)
-          const contentDelta = normalizeModelTextContent(data.choices?.[0]?.delta?.content)
-          const reasoningDelta = normalizeModelTextContent(data.choices?.[0]?.delta?.reasoning_content)
+          const { contentDelta, reasoningDelta } = extractChatCompletionsStreamDelta(data)
           if (reasoningDelta) {
             reasoningText += reasoningDelta
           }
@@ -596,6 +629,26 @@ export class AIService {
         } catch {
           continue
         }
+      }
+    }
+
+    const trailingPayload = parseStreamPayloadLine(buffer)
+    if (trailingPayload && trailingPayload !== '[DONE]') {
+      try {
+        const data = JSON.parse(trailingPayload)
+        const { contentDelta, reasoningDelta } = extractChatCompletionsStreamDelta(data)
+        if (reasoningDelta) {
+          reasoningText += reasoningDelta
+        }
+        if (contentDelta) {
+          answerText += contentDelta
+        }
+        const nextFullText = buildStreamedAssistantText(reasoningText, answerText)
+        if (nextFullText) {
+          onDelta?.(contentDelta || reasoningDelta, nextFullText)
+        }
+      } catch {
+        // Ignore malformed trailing payloads.
       }
     }
 
@@ -654,25 +707,19 @@ export class AIService {
       if (done) break
 
       buffer += decoder.decode(value, { stream: true })
-      const events = buffer.split(/\r?\n\r?\n/)
-      buffer = events.pop() || ''
+      const lines = buffer.split(/\r?\n/)
+      buffer = lines.pop() || ''
 
-      for (const eventBlock of events) {
-        const dataLine = eventBlock
-          .split(/\r?\n/)
-          .find((line) => line.trim().startsWith('data:'))
-        if (!dataLine) continue
-        const payload = dataLine.trim().slice(5).trim()
-        if (!payload || payload === '[DONE]') continue
+      for (const line of lines) {
+        const payload = parseStreamPayloadLine(line)
+        if (!payload) continue
+        if (payload === '[DONE]') {
+          return buildStreamedAssistantText(reasoningText, answerText)
+        }
 
         try {
           const data = JSON.parse(payload)
-          const reasoningDelta = normalizeModelTextContent(
-            data.reasoning_content || data.reasoning?.text || data.delta?.reasoning_content
-          )
-          const contentDelta = normalizeModelTextContent(
-            data.delta?.content || data.delta || data.text || data.output_text
-          )
+          const { contentDelta, reasoningDelta } = extractResponsesStreamDelta(data)
           if (reasoningDelta) {
             reasoningText += reasoningDelta
           }
@@ -687,6 +734,26 @@ export class AIService {
         } catch {
           continue
         }
+      }
+    }
+
+    const trailingPayload = parseStreamPayloadLine(buffer)
+    if (trailingPayload && trailingPayload !== '[DONE]') {
+      try {
+        const data = JSON.parse(trailingPayload)
+        const { contentDelta, reasoningDelta } = extractResponsesStreamDelta(data)
+        if (reasoningDelta) {
+          reasoningText += reasoningDelta
+        }
+        if (contentDelta) {
+          answerText += contentDelta
+        }
+        const nextFullText = buildStreamedAssistantText(reasoningText, answerText)
+        if (nextFullText) {
+          onDelta?.(contentDelta || reasoningDelta, nextFullText)
+        }
+      } catch {
+        // Ignore malformed trailing payloads.
       }
     }
 

@@ -43,7 +43,7 @@ describe('agent runtime', () => {
     expect(result.messages.at(-1)?.message).toBe('Done')
   })
 
-  it('streams plain assistant text deltas only', async () => {
+  it('streams plain assistant text deltas incrementally', async () => {
     vi.spyOn(AIService.prototype, 'chatMessagesStream').mockImplementationOnce(async (options) => {
       options.onDelta?.('He', 'He')
       options.onDelta?.('llo', 'Hello')
@@ -73,7 +73,7 @@ describe('agent runtime', () => {
       .mockImplementationOnce(async (options) => {
         options.onDelta?.('{', '{')
         options.onDelta?.('"tool"', '{"tool"')
-        return '{"tool":"semantic_tool","arguments":{"query":"x"}}'
+        return '{"tool":"apply_tool","arguments":{"oldString":"x","newString":"y"}}'
       })
       .mockResolvedValueOnce('Done')
     const deltas: string[] = []
@@ -91,24 +91,18 @@ describe('agent runtime', () => {
       onAssistantTextDelta: (text) => deltas.push(text),
     })
 
-    expect(deltas).toEqual([])
+    expect(deltas).toEqual(['Done'])
   })
 
-  it('does not stream prefixed generate-document tool text to the chat bubble', async () => {
-    vi.spyOn(AIService.prototype, 'chatMessagesStream')
-      .mockImplementationOnce(async (options) => {
-        options.onDelta?.('好的，我来创建文档。', '好的，我来创建文档。')
-        options.onDelta?.('{"tool"', '好的，我来创建文档。{"tool"')
-        return '好的，我来创建文档。\n{"tool":"generate_document_tool","arguments":{"fileName":"Guide.md","prompt":"make a guide"}}'
-      })
-      .mockResolvedValueOnce('# Guide')
-      .mockImplementationOnce(async (options) => {
-        options.onDelta?.('已生成', '已生成')
-        return '已生成'
-      })
+  it('treats text-prefixed mixed output as plain assistant text', async () => {
+    vi.spyOn(AIService.prototype, 'chatMessagesStream').mockImplementationOnce(async (options) => {
+      options.onDelta?.('I will create it.\n', 'I will create it.\n')
+      options.onDelta?.('{"tool"', 'I will create it.\n{"tool"')
+      return 'I will create it.\n{"tool":"generate_document_tool","arguments":{"fileName":"Guide.md","prompt":"make a guide"}}'
+    })
     const deltas: string[] = []
     const messages: AgentMessage[] = [
-      { id: 'u1', conversationId: 'c1', role: 'user', message: 'User request:\n帮我生成一份指南', createdAt: 1 },
+      { id: 'u1', conversationId: 'c1', role: 'user', message: 'Create a guide', createdAt: 1 },
     ]
 
     const result = await runAgentReActLoop({
@@ -121,9 +115,13 @@ describe('agent runtime', () => {
       onAssistantTextDelta: (text) => deltas.push(text),
     })
 
-    expect(deltas).toEqual(['已生成'])
-    expect(result.generatedFiles[0]?.fileName).toBe('Guide.md')
-    expect(result.messages.at(-1)?.message).toBe('已生成')
+    expect(deltas).toEqual([
+      'I will create it.\n',
+      'I will create it.\n{"tool"',
+      'I will create it.\n{"tool":"generate_document_tool","arguments":{"fileName":"Guide.md","prompt":"make a guide"}}',
+    ])
+    expect(result.generatedFiles).toEqual([])
+    expect(result.messages.at(-1)?.message).toContain('generate_document_tool')
   })
 
   it('executes tool calls and continues to final text', async () => {
@@ -154,11 +152,11 @@ describe('agent runtime', () => {
     expect(result.messages.at(-1)?.message).toBe('Applied')
   })
 
-  it('retries with apply_tool when an edit request gets plain text instead of tool JSON', async () => {
+  it('retries selected edits with document action JSON when the first reply is plain text', async () => {
     vi.spyOn(AIService.prototype, 'chatMessagesStream')
-      .mockResolvedValueOnce('已成功将内容修改为你好。')
-      .mockResolvedValueOnce('{"tool":"apply_tool","arguments":{"oldString":"工具调用测试内容","newString":"你好"}}')
-      .mockResolvedValueOnce('已完成')
+      .mockResolvedValueOnce('I updated it for you.')
+      .mockResolvedValueOnce('{"action":"replace","content":"hello"}')
+      .mockResolvedValueOnce('Completed')
     const messages: AgentMessage[] = [
       {
         id: 'u1',
@@ -167,11 +165,11 @@ describe('agent runtime', () => {
         message: [
           'Task type: ask',
           'User request:',
-          '把这里修改为你好',
+          'Change this to hello',
           '',
           'Selected document text:',
           '<selected_text>',
-          '工具调用测试内容',
+          'Selected text',
           '</selected_text>',
         ].join('\n'),
         createdAt: 1,
@@ -183,19 +181,101 @@ describe('agent runtime', () => {
       apiKey: 'test',
       messages,
       tools: createDefaultAgentTools(),
-      markdown: '# 测试章节\n\n工具调用测试内容',
+      markdown: '# Title\n\nSelected text',
+      selectedReference: {
+        startOffset: 9,
+        endOffset: 22,
+        expectedText: 'Selected text',
+      },
       maxTurns: 5,
     })
 
-    expect(result.appliedMarkdown).toBe('# 测试章节\n\n你好')
-    expect(result.messages.some((message) => message.role === 'assistant' && message.message.includes('已成功将内容修改'))).toBe(false)
-    expect(result.messages.some((message) => message.role === 'tool' && message.error?.includes('Return apply_tool JSON'))).toBe(true)
+    expect(result.appliedMarkdown).toBe('# Title\n\nhello')
+    expect(result.messages.some((message) => message.role === 'assistant' && message.message.includes('I updated it for you.'))).toBe(false)
+    expect(result.messages.some((message) => message.role === 'tool' && message.error?.includes('Return only JSON like {"action":"replace","content":"..."}'))).toBe(true)
   })
 
-  it('uses semantic recovery after an apply failure', async () => {
+  it('consumes direct document replace action JSON', async () => {
+    vi.spyOn(AIService.prototype, 'chatMessagesStream')
+      .mockResolvedValueOnce('{"action":"replace","content":"New title"}')
+      .mockResolvedValueOnce('Completed')
+    const messages: AgentMessage[] = [
+      {
+        id: 'u1',
+        conversationId: 'c1',
+        role: 'user',
+        message: [
+          'Task type: rewrite',
+          'User request:',
+          'Update the selected heading',
+          '',
+          'Selected document text:',
+          '<selected_text>',
+          'Old title',
+          '</selected_text>',
+        ].join('\n'),
+        createdAt: 1,
+      },
+    ]
+
+    const result = await runAgentReActLoop({
+      providerConfig,
+      apiKey: 'test',
+      messages,
+      tools: createDefaultAgentTools(),
+      markdown: '# Old title\n\nBody',
+      selectedReference: {
+        startOffset: 2,
+        endOffset: 11,
+        expectedText: 'Old title',
+      },
+      maxTurns: 5,
+    })
+
+    expect(result.appliedMarkdown).toBe('# New title\n\nBody')
+    expect(result.messages.some((message) => message.toolName === 'document_action' && message.role === 'tool' && message.state === 'done')).toBe(true)
+    expect(result.messages.at(-1)?.message).toBe('Completed')
+  })
+
+  it('consumes append action JSON and appends content to document end', async () => {
+    vi.spyOn(AIService.prototype, 'chatMessagesStream')
+      .mockResolvedValueOnce('{"action":"append","content":"## New Section\\n\\nMore content"}')
+      .mockResolvedValueOnce('Appended')
+    const messages: AgentMessage[] = [
+      {
+        id: 'u1',
+        conversationId: 'c1',
+        role: 'user',
+        message: [
+          'Task type: ask',
+          'User request:',
+          'Append a new section at the end',
+          '',
+          'Selected document text:',
+          'None',
+        ].join('\n'),
+        createdAt: 1,
+      },
+    ]
+
+    const result = await runAgentReActLoop({
+      providerConfig,
+      apiKey: 'test',
+      messages,
+      tools: createDefaultAgentTools(),
+      markdown: '# Document\n\nCurrent content',
+      maxTurns: 5,
+    })
+
+    expect(result.appliedMarkdown).toBe('# Document\n\nCurrent content\n\n## New Section\n\nMore content\n')
+    expect(result.messages.some((message) => message.toolName === 'document_action' && message.role === 'tool' && message.state === 'done')).toBe(true)
+    expect(result.messages.at(-1)?.message).toBe('Appended')
+  })
+
+  it('uses find recovery after an apply failure', async () => {
     vi.spyOn(AIService.prototype, 'chatMessagesStream')
       .mockResolvedValueOnce('{"tool":"apply_tool","arguments":{"oldString":"old text","newString":"new text"}}')
-      .mockResolvedValueOnce('{"tool":"semantic_tool","arguments":{"query":"visual markdown paragraph"}}')
+      .mockResolvedValueOnce('{"tool":"find_tool","arguments":{"query":"Visual markdown paragraph."}}')
       .mockResolvedValueOnce('{"tool":"apply_tool","arguments":{"oldString":"Visual markdown paragraph.","newString":"New visual markdown paragraph."}}')
       .mockResolvedValueOnce('Recovered')
     const messages: AgentMessage[] = [
@@ -257,7 +337,7 @@ describe('agent runtime', () => {
     vi.spyOn(AIService.prototype, 'chatMessagesStream')
       .mockResolvedValueOnce('{"tool":"generate_document_tool","arguments":{"prompt":"make test3","fileName":"test3.md"}}')
       .mockResolvedValueOnce('# Test3')
-      .mockResolvedValueOnce('已生成 test3')
+      .mockResolvedValueOnce('Generated test3')
 
     const messages: AgentMessage[] = [
       { id: 'u1', conversationId: 'c1', role: 'user', message: 'generate', createdAt: 1 },
@@ -274,7 +354,7 @@ describe('agent runtime', () => {
 
     expect(result.generatedFiles).toHaveLength(1)
     expect(result.generatedFiles[0]?.fileName).toBe('test3.md')
-    expect(result.messages.at(-1)?.message).toBe('已生成 test3')
+    expect(result.messages.at(-1)?.message).toBe('Generated test3')
   })
 
   it('stops on unknown tools', async () => {
@@ -301,7 +381,7 @@ describe('agent runtime', () => {
 
   it('stops after the tool loop limit', async () => {
     vi.spyOn(AIService.prototype, 'chatMessagesStream').mockResolvedValue(
-      '{"tool":"semantic_tool","arguments":{"query":"x"}}'
+      '{"tool":"find_tool","arguments":{"query":"x"}}'
     )
     const messages: AgentMessage[] = [
       { id: 'u1', conversationId: 'c1', role: 'user', message: 'loop', createdAt: 1 },

@@ -74,6 +74,13 @@ export interface AgentToolCall {
   arguments: Record<string, unknown>
 }
 
+export type AgentDocumentActionName = 'replace' | 'append'
+
+export interface AgentDocumentAction {
+  action: AgentDocumentActionName
+  content: string
+}
+
 export interface AgentToolResult {
   ok: boolean
   message: string

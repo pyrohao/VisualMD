@@ -241,6 +241,29 @@ describe('AIService streaming chat', () => {
     expect(deltas).toEqual(['Hel', 'Hello'])
   })
 
+  it('parses line-delimited JSON response deltas with top-level content fields', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(streamFromText([
+      '{"content":"{\\"action\\":\\"replace\\",","role":"assistant"}',
+      '{"content":"\\"content\\":\\"新的内容\\"}","role":"assistant"}',
+      '',
+    ].join('\n')))))
+
+    const deltas: string[] = []
+    const result = await new AIService({
+      ...providerConfig,
+      openAIEndpoint: 'responses',
+    }).chatMessagesStream({
+      messages: [{ role: 'user', content: 'hello' }],
+      onDelta: (_delta, fullText) => deltas.push(fullText),
+    })
+
+    expect(result).toBe('{"action":"replace","content":"新的内容"}')
+    expect(deltas).toEqual([
+      '{"action":"replace",',
+      '{"action":"replace","content":"新的内容"}',
+    ])
+  })
+
   it('combines reasoning and answer in OpenAI Responses SSE streams', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(streamFromText([
       'event: response.reasoning.delta',

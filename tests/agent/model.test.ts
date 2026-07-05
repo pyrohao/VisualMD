@@ -11,10 +11,12 @@ describe('agent model', () => {
     ]
 
     expect(buildAgentTranscript(messages)).toBe([
+      '<context>',
       '<system>dev</system>',
       '<user>hello</user>',
       '<assistant>hi</assistant>',
       '<tool id="t1" name="apply_tool">{&quot;ok&quot;:true}</tool>',
+      '</context>',
     ].join('\n'))
   })
 
@@ -27,7 +29,19 @@ describe('agent model', () => {
     }
 
     expect(parseAgentModelResponse('{not json')).toEqual({ kind: 'text', text: '{not json' })
-    expect(parseAgentModelResponse('```json\n{"tool":"apply_tool","arguments":{}}\n```').kind).toBe('text')
+    expect(parseAgentModelResponse('```json\n{"tool":"apply_tool","arguments":{}}\n```').kind).toBe('tool')
+  })
+
+  it('parses document action JSON', () => {
+    const parsed = parseAgentModelResponse('```json\n{"action":"replace","content":"新的内容"}\n```')
+
+    expect(parsed.kind).toBe('action')
+    if (parsed.kind === 'action') {
+      expect(parsed.action).toEqual({
+        action: 'replace',
+        content: '新的内容',
+      })
+    }
   })
 
   it('extracts tool JSON when a model incorrectly prefixes text', () => {
