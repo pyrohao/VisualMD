@@ -21,6 +21,7 @@ import {
   RotateCcw,
   Save,
   Settings2,
+  Trash2,
   Undo2,
   Video,
 } from 'lucide-react'
