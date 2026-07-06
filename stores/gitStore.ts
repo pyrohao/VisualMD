@@ -1161,6 +1161,7 @@ export const useGitStore = create<GitStore>()(
               expandedPaths: nextWorkspace.expandedPaths,
               branches: workspaceChanged ? [] : state.branches,
               treeByPath: workspaceChanged ? {} : state.treeByPath,
+              baseTreeMap: workspaceChanged ? {} : state.baseTreeMap,
             }
           })
         },
@@ -2656,6 +2657,7 @@ export const useGitStore = create<GitStore>()(
               })
             }
 
+            const committedAt = Date.now()
             set((state) => {
               const nextDrafts = { ...state.drafts }
 
@@ -2693,27 +2695,42 @@ export const useGitStore = create<GitStore>()(
 
               return {
                 drafts: nextDrafts,
-                stagedChanges: state.stagedChanges.filter((item) => {
-                  if (!committedChangeIds.has(item.id)) {
-                    return true
-                  }
-
-                  if (item.kind === 'git-draft' && item.documentId) {
-                    return !!nextDrafts[item.documentId]?.isDirty
-                  }
-
-                  return false
-                }),
+                stagedChanges: state.stagedChanges.filter((item) => !committedChangeIds.has(item.id)),
+                pendingStructuralChanges: state.pendingStructuralChanges.filter((item) => !committedChangeIds.has(item.id)),
                 currentDocumentId:
                   state.currentDocumentId && deletedDocumentIds.has(state.currentDocumentId)
                     ? null
                     : state.currentDocumentId,
-                lastFetchedAt: Date.now(),
+                lastFetchedAt: committedAt,
                 pendingCommitMessage: null,
               }
             })
-            await get().refreshRepositoryFromRemote()
-            await reloadVisibleGitTreePaths(get())
+
+            deletedDocumentIds.forEach((documentId) => {
+              const tab = useTabsStore.getState().findTabByFileId(documentId)
+              if (tab) {
+                useTabsStore.getState().closeTab(tab.id)
+              }
+            })
+
+            refreshedDrafts.forEach((_remoteDraft, documentId) => {
+              const nextDraft = get().drafts[documentId]
+              if (!nextDraft) {
+                return
+              }
+
+              syncOpenGitTabFromDraft(documentId, nextDraft)
+              if (get().currentDocumentId === documentId) {
+                useDocumentStore.getState().loadDocument(nextDraft.draftContent, nextDraft.name, nextDraft.documentId)
+              }
+            })
+
+            try {
+              await get().refreshRepositoryFromRemote()
+              await reloadVisibleGitTreePaths(get())
+            } catch {
+              set({ error: 'Commit succeeded, but repository view refresh failed' })
+            }
           } catch (error) {
             const message = error instanceof Error ? error.message : 'Failed to commit file'
             set({ error: message })

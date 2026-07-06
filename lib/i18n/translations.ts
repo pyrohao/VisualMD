@@ -288,10 +288,14 @@ export interface Translations {
     reposLoaded: string
     availableBranches: string
     repositoryTree: string
+    workingTree: string
+    sourceControl: string
     notConnected: string
     connectFirst: string
     emptyRepoTree: string
     pendingChanges: string
+    noPendingChanges: string
+    pendingCount: string
     noGitFileOpen: string
     uncommitted: string
     commitToRepo: string
@@ -356,6 +360,7 @@ export interface Translations {
     loadingPreview: string
     inlinePreviewUnavailable: string
     downloadFile: string
+    localWorktreeFileUnavailable: string
   }
   // Toast 消息
   toast: {
@@ -662,10 +667,14 @@ export const translations: Record<Language, Translations> = {
       reposLoaded: '仓库列表已加载',
       availableBranches: '分支',
       repositoryTree: '仓库文件',
+      workingTree: '工作区',
+      sourceControl: '源代码管理',
       notConnected: '未连接',
       connectFirst: '请先连接仓库',
       emptyRepoTree: '未加载文件',
       pendingChanges: '变更',
+      noPendingChanges: '没有变更',
+      pendingCount: '{count} 项变更',
       noGitFileOpen: '未打开 Git 文件',
       uncommitted: '未提交',
       commitToRepo: '提交到仓库',
@@ -730,6 +739,7 @@ export const translations: Record<Language, Translations> = {
       loadingPreview: '正在加载预览...',
       inlinePreviewUnavailable: '当前文件类型暂不支持内嵌预览，可直接下载查看。',
       downloadFile: '下载文件',
+      localWorktreeFileUnavailable: '本地工作区文件暂不可用，请先确认文件已成功创建。',
     },
     toast: {
       saved: '已保存',
@@ -1032,10 +1042,14 @@ export const translations: Record<Language, Translations> = {
       reposLoaded: 'Repositories loaded',
       availableBranches: 'Branches',
       repositoryTree: 'Repository Tree',
+      workingTree: 'Working Tree',
+      sourceControl: 'Source Control',
       notConnected: 'Not connected',
       connectFirst: 'Connect a repository first',
       emptyRepoTree: 'No files loaded',
       pendingChanges: 'Changes',
+      noPendingChanges: 'No changes',
+      pendingCount: '{count} changes',
       noGitFileOpen: 'No Git file open',
       uncommitted: 'Uncommitted',
       commitToRepo: 'Commit To Repository',
@@ -1100,6 +1114,7 @@ export const translations: Record<Language, Translations> = {
       loadingPreview: 'Loading preview...',
       inlinePreviewUnavailable: 'Inline preview is not available for this file type. Download to inspect it.',
       downloadFile: 'Download File',
+      localWorktreeFileUnavailable: 'The local worktree file is not available yet. Confirm that the file was created successfully.',
     },
     toast: {
       saved: 'Saved',

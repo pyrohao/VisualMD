@@ -7,7 +7,7 @@
  * 设计参考 Obsidian 的左侧边栏
  */
 
-import { Bot, FolderOpen, LayoutTemplate, Settings, ListTree, HelpCircle, GitBranch } from 'lucide-react'
+import { Bot, FolderOpen, LayoutTemplate, Settings, ListTree, HelpCircle, GitBranch, FolderGit2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useSidebarStore, type SidebarPanel } from '@/stores/sidebarStore'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
@@ -25,10 +25,11 @@ interface IconItem {
 
 const getIcons = (t: (key: string) => string): IconItem[] => [
   { id: 'files', icon: FolderOpen, label: t('sidebar.files'), shortcut: 'Ctrl+1' },
-  { id: 'outline', icon: ListTree, label: t('sidebar.outline'), shortcut: 'Ctrl+2' },
-  { id: 'templates', icon: LayoutTemplate, label: t('sidebar.templates'), shortcut: 'Ctrl+3' },
-  { id: 'ai', icon: Bot, label: 'AI 配置', shortcut: 'Ctrl+4' },
-  { id: 'git', icon: GitBranch, label: t('sidebar.git'), shortcut: 'Ctrl+5' },
+  { id: 'git-files', icon: FolderGit2, label: t('git.repositoryTree'), shortcut: 'Ctrl+2' },
+  { id: 'outline', icon: ListTree, label: t('sidebar.outline'), shortcut: 'Ctrl+3' },
+  { id: 'templates', icon: LayoutTemplate, label: t('sidebar.templates'), shortcut: 'Ctrl+4' },
+  { id: 'git', icon: GitBranch, label: t('git.sourceControl'), shortcut: 'Ctrl+5' },
+  { id: 'ai', icon: Bot, label: 'AI 配置', shortcut: 'Ctrl+6' },
 ]
 
 const getBottomIcons = (t: (key: string) => string): IconItem[] => [

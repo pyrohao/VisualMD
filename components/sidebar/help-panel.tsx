@@ -16,7 +16,7 @@ export function HelpPanel() {
     { label: t('help.saveDocument'), keys: 'Ctrl+S' },
     { label: t('help.globalSearch'), keys: 'Ctrl+F' },
     { label: t('help.toggleLeftPanel'), keys: 'Ctrl+B' },
-    { label: t('help.panelSwitch'), keys: 'Ctrl+1~5' },
+    { label: t('help.panelSwitch'), keys: 'Ctrl+1~6' },
   ]
 
   useEffect(() => {

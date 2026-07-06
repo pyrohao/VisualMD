@@ -17,6 +17,7 @@ import { AIPanel } from './ai-panel'
 import { SettingsPanel } from './settings-panel'
 import { OutlinePanel } from './outline-panel'
 import { GitPanel } from './git-panel'
+import { GitWorktreePanel } from './git-worktree-panel'
 
 interface PanelContainerProps {
   onEditTemplate?: (content: string, templateName: string, templateId: string) => void
@@ -64,6 +65,7 @@ export function PanelContainer({ onEditTemplate, onPreviewTemplate }: PanelConta
           {activePanel === 'outline' && <OutlinePanel />}
           {activePanel === 'ai' && <AIPanel />}
           {activePanel === 'git' && <GitPanel />}
+          {activePanel === 'git-files' && <GitWorktreePanel />}
           {activePanel === 'settings' && <SettingsPanel />}
         </motion.div>
       </AnimatePresence>

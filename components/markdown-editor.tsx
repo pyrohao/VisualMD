@@ -33,7 +33,7 @@ import { MIN_AI_DOCK_WIDTH, useAiDockStore } from '@/stores/aiDockStore'
 import { useAiChatStore } from '@/stores/aiChatStore'
 import { EmptyTabView } from './empty-tab-view'
 import { EditorCanvasShell } from './editor-canvas-shell'
-import { persistActiveTabSave, syncActiveDocumentToActiveSource } from '@/lib/editor-persistence'
+import { persistActiveTabSave, persistMarkdownToActiveSource, syncActiveDocumentToActiveSource } from '@/lib/editor-persistence'
 import { inferGitFileKind, isGitBinaryFileKind } from '@/lib/git/file-kind'
 import { resolveTabCurrentContent, syncTabContentFromSource } from '@/lib/tab-content'
 import { useHistoryStore } from '@/stores/historyStore'
@@ -587,7 +587,24 @@ export function MarkdownEditor() {
       return
     }
 
-    if (currentTab?.sourceType === 'git' && currentTab.fileId && !currentTab.isModified && !documentModified) {
+    if (currentTab?.sourceType === 'git' && currentTab.fileId) {
+      const activeGitDraft = useGitStore.getState().drafts[currentTab.fileId]
+      const shouldPersistGitDraft =
+        documentModified ||
+        currentTab.isModified ||
+        (activeGitDraft ? activeGitDraft.draftContent !== latestMarkdown : true)
+
+      if (!shouldPersistGitDraft) {
+        toast({
+          title: t('git.draftSaved'),
+        })
+        return
+      }
+
+      persistMarkdownToActiveSource(latestMarkdown, currentTab.fileName, {
+        markSaved: true,
+        markDocumentSaved: true,
+      })
       toast({
         title: t('git.draftSaved'),
       })
@@ -665,19 +682,23 @@ export function MarkdownEditor() {
       }
       if ((e.ctrlKey || e.metaKey) && e.key === '2') {
         e.preventDefault()
-        useSidebarStore.getState().setActivePanel('outline')
+        useSidebarStore.getState().setActivePanel('git-files')
       }
       if ((e.ctrlKey || e.metaKey) && e.key === '3') {
         e.preventDefault()
-        useSidebarStore.getState().setActivePanel('templates')
+        useSidebarStore.getState().setActivePanel('outline')
       }
       if ((e.ctrlKey || e.metaKey) && e.key === '4') {
         e.preventDefault()
-        useSidebarStore.getState().setActivePanel('ai')
+        useSidebarStore.getState().setActivePanel('templates')
       }
       if ((e.ctrlKey || e.metaKey) && e.key === '5') {
         e.preventDefault()
         useSidebarStore.getState().setActivePanel('git')
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === '6') {
+        e.preventDefault()
+        useSidebarStore.getState().setActivePanel('ai')
       }
     }
     window.addEventListener('keydown', handleKeyDown)

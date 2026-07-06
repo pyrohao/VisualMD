@@ -10,7 +10,7 @@ import { create } from 'zustand'
 import { devtools, persist } from 'zustand/middleware'
 import { nanoid } from 'nanoid'
 
-export type SidebarPanel = 'files' | 'outline' | 'templates' | 'ai' | 'git' | 'settings' | 'help'
+export type SidebarPanel = 'files' | 'outline' | 'templates' | 'ai' | 'git' | 'git-files' | 'settings' | 'help'
 
 export interface Template {
   id: string
