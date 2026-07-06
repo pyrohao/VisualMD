@@ -665,11 +665,13 @@ export function MarkdownPreview() {
     }
 
     if (externalRevision !== latestExternalRevisionRef.current) {
+      const selectionSnapshot = isEditingMode ? captureEditorSelectionSnapshot() : null
       latestExternalRevisionRef.current = externalRevision
       latestMarkdownRef.current = markdown
       skipLiveSyncRef.current = true
       setEditContent(markdown)
       setPersistedEditContent(markdown)
+      restoreEditorSelectionSnapshot(selectionSnapshot, markdown)
       return
     }
 
@@ -678,7 +680,7 @@ export function MarkdownPreview() {
     if (!isEditingMode || editContent === previousMarkdown) {
       setEditContent(markdown)
     }
-  }, [editContent, externalRevision, isEditingMode, markdown])
+  }, [captureEditorSelectionSnapshot, editContent, externalRevision, isEditingMode, markdown, restoreEditorSelectionSnapshot])
 
   useEffect(() => {
     if (documentKey === previousDocumentKeyRef.current) {

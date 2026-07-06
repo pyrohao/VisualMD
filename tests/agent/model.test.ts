@@ -21,11 +21,11 @@ describe('agent model', () => {
   })
 
   it('parses tool JSON and treats invalid JSON as text', () => {
-    const tool = parseAgentModelResponse('{"tool":"apply_tool","arguments":{"oldString":"a","newString":"b"}}')
+    const tool = parseAgentModelResponse('{"tool":"apply_tool","arguments":{"offset":{"start":1,"end":2},"newString":"b"}}')
     expect(tool.kind).toBe('tool')
     if (tool.kind === 'tool') {
       expect(tool.call.name).toBe('apply_tool')
-      expect(tool.call.arguments).toEqual({ oldString: 'a', newString: 'b' })
+      expect(tool.call.arguments).toEqual({ offset: { start: 1, end: 2 }, newString: 'b' })
     }
 
     expect(parseAgentModelResponse('{not json')).toEqual({ kind: 'text', text: '{not json' })
@@ -58,12 +58,12 @@ describe('agent model', () => {
 
   it('extracts tool JSON with braces inside string arguments', () => {
     const parsed = parseAgentModelResponse(
-      'prefix {"tool":"apply_tool","arguments":{"oldString":"a { tricky } value","newString":"b"}} suffix'
+      'prefix {"tool":"apply_tool","arguments":{"offset":{"start":1,"end":4},"newString":"b { tricky } value"}} suffix'
     )
 
     expect(parsed.kind).toBe('tool')
     if (parsed.kind === 'tool') {
-      expect(parsed.call.arguments.oldString).toBe('a { tricky } value')
+      expect(parsed.call.arguments.offset).toEqual({ start: 1, end: 4 })
     }
   })
 

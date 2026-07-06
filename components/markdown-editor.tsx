@@ -38,6 +38,7 @@ import { inferGitFileKind, isGitBinaryFileKind } from '@/lib/git/file-kind'
 import { resolveTabCurrentContent, syncTabContentFromSource } from '@/lib/tab-content'
 import { useHistoryStore } from '@/stores/historyStore'
 import { DEFAULT_WELCOME_DOCUMENTS } from '@/lib/default-documents'
+import { isAiDocumentHistoryDescription } from '@/lib/ai-document-history'
 
 type OutlineJumpDetail = {
   line: number
@@ -78,6 +79,52 @@ function isTextEditingTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false
   const tagName = target.tagName.toLowerCase()
   return target.isContentEditable || tagName === 'input' || tagName === 'textarea' || tagName === 'select'
+}
+
+type TextControlSnapshot = {
+  element: HTMLInputElement | HTMLTextAreaElement
+  start: number
+  end: number
+  direction?: 'forward' | 'backward' | 'none'
+  scrollTop: number
+  scrollLeft: number
+}
+
+function captureTextControlSnapshot(target: EventTarget | null): TextControlSnapshot | null {
+  if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) {
+    return null
+  }
+
+  return {
+    element: target,
+    start: target.selectionStart ?? 0,
+    end: target.selectionEnd ?? 0,
+    direction: target.selectionDirection ?? 'none',
+    scrollTop: target.scrollTop,
+    scrollLeft: target.scrollLeft,
+  }
+}
+
+function restoreTextControlSnapshot(snapshot: TextControlSnapshot | null) {
+  if (!snapshot) {
+    return
+  }
+
+  window.requestAnimationFrame(() => {
+    const { element } = snapshot
+    if (!element.isConnected) {
+      return
+    }
+
+    const nextLength = element.value.length
+    const nextStart = Math.min(snapshot.start, nextLength)
+    const nextEnd = Math.min(snapshot.end, nextLength)
+
+    element.focus({ preventScroll: true })
+    element.setSelectionRange(nextStart, nextEnd, snapshot.direction)
+    element.scrollTop = snapshot.scrollTop
+    element.scrollLeft = snapshot.scrollLeft
+  })
 }
 
 function BinaryGitCanvasPlaceholder({
@@ -555,12 +602,14 @@ export function MarkdownEditor() {
   // 监听 Ctrl+S 保存
   useEffect(() => {
     const runDocumentHistoryShortcut = (type: 'undo' | 'redo') => {
+      const focusSnapshot = captureTextControlSnapshot(globalThis.document?.activeElement ?? null)
       const documentStore = useDocumentStore.getState()
       const applied = type === 'undo' ? documentStore.undo() : documentStore.redo()
       if (!applied) return false
 
       syncActiveDocumentToActiveSource({ markSaved: false })
       useAiChatStore.getState().syncToolUndoStackWithMarkdown(documentStore.getCurrentMarkdown())
+      restoreTextControlSnapshot(focusSnapshot)
       return true
     }
 
@@ -574,7 +623,7 @@ export function MarkdownEditor() {
         const targetHistoryDescription = isUndoKey
           ? historyStore.getCurrentDescription()
           : historyStore.getRedoDescription()
-        const shouldPreferNativeTextUndo = isTextEditingTarget(e.target) && targetHistoryDescription !== 'AI agent apply_tool'
+        const shouldPreferNativeTextUndo = isTextEditingTarget(e.target) && !isAiDocumentHistoryDescription(targetHistoryDescription)
         if (!shouldPreferNativeTextUndo) {
           const applied = runDocumentHistoryShortcut(isUndoKey ? 'undo' : 'redo')
           if (applied) {

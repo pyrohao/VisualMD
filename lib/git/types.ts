@@ -70,6 +70,7 @@ export interface GitDraftFile extends GitFileRef {
   draftContent: string
   isDirty: boolean
   isNew?: boolean
+  creationSource?: 'git' | 'local'
   status?: GitDraftStatus
   remoteContent?: string
   remoteSha?: string

@@ -73,8 +73,9 @@ describe('agent runtime', () => {
       .mockImplementationOnce(async (options) => {
         options.onDelta?.('{', '{')
         options.onDelta?.('"tool"', '{"tool"')
-        return '{"tool":"apply_tool","arguments":{"oldString":"x","newString":"y"}}'
+        return '{"tool":"find_tool","arguments":{"query":"x"}}'
       })
+      .mockResolvedValueOnce('{"tool":"apply_tool","arguments":{"offset":{"start":0,"end":1},"newString":"y"}}')
       .mockResolvedValueOnce('Done')
     const deltas: string[] = []
     const messages: AgentMessage[] = [
@@ -126,7 +127,8 @@ describe('agent runtime', () => {
 
   it('executes tool calls and continues to final text', async () => {
     vi.spyOn(AIService.prototype, 'chatMessagesStream')
-      .mockResolvedValueOnce('{"tool":"apply_tool","arguments":{"oldString":"old","newString":"new"}}')
+      .mockResolvedValueOnce('{"tool":"find_tool","arguments":{"query":"old"}}')
+      .mockResolvedValueOnce('{"tool":"apply_tool","arguments":{"offset":{"start":0,"end":3},"newString":"new"}}')
       .mockResolvedValueOnce('Applied')
     const messages: AgentMessage[] = [
       { id: 'u1', conversationId: 'c1', role: 'user', message: 'replace', createdAt: 1 },
@@ -191,7 +193,7 @@ describe('agent runtime', () => {
     })
 
     expect(result.appliedMarkdown).toBe('# Title\n\nhello')
-    expect(result.messages.some((message) => message.role === 'assistant' && message.message.includes('I updated it for you.'))).toBe(false)
+    expect(result.messages.some((message) => message.role === 'assistant' && message.message.includes('I updated it for you.'))).toBe(true)
     expect(result.messages.some((message) => message.role === 'tool' && message.error?.includes('Return only JSON like {"action":"replace","content":"..."}'))).toBe(true)
   })
 
@@ -237,6 +239,27 @@ describe('agent runtime', () => {
     expect(result.messages.at(-1)?.message).toBe('Completed')
   })
 
+  it('uses apply_tool offset to replace the intended repeated occurrence', async () => {
+    vi.spyOn(AIService.prototype, 'chatMessagesStream')
+      .mockResolvedValueOnce('{"tool":"find_tool","arguments":{"query":"target"}}')
+      .mockResolvedValueOnce('{"tool":"apply_tool","arguments":{"offset":{"start":21,"end":27},"newString":"updated"}}')
+      .mockResolvedValueOnce('Applied the second target only.')
+
+    const result = await runAgentReActLoop({
+      providerConfig,
+      apiKey: 'test',
+      messages: [
+        { id: 'u1', conversationId: 'c1', role: 'user', message: 'replace the second target', createdAt: 1 },
+      ],
+      tools: createDefaultAgentTools(),
+      markdown: '# Title\n\ntarget\n\nand\ntarget\n',
+    })
+
+    expect(result.appliedMarkdown).toBe('# Title\n\ntarget\n\nand\nupdated\n')
+    expect(result.messages.some((message) => message.role === 'tool' && message.toolName === 'apply_tool' && message.state === 'done')).toBe(true)
+    expect(result.messages.at(-1)?.message).toBe('Applied the second target only.')
+  })
+
   it('consumes append action JSON and appends content to document end', async () => {
     vi.spyOn(AIService.prototype, 'chatMessagesStream')
       .mockResolvedValueOnce('{"action":"append","content":"## New Section\\n\\nMore content"}')
@@ -272,11 +295,58 @@ describe('agent runtime', () => {
     expect(result.messages.at(-1)?.message).toBe('Appended')
   })
 
+  it('consumes append action JSON and inserts content after the live selected range', async () => {
+    vi.spyOn(AIService.prototype, 'chatMessagesStream')
+      .mockResolvedValueOnce('{"action":"append","content":"## 解释\\n\\n补充说明"}')
+      .mockResolvedValueOnce('Appended near selection')
+    const messages: AgentMessage[] = [
+      {
+        id: 'u1',
+        conversationId: 'c1',
+        role: 'user',
+        message: [
+          'Task type: ask',
+          'User request:',
+          '在当前标题后追加解释',
+          '',
+          'Selected document text:',
+          '<selected_text>',
+          'Overview',
+          '</selected_text>',
+        ].join('\n'),
+        createdAt: 1,
+      },
+    ]
+
+    const result = await runAgentReActLoop({
+      providerConfig,
+      apiKey: 'test',
+      messages,
+      tools: createDefaultAgentTools(),
+      markdown: '# Overview\n\nExisting body',
+      selectedReference: {
+        startOffset: 2,
+        endOffset: 10,
+        expectedText: 'Overview',
+      },
+      maxTurns: 5,
+    })
+
+    expect(result.appliedMarkdown).toBe('# Overview\n\n## 解释\n\n补充说明\n\nExisting body')
+    expect(result.messages.some((message) =>
+      message.toolName === 'document_action' &&
+      message.role === 'tool' &&
+      message.state === 'done' &&
+      message.message.includes('"usedSelectionAnchor":true')
+    )).toBe(true)
+    expect(result.messages.at(-1)?.message).toBe('Appended near selection')
+  })
+
   it('uses find recovery after an apply failure', async () => {
     vi.spyOn(AIService.prototype, 'chatMessagesStream')
-      .mockResolvedValueOnce('{"tool":"apply_tool","arguments":{"oldString":"old text","newString":"new text"}}')
+      .mockResolvedValueOnce('{"tool":"apply_tool","arguments":{"offset":{"start":0,"end":8},"newString":"new text"}}')
       .mockResolvedValueOnce('{"tool":"find_tool","arguments":{"query":"Visual markdown paragraph."}}')
-      .mockResolvedValueOnce('{"tool":"apply_tool","arguments":{"oldString":"Visual markdown paragraph.","newString":"New visual markdown paragraph."}}')
+      .mockResolvedValueOnce('{"tool":"apply_tool","arguments":{"offset":{"start":0,"end":26},"newString":"New visual markdown paragraph."}}')
       .mockResolvedValueOnce('Recovered')
     const messages: AgentMessage[] = [
       { id: 'u1', conversationId: 'c1', role: 'user', message: 'replace', createdAt: 1 },
@@ -296,6 +366,54 @@ describe('agent runtime', () => {
     expect(result.messages.some((message) => message.message.includes('New visual markdown paragraph.'))).toBe(false)
     expect(result.messages.some((message) => message.role === 'tool' && message.message.includes('Visual markdown paragraph.'))).toBe(false)
     expect(result.messages.at(-1)?.message).toBe('Recovered')
+  })
+
+  it('preserves intermediate assistant text during structured recovery and still reaches a final reply', async () => {
+    vi.spyOn(AIService.prototype, 'chatMessagesStream')
+      .mockResolvedValueOnce('{"action":"replace","content":"补充解释"}')
+      .mockResolvedValueOnce('没有找到，文档可能已经变化，我先重新定位。')
+      .mockResolvedValueOnce('{"tool":"find_tool","arguments":{"query":"**答案：**"}}')
+      .mockResolvedValueOnce('{"tool":"apply_tool","arguments":{"offset":{"start":9,"end":16},"newString":"**答案：**\\n\\n这里是解释"}}')
+      .mockResolvedValueOnce('我已补充答案解释。')
+
+    const result = await runAgentReActLoop({
+      providerConfig,
+      apiKey: 'test',
+      messages: [
+        {
+          id: 'u1',
+          conversationId: 'c1',
+          role: 'user',
+          message: [
+            'Task type: ask',
+            'User request:',
+            '检查答案并添加解释',
+            '',
+            'Selected document text:',
+            '<selected_text>',
+            '**答案：**',
+            '</selected_text>',
+          ].join('\n'),
+          createdAt: 1,
+        },
+      ],
+      tools: createDefaultAgentTools(),
+      markdown: '# Title\n\n**答案：**',
+      selectedReference: {
+        startOffset: 999,
+        endOffset: 1005,
+        expectedText: '**答案：**',
+      },
+      maxTurns: 5,
+    })
+
+    const assistantMessages = result.messages.filter((message) => message.role === 'assistant' && !message.toolName)
+    expect(assistantMessages.map((message) => message.message)).toEqual([
+      '没有找到，文档可能已经变化，我先重新定位。',
+      '我已补充答案解释。',
+    ])
+    expect(result.appliedMarkdown).toContain('这里是解释')
+    expect(result.messages.at(-1)?.message).toBe('我已补充答案解释。')
   })
 
   it('executes generate_document_tool and returns generated files', async () => {

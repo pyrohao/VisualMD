@@ -8,16 +8,26 @@ import type {
   AgentDocumentAction,
   AgentGeneratedDocumentEvent,
   AgentMessage,
+  AgentRecoveryCandidate,
   AgentReferenceContext,
   AgentToolContext,
   AgentToolResult,
 } from './types'
 import { buildInvalidToolArgumentsResult, validateToolArguments, type AgentTool } from './tools'
 
-const MAX_FIND_TOOL_CALLS = 3
-const MAX_STRUCTURED_RESPONSE_RETRIES = 3
+const MAX_TOOL_CALLS = 3
+const MAX_FIND_TOOL_CALLS = 2
+const MAX_STRUCTURED_RESPONSE_RETRIES = 2
+const MAX_RECOVERY_CHAINS = 1
 
 type RequiredResponseMode = 'document-action' | 'tool' | null
+type RuntimePhase =
+  | 'planning'
+  | 'need-document-action'
+  | 'need-tool-recovery'
+  | 'tool-executing'
+  | 'need-user-confirmation'
+  | 'done'
 
 export interface AgentRuntimeTurnOptions {
   providerConfig: ProviderConfig
@@ -150,6 +160,12 @@ function initialRequiredResponseMode(messages: AgentMessage[], selectedReference
     : null
 }
 
+function initialRuntimePhase(messages: AgentMessage[], selectedReference?: AgentReferenceContext | null): RuntimePhase {
+  return initialRequiredResponseMode(messages, selectedReference) === 'document-action'
+    ? 'need-document-action'
+    : 'planning'
+}
+
 function canConsumeDocumentAction(
   action: AgentDocumentAction,
   _messages: AgentMessage[],
@@ -240,6 +256,24 @@ function appendContentToDocument(markdown: string, content: string) {
   return `${base}\n\n${normalizedContent}\n`
 }
 
+function appendContentAfterOffset(markdown: string, content: string, offset: number) {
+  const normalizedContent = content.trim()
+  const before = markdown.slice(0, offset).replace(/\s+$/, '')
+  const after = markdown.slice(offset).replace(/^\s+/, '')
+
+  if (!before) {
+    return after
+      ? `${normalizedContent}\n\n${after}`
+      : `${normalizedContent}\n`
+  }
+
+  if (!after) {
+    return `${before}\n\n${normalizedContent}\n`
+  }
+
+  return `${before}\n\n${normalizedContent}\n\n${after}`
+}
+
 function executeDocumentAction(
   action: AgentDocumentAction,
   markdown: string,
@@ -262,14 +296,33 @@ function executeDocumentAction(
   }
 
   if (action.action === 'append') {
+    const selectedStart = typeof selectedReference?.startOffset === 'number' ? selectedReference.startOffset : null
+    const selectedEnd = typeof selectedReference?.endOffset === 'number' ? selectedReference.endOffset : null
+    const expectedText = typeof selectedReference?.expectedText === 'string' ? selectedReference.expectedText : ''
+    const hasValidSelectionAnchor = (
+      selectedStart !== null &&
+      selectedEnd !== null &&
+      selectedStart >= 0 &&
+      selectedEnd >= selectedStart &&
+      expectedText.length > 0 &&
+      markdown.slice(selectedStart, selectedEnd) === expectedText
+    )
+
     return {
       ok: true,
-      message: 'document_action append succeeded. The new section has been appended to the end of the current document. Do not repeat the same append. Next, briefly confirm the change to the user.',
-      nextMarkdown: appendContentToDocument(markdown, action.content),
+      message: hasValidSelectionAnchor
+        ? 'document_action append succeeded. The new content has been inserted after the selected content anchor in the current document. Do not repeat the same append. Next, briefly confirm the change to the user.'
+        : 'document_action append succeeded. The new section has been appended to the end of the current document. Do not repeat the same append. Next, briefly confirm the change to the user.',
+      nextMarkdown: hasValidSelectionAnchor
+        ? appendContentAfterOffset(markdown, action.content, selectedEnd)
+        : appendContentToDocument(markdown, action.content),
       metadata: {
         action: action.action,
         shouldReplyToUser: true,
+        selectedStart: hasValidSelectionAnchor ? selectedStart : undefined,
+        selectedEnd: hasValidSelectionAnchor ? selectedEnd : undefined,
         nextStep: 'Briefly confirm the append to the user.',
+        usedSelectionAnchor: hasValidSelectionAnchor,
       },
     }
   }
@@ -287,11 +340,11 @@ function executeDocumentAction(
   ) {
     return {
       ok: false,
-      message: 'document_action replace failed: no live selected text is available. Use find_tool with the exact target text, then use apply_tool if an exact candidate is found.',
+      message: 'document_action replace failed: no live selected text is available. Use find_tool with the exact target text, then use apply_tool with one exact returned candidate range by mapping startOffset/endOffset to offset.start/offset.end.',
       metadata: {
         action: action.action,
         failedText: expectedText,
-        nextStep: 'Call find_tool with the exact target text, then use apply_tool if a single candidate is confirmed.',
+        nextStep: 'Call find_tool with the exact target text, then use apply_tool with one exact returned candidate range by mapping startOffset/endOffset to offset.start/offset.end.',
       },
     }
   }
@@ -300,13 +353,13 @@ function executeDocumentAction(
   if (currentSelectedText !== expectedText) {
     return {
       ok: false,
-      message: 'document_action replace failed: the selected text is stale or no longer matches the current document. Use find_tool with the exact previously selected text, then use apply_tool if a single candidate is found.',
+      message: 'document_action replace failed: the selected text is stale or no longer matches the current document. Use find_tool with the exact previously selected text, then use apply_tool with one exact returned candidate range by mapping startOffset/endOffset to offset.start/offset.end.',
       metadata: {
         action: action.action,
         failedText: expectedText,
         selectedStart,
         selectedEnd,
-        nextStep: 'Call find_tool with the exact previously selected text, then use apply_tool if a single candidate is confirmed.',
+        nextStep: 'Call find_tool with the exact previously selected text, then use apply_tool with one exact returned candidate range by mapping startOffset/endOffset to offset.start/offset.end.',
       },
     }
   }
@@ -334,11 +387,22 @@ function isRetryableStructuredToolFailure(tool: AgentTool | undefined, result: A
   return Boolean(tool) && isToolValidationFailure(result)
 }
 
+function createBudgetFailureMessage(conversationId: string, message: string): AgentMessage {
+  return {
+    id: nanoid(),
+    conversationId,
+    role: 'assistant',
+    message,
+    createdAt: Date.now(),
+    state: 'failed',
+    error: message,
+  }
+}
+
 export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promise<AgentRuntimeTurnResult> {
   const conversationId = options.messages[0]?.conversationId || ''
   const service = createAIService(options.providerConfig)
   const systemPrompt = buildToolSystemPrompt(options.tools)
-  const maxTurns = options.maxTurns ?? 5
   const messages: AgentMessage[] = [...options.messages]
   const modelMessages: AgentMessage[] = [...options.messages]
   const previousMarkdown = options.markdown
@@ -349,9 +413,13 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
   let markdown = options.markdown
   let stopReason: AgentRuntimeTurnResult['stoppedBecause'] = 'tool-limit'
   let lastFailedContext: string | null = null
+  let lastFindCandidates: AgentRecoveryCandidate[] = []
+  let toolCallCount = 0
   let consecutiveFindToolCalls = 0
+  let recoveryChainCount = 0
   let structuredRetryCount = 0
   let requiredResponseMode: RequiredResponseMode = initialRequiredResponseMode(options.messages, options.selectedReference)
+  let phase: RuntimePhase = initialRuntimePhase(options.messages, options.selectedReference)
 
   const failStructuredResponse = (reason: string) => {
     const failedMessage = createInvalidStructuredResponseMessage(conversationId, reason)
@@ -368,7 +436,38 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
     }
   }
 
-  for (let turn = 0; turn < maxTurns; turn += 1) {
+  const failBudget = (message: string) => {
+    const failedMessage = createBudgetFailureMessage(conversationId, message)
+    messages.push(failedMessage)
+    modelMessages.push(failedMessage)
+    return {
+      messages,
+      appliedMarkdown: markdown,
+      previousMarkdown,
+      appliedToolCallIds,
+      appliedTools,
+      generatedFiles,
+      stoppedBecause: 'tool-limit' as const,
+    }
+  }
+
+  const enterRecoveryPhase = (reason: string) => {
+    if (phase !== 'need-tool-recovery') {
+      recoveryChainCount += 1
+      if (recoveryChainCount > MAX_RECOVERY_CHAINS) {
+        return failBudget(
+          'Recovery step limit reached. The model already used one find/apply recovery chain and must now stop and ask the user for a more precise target.'
+        )
+      }
+    }
+
+    requiredResponseMode = 'tool'
+    phase = 'need-tool-recovery'
+    lastFailedContext = reason || lastFailedContext
+    return null
+  }
+
+  for (;;) {
     if (options.signal?.aborted) {
       throw new Error('AI request aborted')
     }
@@ -421,12 +520,25 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
     if (parsed.kind === 'text') {
       const text = parsed.text.trim()
       if (requiredResponseMode) {
+        phase = requiredResponseMode === 'document-action' ? 'need-document-action' : 'need-tool-recovery'
+        if (text) {
+          emitAssistantTextDelta(text)
+          messages.push({
+            id: nanoid(),
+            conversationId,
+            role: 'assistant',
+            message: text,
+            createdAt: Date.now(),
+            state: 'done',
+          })
+        }
+
         structuredRetryCount += 1
         if (structuredRetryCount >= MAX_STRUCTURED_RESPONSE_RETRIES) {
           return failStructuredResponse(
             requiredResponseMode === 'document-action'
-              ? 'The model failed to return valid document action JSON after 3 attempts.'
-              : 'The model failed to return valid tool JSON after 3 attempts.'
+              ? `The model failed to return valid document action JSON after ${MAX_STRUCTURED_RESPONSE_RETRIES} attempts.`
+              : `The model failed to return valid tool JSON after ${MAX_STRUCTURED_RESPONSE_RETRIES} attempts.`
           )
         }
 
@@ -471,21 +583,25 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
       }
       messages.push(assistantMessage)
       modelMessages.push(assistantMessage)
+      phase = 'done'
       stopReason = 'assistant-text'
       return { messages, appliedMarkdown: markdown, previousMarkdown, appliedToolCallIds, appliedTools, generatedFiles, stoppedBecause: stopReason }
     }
 
     if (parsed.kind === 'action') {
       if (requiredResponseMode === 'tool') {
+        phase = 'need-tool-recovery'
         structuredRetryCount += 1
         if (structuredRetryCount >= MAX_STRUCTURED_RESPONSE_RETRIES) {
-          return failStructuredResponse('The model kept returning document action JSON when a recovery tool step was required.')
+          return failStructuredResponse(
+            `The model kept returning document action JSON when a recovery tool step was required after ${MAX_STRUCTURED_RESPONSE_RETRIES} attempts.`
+          )
         }
 
         const feedbackMessage = createStructuredFeedbackMessage(
           conversationId,
           'tool',
-          'The live selection could not be applied directly. Return a tool JSON response now. First use find_tool with the exact target text, then use apply_tool if a unique candidate is confirmed.'
+          'The live selection could not be applied directly. Return a tool JSON response now. First use find_tool with the exact target text. Then call apply_tool with offset.start and offset.end copied from the chosen find_tool candidate, plus the replacement newString.'
         )
         messages.push(feedbackMessage)
         modelMessages.push(feedbackMessage)
@@ -493,9 +609,12 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
       }
 
       if (!canConsumeDocumentAction(parsed.action, options.messages, options.selectedReference) && requiredResponseMode !== 'document-action') {
+        phase = 'planning'
         structuredRetryCount += 1
         if (structuredRetryCount >= MAX_STRUCTURED_RESPONSE_RETRIES) {
-          return failStructuredResponse('The model returned document action JSON for a request that did not require an in-place document edit.')
+          return failStructuredResponse(
+            `The model returned document action JSON for a request that did not require an in-place document edit after ${MAX_STRUCTURED_RESPONSE_RETRIES} attempts.`
+          )
         }
 
         const feedbackMessage = createStructuredFeedbackMessage(
@@ -509,6 +628,7 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
       }
 
       structuredRetryCount = 0
+      phase = 'tool-executing'
 
       const actionCallId = nanoid()
       const assistantHistoryMessage: AgentMessage = {
@@ -530,12 +650,16 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
 
       const actionResult = executeDocumentAction(parsed.action, markdown, options.selectedReference)
       if (!actionResult.ok) {
-        lastFailedContext = typeof actionResult.metadata?.failedText === 'string'
+        const failedText = typeof actionResult.metadata?.failedText === 'string'
           ? actionResult.metadata.failedText
-          : lastFailedContext
-        requiredResponseMode = 'tool'
+          : ''
+        const recoveryFailure = enterRecoveryPhase(failedText)
+        if (recoveryFailure) {
+          return recoveryFailure
+        }
       } else {
         requiredResponseMode = null
+        phase = 'need-user-confirmation'
       }
 
       if (actionResult.ok && actionResult.nextMarkdown) {
@@ -575,10 +699,13 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
       id: nanoid(),
     }
 
-    if (requiredResponseMode === 'document-action') {
+      if (requiredResponseMode === 'document-action') {
+      phase = 'need-document-action'
       structuredRetryCount += 1
       if (structuredRetryCount >= MAX_STRUCTURED_RESPONSE_RETRIES) {
-        return failStructuredResponse('The model failed to return the required document action JSON after 3 attempts.')
+        return failStructuredResponse(
+          `The model failed to return the required document action JSON after ${MAX_STRUCTURED_RESPONSE_RETRIES} attempts.`
+        )
       }
 
       const feedbackMessage = createStructuredFeedbackMessage(
@@ -592,11 +719,35 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
     }
 
     const tool = options.tools.find((item) => item.name === toolCall.name)
+    phase = 'tool-executing'
+
+    if (toolCallCount >= MAX_TOOL_CALLS) {
+      const assistantHistoryMessage: AgentMessage = {
+        id: nanoid(),
+        conversationId,
+        role: 'assistant',
+        message: serializeToolCallForHistory(toolCall),
+        createdAt: Date.now(),
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        state: 'done',
+      }
+      messages.push(assistantHistoryMessage)
+      modelMessages.push({
+        ...assistantHistoryMessage,
+        message: serializeToolCallForModel(toolCall),
+      })
+      return failBudget(
+        `Tool call limit reached. The model attempted more than ${MAX_TOOL_CALLS} tool calls in one run and must stop here.`
+      )
+    }
+
+    toolCallCount += 1
 
     if (toolCall.name === 'find_tool' && consecutiveFindToolCalls >= MAX_FIND_TOOL_CALLS) {
       const limitResult: AgentToolResult = {
         ok: false,
-        message: 'find_tool failed: search limit exceeded for this run. Stop calling find_tool and ask the user for a more precise target or explain that the text could not be located.',
+        message: `find_tool failed: search limit exceeded for this run after ${MAX_FIND_TOOL_CALLS} attempts. Stop calling find_tool and ask the user for a more precise target or explain that the text could not be located.`,
         metadata: {
           nextStep: 'Ask the user for a more precise target or explain that the text could not be located.',
           limitExceeded: true,
@@ -630,6 +781,7 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
         { ...toolHistoryMessage, message: serializeToolResultForModel(limitResult) }
       )
       requiredResponseMode = 'tool'
+      phase = 'need-tool-recovery'
       continue
     }
 
@@ -653,6 +805,7 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
     const toolResult = await runTool(tool, toolCall.arguments, {
       markdown,
       lastFailedContext,
+      recoveryCandidates: lastFindCandidates,
       selectedReference: options.selectedReference,
       providerConfig: options.providerConfig,
       signal: options.signal,
@@ -663,15 +816,19 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
     if (!toolResult.ok && toolCall.name === 'apply_tool') {
       lastFailedContext = typeof toolResult.metadata?.failedText === 'string'
         ? toolResult.metadata.failedText
-        : typeof toolCall.arguments.oldString === 'string'
-          ? toolCall.arguments.oldString
-          : lastFailedContext
+        : lastFailedContext
     }
 
     if (toolCall.name === 'find_tool') {
       consecutiveFindToolCalls += 1
+      lastFindCandidates = toolResult.ok && Array.isArray(toolResult.metadata?.results)
+        ? (toolResult.metadata.results as AgentRecoveryCandidate[])
+        : []
     } else if (toolResult.ok && (toolCall.name === 'apply_tool' || toolCall.name === 'generate_document_tool')) {
       consecutiveFindToolCalls = 0
+      if (toolCall.name === 'apply_tool') {
+        lastFindCandidates = []
+      }
     }
 
     if (toolResult.ok && toolResult.nextMarkdown) {
@@ -713,9 +870,12 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
     if (isRetryableStructuredToolFailure(tool, toolResult)) {
       structuredRetryCount += 1
       if (structuredRetryCount >= MAX_STRUCTURED_RESPONSE_RETRIES) {
-        return failStructuredResponse('The model failed to produce valid non-empty tool JSON arguments after 3 attempts.')
+        return failStructuredResponse(
+          `The model failed to produce valid non-empty tool JSON arguments after ${MAX_STRUCTURED_RESPONSE_RETRIES} attempts.`
+        )
       }
       requiredResponseMode = 'tool'
+      phase = 'need-tool-recovery'
       continue
     }
 
@@ -728,26 +888,22 @@ export async function runAgentReActLoop(options: AgentRuntimeTurnOptions): Promi
     if (toolResult.ok) {
       if (toolCall.name === 'find_tool') {
         requiredResponseMode = 'tool'
+        phase = 'need-tool-recovery'
       } else if (toolCall.name === 'apply_tool' || toolCall.name === 'generate_document_tool') {
         requiredResponseMode = null
+        phase = 'need-user-confirmation'
       }
       continue
     }
 
-    requiredResponseMode = 'tool'
+    const recoveryFailure = enterRecoveryPhase(
+      typeof toolResult.metadata?.failedText === 'string'
+        ? toolResult.metadata.failedText
+        : lastFailedContext || ''
+    )
+    if (recoveryFailure) {
+      return recoveryFailure
+    }
   }
 
-  const limitMessage: AgentMessage = {
-    id: nanoid(),
-    conversationId,
-    role: 'assistant',
-    message: 'Tool loop limit reached.',
-    createdAt: Date.now(),
-    state: 'failed',
-    error: 'Tool loop limit reached',
-  }
-  messages.push(limitMessage)
-  modelMessages.push(limitMessage)
-
-  return { messages, appliedMarkdown: markdown, previousMarkdown, appliedToolCallIds, appliedTools, generatedFiles, stoppedBecause: stopReason }
 }

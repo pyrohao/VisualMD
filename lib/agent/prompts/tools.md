@@ -9,6 +9,8 @@
 7. If you call a tool, return only one JSON object in the format `{"tool":"tool_name","arguments":{...}}`. Do not add explanations, prefixes, suffixes, or Markdown fences.
 8. Fill `arguments` strictly according to the JSON definitions below. Required fields must be present and all string fields must be non-empty.
 9. Do not call `find_tool` before the runtime tells you the direct replace path failed or the selection is stale. After `find_tool`, use `apply_tool` only when you have an exact candidate fragment.
+10. When the runtime already has a live selection anchor, do not invent or guess offsets. The direct replace path is handled by the runtime.
+11. After `find_tool`, if you choose a returned candidate occurrence, call `apply_tool` with `offset: { "start": <startOffset>, "end": <endOffset> }` copied from that candidate, plus `newString`.
 
 ## Tool Definitions JSON
 

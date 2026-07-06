@@ -48,6 +48,10 @@ import { useHistoryStore } from './historyStore'
 import { useSettingsStore } from './settingsStore'
 import { useTabsStore } from './tabsStore'
 import { saveDirtyEditors } from './unsavedChangesStore'
+import {
+  AI_DOCUMENT_EDIT_HISTORY_DESCRIPTION,
+  AI_DOCUMENT_UNDO_HISTORY_DESCRIPTION,
+} from '@/lib/ai-document-history'
 import { applyMarkdownToDocument, persistMarkdownToActiveSource } from '@/lib/editor-persistence'
 import { joinGitPath, normalizeGitPath } from '@/lib/git/utils'
 
@@ -423,7 +427,7 @@ function isVisibleMessage(message: AgentMessage) {
 }
 
 function getVisibleMessages(messages: AgentMessage[]): VisibleAgentMessage[] {
-  return messages.filter(isVisibleMessage).map((message) => {
+  const visibleMessages = messages.filter(isVisibleMessage).map((message) => {
     const displaySource = getDisplayMessage(message)
     const parsed = message.role === 'assistant'
       ? splitAssistantThinking(displaySource)
@@ -435,6 +439,41 @@ function getVisibleMessages(messages: AgentMessage[]): VisibleAgentMessage[] {
       thinking: message.role === 'assistant' ? parsed.thinking : undefined,
     }
   })
+
+  return visibleMessages.reduce<VisibleAgentMessage[]>((accumulator, message) => {
+    const previousMessage = accumulator.at(-1)
+    if (
+      previousMessage &&
+      previousMessage.role === 'assistant' &&
+      message.role === 'assistant'
+    ) {
+      const mergedDisplayMessage = [
+        previousMessage.displayMessage || previousMessage.message,
+        message.displayMessage || message.message,
+      ]
+        .filter(Boolean)
+        .join('\n\n')
+      const mergedThinking = [
+        previousMessage.thinking || '',
+        message.thinking || '',
+      ]
+        .filter(Boolean)
+        .join('\n\n')
+
+      accumulator[accumulator.length - 1] = {
+        ...message,
+        id: previousMessage.id,
+        createdAt: previousMessage.createdAt,
+        message: mergedDisplayMessage,
+        displayMessage: mergedDisplayMessage,
+        thinking: mergedThinking || undefined,
+      }
+      return accumulator
+    }
+
+    accumulator.push(message)
+    return accumulator
+  }, [])
 }
 
 function createToolUndoRecord(args: {
@@ -1782,7 +1821,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         set({ sendingStatus: '正在应用工具结果...' })
         useHistoryStore.getState().addHistory({
           type: 'batch',
-          description: 'AI agent document edit',
+          description: AI_DOCUMENT_EDIT_HISTORY_DESCRIPTION,
         })
         if (!hasDocumentIdentity(targetIdentity)) {
           throw new Error('AI 工具写回失败：当前没有激活文档。无选区编辑或追加内容时，请先打开目标文档。')
@@ -1925,7 +1964,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
 
     useHistoryStore.getState().addHistory({
       type: 'batch',
-      description: 'Undo AI agent document edit',
+      description: AI_DOCUMENT_UNDO_HISTORY_DESCRIPTION,
     })
     await applyMarkdownTransaction(
       target.previousMarkdown,

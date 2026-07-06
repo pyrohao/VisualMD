@@ -67,4 +67,45 @@ describe('migrateGitStorePersistedState', () => {
     expect(migrated.currentDocumentId).toBe('doc-id')
     expect(migrated.expandedPaths).toEqual(['docs'])
   })
+
+  it('restores pending structural changes in v4 workspace state', () => {
+    const migrated = migrateGitStorePersistedState({
+      config: {
+        provider: 'github',
+        token: 'plain-token-3',
+        ownerOrNamespace: 'owner',
+        repo: 'repo',
+        branch: 'main',
+      },
+      connected: true,
+      drafts: {},
+      stagedChanges: [],
+      pendingAssetChanges: [],
+      workspaceStateByKey: {
+        'github:owner:repo:main': {
+          drafts: {},
+          stagedChanges: [],
+          pendingAssetChanges: [],
+          pendingStructuralChanges: [{
+            id: 'git-delete-file:README.md',
+            kind: 'git-delete-file',
+            label: 'README.md',
+            repoPath: 'README.md',
+            documentId: 'doc-id',
+            originalContent: '# old',
+            originalSha: 'sha-old',
+            updatedAt: 123,
+          }],
+          currentDocumentId: null,
+          expandedPaths: [],
+          pendingCommitMessage: null,
+          baseTreeMap: {},
+        },
+      },
+    }, 4)
+
+    expect(migrated.pendingStructuralChanges).toHaveLength(1)
+    expect(migrated.pendingStructuralChanges?.[0]?.kind).toBe('git-delete-file')
+    expect(Object.keys(migrated.workspaceStateByKey || {})).toContain('github:owner:repo:main')
+  })
 })

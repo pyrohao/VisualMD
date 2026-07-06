@@ -5,49 +5,51 @@ import {
   defaultAgentToolDefinitions,
   executeApplyTool,
   executeGenerateDocumentTool,
-  executeSemanticTool,
   validateToolArguments,
 } from '@/lib/agent'
 
 describe('agent tools', () => {
-  it('applies exact single-match replacements', async () => {
+  it('applies replacements using a find candidate range', async () => {
     const result = await executeApplyTool(
-      { oldString: 'Old paragraph.', newString: 'New paragraph.' },
-      { markdown: '# Doc\n\nOld paragraph.' }
+      { offset: { start: 7, end: 21 }, newString: 'New paragraph.' },
+      {
+        markdown: '# Doc\n\nOld paragraph.',
+        recoveryCandidates: [
+          {
+            startOffset: 7,
+            endOffset: 21,
+            matchText: 'Old paragraph.',
+            preview: '# Doc\n\nOld paragraph.',
+          },
+        ],
+      }
     )
 
     expect(result.ok).toBe(true)
     expect(result.nextMarkdown).toContain('New paragraph.')
   })
 
-  it('rejects missing and duplicate oldString matches', async () => {
-    const missing = await executeApplyTool({ oldString: 'x', newString: 'y' }, { markdown: 'abc' })
+  it('rejects missing and stale candidate ranges', async () => {
+    const missing = await executeApplyTool({ newString: 'y' } as any, { markdown: 'abc' })
     expect(missing.ok).toBe(false)
-    expect(missing.metadata?.matchCount).toBe(0)
-    expect(missing.metadata?.failedText).toBe('x')
+    expect(missing.message).toContain('offset.start and offset.end')
 
-    const duplicate = await executeApplyTool({ oldString: 'a', newString: 'b' }, { markdown: 'a\na' })
-    expect(duplicate.ok).toBe(false)
-    expect(duplicate.metadata?.matchCount).toBe(2)
-  })
-
-  it('returns a semantic paragraph candidate', async () => {
-    const result = await executeSemanticTool(
-      { query: 'visual markdown editor' },
-      { markdown: '# A\n\nUnrelated text.\n\nVisual Markdown editor helps organize documents.' }
+    const stale = await executeApplyTool(
+      { offset: { start: 0, end: 1 }, newString: 'b' },
+      {
+        markdown: 'a\na',
+        recoveryCandidates: [
+          {
+            startOffset: 2,
+            endOffset: 3,
+            matchText: 'a',
+            preview: 'a\na',
+          },
+        ],
+      }
     )
-
-    expect(result.ok).toBe(true)
-    expect(result.metadata?.candidate).toBe('Visual Markdown editor helps organize documents.')
-  })
-
-  it('fails semantic search when no token overlaps', async () => {
-    const result = await executeSemanticTool(
-      { query: 'alpha' },
-      { markdown: 'beta gamma' }
-    )
-
-    expect(result.ok).toBe(false)
+    expect(stale.ok).toBe(false)
+    expect(stale.message).toContain('did not match any recent find_tool candidate')
   })
 
   it('generates markdown documents as a tool result', async () => {
@@ -94,12 +96,12 @@ describe('agent tools', () => {
     expect(applyTool).toBeTruthy()
     if (!applyTool) return
 
-    const missing = validateToolArguments(applyTool, { oldString: 'a' })
+    const missing = validateToolArguments(applyTool, { offset: { start: 1, end: 2 } })
     expect(missing.ok).toBe(false)
     expect(missing.error?.code).toBe('missing-required')
     expect(buildInvalidToolArgumentsResult(applyTool, missing).message).toContain('missing required field "newString"')
 
-    const extra = validateToolArguments(applyTool, { oldString: 'a', newString: 'b', extra: 1 })
+    const extra = validateToolArguments(applyTool, { offset: { start: 1, end: 2 }, newString: 'b', extra: 1 })
     expect(extra.ok).toBe(false)
     expect(extra.error?.code).toBe('unexpected-property')
     expect(buildInvalidToolArgumentsResult(applyTool, extra).message).toContain('"extra"')

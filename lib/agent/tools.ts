@@ -46,22 +46,22 @@ export interface AgentToolJsonSchemaProperty {
 export const defaultAgentToolDefinitions: AgentToolDefinition[] = [
   {
     name: 'apply_tool',
-    description: 'Recover a failed edit by replacing one exact text fragment in the current document.',
+    description: 'Recover a failed edit by replacing one candidate range in the current document. After find_tool returns candidates, call apply_tool with offset.start and offset.end copied from the chosen candidate, plus the replacement newString.',
     argumentsSchema: {
       type: 'object',
-      description: 'Arguments for an exact replacement in the current Markdown document.',
+      description: 'Arguments for a range-based replacement in the current Markdown document.',
       additionalProperties: false,
       properties: {
-        oldString: {
-          type: 'string',
-          description: 'Required. Non-empty exact source text copied from the current document. Use the smallest complete fragment that satisfies the request, and preserve literal Markdown such as image syntax unless the user explicitly asks to change it.',
-        },
         newString: {
           type: 'string',
           description: 'Required. Non-empty replacement text only. Keep unchanged Markdown content verbatim when the edit touches surrounding text.',
         },
+        offset: {
+          type: 'object',
+          description: 'Required. Range object copied from one find_tool candidate. Use { "start": <startOffset>, "end": <endOffset> } from the intended candidate occurrence.',
+        },
       },
-      required: ['oldString', 'newString'],
+      required: ['offset', 'newString'],
     },
   },
   {
@@ -103,79 +103,73 @@ export const defaultAgentToolDefinitions: AgentToolDefinition[] = [
 ]
 
 export async function executeApplyTool(args: Record<string, unknown>, context: AgentToolContext): Promise<AgentToolResult> {
-  const oldString = typeof args.oldString === 'string' ? args.oldString : ''
   const newString = typeof args.newString === 'string' ? args.newString : ''
-  const selectedReference = context.selectedReference
+  const offsetArg = args.offset
+  const offsetRecord = offsetArg && typeof offsetArg === 'object' && !Array.isArray(offsetArg)
+    ? offsetArg as { start?: unknown; end?: unknown }
+    : null
+  const start = typeof offsetRecord?.start === 'number' && Number.isInteger(offsetRecord.start) ? offsetRecord.start : null
+  const end = typeof offsetRecord?.end === 'number' && Number.isInteger(offsetRecord.end) ? offsetRecord.end : null
+  const recoveryCandidates = Array.isArray(context.recoveryCandidates) ? context.recoveryCandidates : []
 
-  const selectedStart = typeof selectedReference?.startOffset === 'number' ? selectedReference.startOffset : null
-  const selectedEnd = typeof selectedReference?.endOffset === 'number' ? selectedReference.endOffset : null
-  const selectedExpectedText = typeof selectedReference?.expectedText === 'string' ? selectedReference.expectedText : ''
-  const hasLiveSelectionAnchor =
-    selectedStart !== null &&
-    selectedEnd !== null &&
-    selectedStart >= 0 &&
-    selectedEnd >= selectedStart
-
-  if (hasLiveSelectionAnchor) {
-    const currentSelectedText = context.markdown.slice(selectedStart, selectedEnd)
-    if (currentSelectedText === selectedExpectedText) {
-      return {
-        ok: true,
-        message: 'apply_tool succeeded using the live selection anchor. The current document markdown has been updated. Do not repeat the same edit. Next, briefly confirm the change to the user or continue with the next requested task.',
-        nextMarkdown: `${context.markdown.slice(0, selectedStart)}${newString}${context.markdown.slice(selectedEnd)}`,
-        metadata: {
-          matchCount: 1,
-          selectedStart,
-          selectedEnd,
-          nextStep: 'Briefly confirm the edit or continue with the next user-requested task.',
-          shouldReplyToUser: true,
-          usedSelectionAnchor: true,
-        },
-      }
-    }
-  }
-
-  if (!oldString && !hasLiveSelectionAnchor) {
+  if (start === null || end === null || start < 0 || end <= start) {
     return {
       ok: false,
-      message: 'apply_tool failed: oldString is required. Ask the model to provide an exact source fragment before retrying apply_tool.',
+      message: 'apply_tool failed: offset.start and offset.end are required integer bounds from a find_tool candidate. Retry apply_tool with one exact returned candidate range.',
       metadata: {
-        matchCount: 0,
-        selectedStart,
-        selectedEnd,
-        nextStep: 'Provide exact oldString and retry apply_tool.',
+        nextStep: 'Retry apply_tool with offset.start and offset.end copied from one find_tool candidate.',
       },
     }
   }
 
-  const matchCount = context.markdown.split(oldString).length - 1
-  if (matchCount !== 1) {
+  const matchedCandidate = recoveryCandidates.find((candidate) =>
+    candidate.startOffset === start && candidate.endOffset === end
+  )
+  if (!matchedCandidate) {
     return {
       ok: false,
-      message: matchCount === 0
-        ? 'apply_tool failed: oldString not found. Use find_tool to locate exact candidate fragments or choose a different exact fragment.'
-        : 'apply_tool failed: oldString matched multiple times. Narrow the target fragment and retry apply_tool with a unique exact match.',
+      message: 'apply_tool failed: the provided offset range did not match any recent find_tool candidate. Use find_tool again, then retry apply_tool with one returned candidate range.',
       metadata: {
-        matchCount,
-        failedText: oldString,
-        contextPreview: context.markdown.slice(0, 400),
-        selectedStart,
-        selectedEnd,
-        nextStep: matchCount === 0
-          ? 'Use find_tool or choose a different exact fragment.'
-          : 'Retry apply_tool with a smaller unique exact fragment.',
+        offset: { start, end },
+        nextStep: 'Use find_tool again and retry apply_tool with one exact returned candidate range.',
+      },
+    }
+  }
+
+  if (end > context.markdown.length) {
+    return {
+      ok: false,
+      message: 'apply_tool failed: the provided offset range is outside the current document bounds. Use find_tool again, then retry apply_tool with a fresh candidate range.',
+      metadata: {
+        offset: { start, end },
+        nextStep: 'Use find_tool again and retry apply_tool with a fresh candidate range.',
+      },
+    }
+  }
+
+  const currentTargetText = context.markdown.slice(start, end)
+  if (currentTargetText !== matchedCandidate.matchText) {
+    return {
+      ok: false,
+      message: 'apply_tool failed: the provided offset range no longer matches the candidate text in the current document. Use find_tool again, then retry apply_tool with a fresh candidate range.',
+      metadata: {
+        failedText: matchedCandidate.matchText,
+        offset: { start, end },
+        nextStep: 'Use find_tool again and retry apply_tool with a fresh candidate range.',
       },
     }
   }
 
   return {
     ok: true,
-    message: 'apply_tool succeeded. The current document markdown has been updated. Do not repeat the same edit. Next, briefly confirm the change to the user or continue with the next requested task.',
-    nextMarkdown: context.markdown.replace(oldString, newString),
+    message: 'apply_tool succeeded using the provided offset range. The current document markdown has been updated. Do not repeat the same edit. Next, briefly confirm the change to the user or continue with the next requested task.',
+    nextMarkdown: `${context.markdown.slice(0, start)}${newString}${context.markdown.slice(end)}`,
     metadata: {
-      matchCount,
+      matchCount: 1,
+      offset: { start, end },
       nextStep: 'Briefly confirm the edit or continue with the next user-requested task.',
       shouldReplyToUser: true,
+      usedOffsetRange: true,
     },
   }
 }
@@ -231,13 +225,13 @@ export async function executeFindTool(args: Record<string, unknown>, context: Ag
 
   return {
     ok: true,
-    message: 'find_tool succeeded. Exact literal candidates were found. Use one returned candidate as oldString in apply_tool if it matches the intended target.',
+    message: 'find_tool succeeded. Exact literal candidates were found. Use one returned candidate range in apply_tool by mapping startOffset/endOffset to offset.start/offset.end.',
     metadata: {
       query,
       candidate: results[0].matchText,
       candidates: results.map((item) => item.matchText),
       results,
-      nextStep: 'Use one returned candidate as oldString in apply_tool if it matches the user intent.',
+      nextStep: 'Use one returned candidate range in apply_tool by mapping startOffset/endOffset to offset.start/offset.end.',
     },
   }
 }

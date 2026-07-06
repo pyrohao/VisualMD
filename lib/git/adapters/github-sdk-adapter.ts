@@ -45,8 +45,8 @@ async function readGitHubContent(
   const response = await octokit.rest.repos.getContent({
     owner: config.ownerOrNamespace,
     repo: config.repo,
-    path: normalizedPath || '',
     ref: config.branch || undefined,
+    ...(normalizedPath ? { path: normalizedPath } : {}),
   })
   return response.data as GitHubContent | GitHubContent[]
 }

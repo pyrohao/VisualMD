@@ -101,6 +101,13 @@ export interface AgentToolResult {
   metadata?: Record<string, unknown>
 }
 
+export interface AgentRecoveryCandidate {
+  startOffset: number
+  endOffset: number
+  matchText: string
+  preview: string
+}
+
 export type AgentGeneratedDocumentEvent =
   | { type: 'start'; toolCallId: string; fileName: string }
   | { type: 'delta'; toolCallId: string; fileName: string; delta: string; content: string }
@@ -110,6 +117,7 @@ export type AgentGeneratedDocumentEvent =
 export interface AgentToolContext {
   markdown: string
   lastFailedContext?: string | null
+  recoveryCandidates?: AgentRecoveryCandidate[] | null
   selectedReference?: AgentReferenceContext | null
   providerConfig?: import('@/stores/settingsStore').ProviderConfig
   signal?: AbortSignal

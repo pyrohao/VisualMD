@@ -339,6 +339,7 @@ export interface Translations {
     stageToGit: string
     stageToGitDescription: string
     stageConfirm: string
+    discard: string
     stagedToGit: string
     binaryReadonly: string
     binaryReadonlyHint: string
@@ -664,7 +665,7 @@ export const translations: Record<Language, Translations> = {
       notConnected: '未连接',
       connectFirst: '请先连接仓库',
       emptyRepoTree: '未加载文件',
-      pendingChanges: '待提交变更',
+      pendingChanges: '变更',
       noGitFileOpen: '未打开 Git 文件',
       uncommitted: '未提交',
       commitToRepo: '提交到仓库',
@@ -712,6 +713,7 @@ export const translations: Record<Language, Translations> = {
       stageToGit: '暂存到 Git',
       stageToGitDescription: '输入此文件在仓库中的目标路径',
       stageConfirm: '暂存',
+      discard: '丢弃变更',
       stagedToGit: '已暂存到 Git',
       binaryReadonly: '该 Git 文件为二进制内容，当前以只读方式打开。',
       binaryReadonlyHint: '请在右侧预览面板查看实际内容。',
@@ -1033,7 +1035,7 @@ export const translations: Record<Language, Translations> = {
       notConnected: 'Not connected',
       connectFirst: 'Connect a repository first',
       emptyRepoTree: 'No files loaded',
-      pendingChanges: 'Pending Changes',
+      pendingChanges: 'Changes',
       noGitFileOpen: 'No Git file open',
       uncommitted: 'Uncommitted',
       commitToRepo: 'Commit To Repository',
@@ -1081,6 +1083,7 @@ export const translations: Record<Language, Translations> = {
       stageToGit: 'Stage to Git',
       stageToGitDescription: 'Enter repository path for this file',
       stageConfirm: 'Stage',
+      discard: 'Discard Changes',
       stagedToGit: 'Staged to Git',
       binaryReadonly: 'This Git file contains binary content and is opened in read-only mode.',
       binaryReadonlyHint: 'Use the preview panel on the right to inspect the actual content.',
