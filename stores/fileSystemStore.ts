@@ -22,48 +22,7 @@ import { saveLocalWorkspaceAssetBinary, deleteLocalWorkspaceAssetBinary } from '
 import { createIndexedDbPersistStorage } from '@/lib/git-store-persist-storage'
 import { exportMarkdownFileWithAssets, exportWorkspaceAsset } from '@/lib/local-workspace-export'
 import type { WelcomeDocumentSeed } from '@/lib/default-documents'
-
-/**
- * 生成唯一的文件名（处理重复）
- * 类似于 Windows 的命名规则：文件名 (1).md, 文件名 (2).md
- */
-function generateUniqueFileName(
-  files: MarkdownFile[],
-  fileName: string,
-  folderId: string | null = null
-): string {
-  // 检查是否有同名文件
-  const existingFile = files.find(
-    (f) => f.name === fileName && f.folderId === folderId
-  )
-
-  if (!existingFile) {
-    return fileName
-  }
-
-  // 提取基础名称和扩展名
-  const baseName = fileName.replace(/\.md$/, '')
-  const ext = '.md'
-
-  // 查找最大的序号
-  let maxIndex = 0
-  const regex = new RegExp(`^${baseName}\\s*\\((\\d+)\\)\\.md$`)
-
-  files.forEach((f) => {
-    if (f.folderId === folderId) {
-      const match = f.name.match(regex)
-      if (match) {
-        const index = parseInt(match[1], 10)
-        if (index > maxIndex) {
-          maxIndex = index
-        }
-      }
-    }
-  })
-
-  // 生成新的文件名
-  return `${baseName} (${maxIndex + 1})${ext}`
-}
+import { createDefaultMarkdownDocumentContent, ensureMarkdownExtension, generateUniqueItemName } from '@/lib/workspace-item-utils'
 
 /**
  * 文件系统 Store 接口
@@ -153,10 +112,6 @@ interface FileSystemStore {
  */
 function getMaxOrder(items: { order: number }[]): number {
   return items.length > 0 ? Math.max(...items.map(i => i.order)) : 0
-}
-
-function ensureMarkdownExtension(name: string) {
-  return name.endsWith('.md') ? name : `${name}.md`
 }
 
 function repairMissingLocalFileRecord(fileId: string, getState: () => FileSystemStore): MarkdownFile | null {
@@ -286,10 +241,14 @@ export const useFileSystemStore = create<FileSystemStore>()(
         createFolder: (name: string) => {
           const { folders } = get()
           const now = Date.now()
+          const folderName = generateUniqueItemName(
+            folders.map((folder) => folder.name),
+            name.trim() || '新建文件夹'
+          )
           const newFolder: Folder = {
             id: nanoid(),
             type: 'folder',
-            name: name.trim() || '新建文件夹',
+            name: folderName,
             order: getMaxOrder(folders) + 1,
             createdAt: now,
             updatedAt: now,
@@ -345,25 +304,13 @@ export const useFileSystemStore = create<FileSystemStore>()(
 
           // 确保文件名以 .md 结尾
           let fileName = name.trim() || '未命名文档.md'
-          if (!fileName.endsWith('.md')) {
-            fileName = fileName + '.md'
-          }
+          fileName = generateUniqueItemName(
+            files.filter((file) => file.folderId === folderId).map((file) => file.name),
+            fileName,
+            { extensionMode: 'markdown' }
+          )
 
-          // 处理文件名重复
-          fileName = generateUniqueFileName(files, fileName, folderId)
-
-          // 提取文档名称（去掉 .md 后缀）
-          const docName = fileName.replace(/\.md$/, '')
-
-          // 生成带 Metadata 的内容
-          const content = `---
-name: ${docName}
-description:
----
-
-# 新节点
-
-开始编辑...`
+          const content = createDefaultMarkdownDocumentContent(fileName)
 
           // 更新虚拟根节点标题为 Metadata（通过修改 root.title）
           // 注意：这个标题仅用于显示，实际保存时虚拟根节点固定显示为 Metadata
@@ -428,7 +375,11 @@ description:
           const importedFiles: MarkdownFile[] = []
 
           normalizedDocuments.forEach((document, index) => {
-            const fileName = generateUniqueFileName(nextFiles, document.name, null)
+            const fileName = generateUniqueItemName(
+              nextFiles.filter((file) => file.folderId === null).map((file) => file.name),
+              document.name,
+              { extensionMode: 'markdown' }
+            )
             const newFile: MarkdownFile = {
               id: nanoid(),
               type: 'file',

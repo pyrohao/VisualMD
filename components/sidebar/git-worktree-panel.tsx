@@ -27,8 +27,10 @@ import { requestNavigationWithUnsavedGuard } from '@/stores/unsavedChangesStore'
 import { useDocumentStore } from '@/stores/documentStore'
 import { useTabsStore } from '@/stores/tabsStore'
 import { inferGitFileKind, inferGitFileMimeType, isGitBinaryFileKind } from '@/lib/git/file-kind'
+import { buildGitTabDraftState } from '@/lib/git/tab-state'
 import { buildGitWorktreeView, type GitWorktreeStatus } from '@/lib/git/worktree'
 import { buildGitDocumentId, getGitFileName, joinGitPath, normalizeGitPath } from '@/lib/git/utils'
+import { createDefaultMarkdownDocumentContent, ensureMarkdownExtension, generateUniqueItemName } from '@/lib/workspace-item-utils'
 import { PromptDialog } from '@/components/ui/prompt-dialog'
 import { ThemedDeleteDialog } from '@/components/ui/themed-delete-dialog'
 import { toast } from '@/hooks/use-toast'
@@ -178,17 +180,18 @@ function GitWorktreeNode({
                 >
                   {item.name}
                 </span>
+              </button>
+
+              <div className="ml-auto flex shrink-0 items-center justify-end gap-2">
                 {statusBadge ? (
                   <span
-                    className="shrink-0 text-[11px] font-semibold uppercase"
+                    className="w-4 shrink-0 text-right text-xs font-medium leading-none"
                     style={{ color: itemColor }}
                   >
                     {statusBadge}
                   </span>
                 ) : null}
-              </button>
-
-              <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
                 {isDir ? (
                   <>
                     <button
@@ -250,6 +253,7 @@ function GitWorktreeNode({
                     </button>
                   </>
                 )}
+                </div>
               </div>
             </div>
 
@@ -335,22 +339,9 @@ export function GitWorktreePanel() {
 
     const draftContent = content ?? draft.draftContent
     openGitFileInTab({
-      fileName: draft.name,
+      ...buildGitTabDraftState(draft),
       content: draftContent,
       savedContent: draftContent,
-      isModified: draft.isDirty,
-      isNew: draft.isNew ?? false,
-      fileId: draft.documentId,
-      sourceType: 'git',
-      gitMeta: {
-        provider: draft.provider,
-        ownerOrNamespace: draft.ownerOrNamespace,
-        repo: draft.repo,
-        branch: draft.branch,
-        path: draft.path,
-        sha: draft.sha,
-        fileKind: 'text',
-      },
     })
     setCurrentDocumentId(draft.documentId)
     loadDocument(draftContent, draft.name, draft.documentId)
@@ -464,13 +455,34 @@ export function GitWorktreePanel() {
 
     try {
       if (dialogState.type === 'create-file') {
-        const nextPath = normalizeGitPath(joinGitPath(dialogState.path, input || 'new-file.md'))
-        await createFile(nextPath, '', `Create ${nextPath}`)
+        const targetDirectory = normalizeGitPath(dialogState.path)
+        const siblingNames = (worktreeView.treeByPath[targetDirectory] || [])
+          .filter((item) => item.type === 'file')
+          .map((item) => item.name)
+        const nextFileName = generateUniqueItemName(
+          siblingNames,
+          ensureMarkdownExtension(input || 'new-file.md'),
+          { extensionMode: 'markdown' }
+        )
+        const nextPath = normalizeGitPath(joinGitPath(targetDirectory, nextFileName))
+        await createFile(
+          nextPath,
+          createDefaultMarkdownDocumentContent(nextFileName),
+          `Create ${nextPath}`
+        )
         await handleOpenFile(nextPath)
       }
 
       if (dialogState.type === 'create-folder') {
-        const nextPath = normalizeGitPath(joinGitPath(dialogState.path, input || 'new-folder'))
+        const targetDirectory = normalizeGitPath(dialogState.path)
+        const siblingNames = (worktreeView.treeByPath[targetDirectory] || [])
+          .filter((item) => item.type === 'dir')
+          .map((item) => item.name)
+        const nextFolderName = generateUniqueItemName(
+          siblingNames,
+          input || 'new-folder'
+        )
+        const nextPath = normalizeGitPath(joinGitPath(targetDirectory, nextFolderName))
         await createFolder(nextPath, `Create folder ${nextPath}`)
       }
 

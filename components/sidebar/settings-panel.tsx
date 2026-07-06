@@ -226,7 +226,7 @@ export function SettingsPanel() {
                 </Button>
                 <Button
                   variant="outline"
-                  onClick={() => setActivePanel('git')}
+                  onClick={() => setActivePanel('git-files')}
                   disabled={isGitConnecting}
                   className="w-full min-w-0"
                   style={{

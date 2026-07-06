@@ -24,6 +24,7 @@ import { requestNavigationWithUnsavedGuard } from '@/stores/unsavedChangesStore'
 import { useDocumentStore } from '@/stores/documentStore'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { inferGitFileKind } from '@/lib/git/file-kind'
+import { buildGitTabDraftState } from '@/lib/git/tab-state'
 import { normalizeGitPath } from '@/lib/git/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -470,22 +471,9 @@ export function GitPanel() {
 
     const draftContent = content ?? draft.draftContent
     openGitFileInTab({
-      fileName: draft.name,
+      ...buildGitTabDraftState(draft),
       content: draftContent,
       savedContent: draftContent,
-      isModified: false,
-      isNew: false,
-      fileId: draft.documentId,
-      sourceType: 'git',
-      gitMeta: {
-        provider: draft.provider,
-        ownerOrNamespace: draft.ownerOrNamespace,
-        repo: draft.repo,
-        branch: draft.branch,
-        path: draft.path,
-        sha: draft.sha,
-        fileKind: 'text',
-      },
     })
     setCurrentDocumentId(draft.documentId)
     loadDocument(draftContent, draft.name, draft.documentId)
@@ -570,11 +558,7 @@ export function GitPanel() {
 
         if (refreshedDraft && latestActiveTab?.fileId === currentDocumentId) {
           useTabsStore.getState().updateTabContent(latestActiveTab.id, refreshedDraft.draftContent)
-          if (refreshedDraft.hasConflict || refreshedDraft.isDirty || refreshedDraft.isNew) {
-            useTabsStore.getState().markTabAsModified(latestActiveTab.id, true)
-          } else {
-            useTabsStore.getState().markTabAsSaved(latestActiveTab.id, refreshedDraft.name)
-          }
+          useTabsStore.getState().markTabAsSaved(latestActiveTab.id, refreshedDraft.name)
           loadDocument(refreshedDraft.draftContent, refreshedDraft.name, refreshedDraft.documentId)
         }
       }
@@ -758,23 +742,23 @@ export function GitPanel() {
       <div className="min-h-0 flex-1 p-4">
         <div className="flex h-full min-h-0 flex-col gap-4">
         <div
-          className="flex min-h-0 flex-1 flex-col space-y-3 rounded-lg border p-3"
+          className="flex min-h-0 flex-1 flex-col space-y-2.5 rounded-lg border p-3"
           style={{ borderColor: themeConfig.border, backgroundColor: themeConfig.card }}
         >
-          <div className="min-w-0">
-            <div className="text-sm font-medium" style={{ color: themeConfig.text }}>
+          <div className="min-w-0 space-y-0.5">
+            <div className="truncate text-sm font-medium leading-5" style={{ color: themeConfig.text }}>
               {connected ? `${config.ownerOrNamespace}/${config.repo}` : t('git.sourceControl')}
             </div>
-            <div className="truncate text-xs" style={{ color: themeConfig.muted }}>
+            <div className="truncate text-[11px] leading-4" style={{ color: themeConfig.muted }}>
               {connected ? `${config.branch} · ${t('git.sourceControl')}` : t('git.notConnected')}
             </div>
           </div>
 
           <div className="shrink-0">
-            <div className="text-sm font-medium" style={{ color: themeConfig.text }}>
+            <div className="text-sm font-medium leading-5" style={{ color: themeConfig.text }}>
               {t('git.stageChanges')}
             </div>
-            <div className="text-xs" style={{ color: themeConfig.muted }}>
+            <div className="text-[11px] leading-4" style={{ color: themeConfig.muted }}>
               {stagedChanges.length
                 ? t('git.stagedCount').replace('{count}', String(stagedChanges.length))
                 : t('git.noStagedChanges')}
@@ -801,10 +785,10 @@ export function GitPanel() {
 
           {hasUnresolvedConflicts ? (
             <div className="shrink-0">
-              <div className="text-sm font-medium" style={{ color: themeConfig.text }}>
+              <div className="text-sm font-medium leading-5" style={{ color: themeConfig.text }}>
                 {t('git.conflictDetected')}
               </div>
-              <div className="mt-2 max-h-[120px] space-y-2 overflow-y-auto rounded-md border p-2" style={{ borderColor: themeConfig.border }}>
+              <div className="mt-1.5 max-h-[120px] space-y-2 overflow-y-auto rounded-md border p-2" style={{ borderColor: themeConfig.border }}>
                 {conflictedDrafts.map((draft) => (
                   <button
                     key={draft.documentId}
@@ -829,10 +813,10 @@ export function GitPanel() {
           ) : null}
 
           <div className="shrink-0">
-            <div className="text-sm font-medium" style={{ color: themeConfig.text }}>
+            <div className="text-sm font-medium leading-5" style={{ color: themeConfig.text }}>
               {t('git.pendingChanges')}
             </div>
-            <div className="text-xs" style={{ color: themeConfig.muted }}>
+            <div className="text-[11px] leading-4" style={{ color: themeConfig.muted }}>
               {pendingSummary}
             </div>
           </div>

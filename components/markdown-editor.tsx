@@ -35,6 +35,7 @@ import { EmptyTabView } from './empty-tab-view'
 import { EditorCanvasShell } from './editor-canvas-shell'
 import { persistActiveTabSave, persistMarkdownToActiveSource, syncActiveDocumentToActiveSource } from '@/lib/editor-persistence'
 import { inferGitFileKind, isGitBinaryFileKind } from '@/lib/git/file-kind'
+import { buildGitTabDraftState } from '@/lib/git/tab-state'
 import { resolveTabCurrentContent, syncTabContentFromSource } from '@/lib/tab-content'
 import { useHistoryStore } from '@/stores/historyStore'
 import { DEFAULT_WELCOME_DOCUMENTS } from '@/lib/default-documents'
@@ -259,24 +260,7 @@ export function MarkdownEditor() {
     const targetDraft = useGitStore.getState().drafts[documentId]
     if (!targetDraft) return
 
-    useTabsStore.getState().openGitFileInTab({
-      fileName: targetDraft.name,
-      content: targetDraft.draftContent,
-      savedContent: targetDraft.draftContent,
-      isModified: targetDraft.isDirty || Boolean(targetDraft.isNew),
-      isNew: false,
-      fileId: targetDraft.documentId,
-      sourceType: 'git',
-      gitMeta: {
-        provider: targetDraft.provider,
-        ownerOrNamespace: targetDraft.ownerOrNamespace,
-        repo: targetDraft.repo,
-        branch: targetDraft.branch,
-        path: targetDraft.path,
-        sha: targetDraft.sha,
-        fileKind: 'text',
-      },
-    })
+    useTabsStore.getState().openGitFileInTab(buildGitTabDraftState(targetDraft))
     setCurrentDocumentId(targetDraft.documentId)
     loadDocument(targetDraft.draftContent, targetDraft.name, targetDraft.documentId)
   }, [loadDocument, setCurrentDocumentId])

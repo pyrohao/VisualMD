@@ -6,6 +6,7 @@ import { mergeGitText } from '@/lib/git/merge'
 import { hasMeaningfulLocalGitChange, hasMeaningfulRemoteGitChange } from '@/lib/git/sync'
 import { isPureLocalNewGitDraft } from '@/lib/git/draft-guards'
 import { createIndexedDbPersistStorage } from '@/lib/git-store-persist-storage'
+import { buildGitTabDraftState } from '@/lib/git/tab-state'
 import type { GitBatchCommitAction, GitBranchRef, GitConflictSnapshot, GitDraftFile, GitProviderConfig, GitRepoRef, GitTreeItem, StagedGitChange } from '@/lib/git/types'
 import { arrayBufferToBase64, buildGitDocumentId, getGitFileName, joinGitPath, normalizeGitPath, parseGitDocumentId } from '@/lib/git/utils'
 import { decryptSecret, encryptSecret, normalizeEncryptedSecret } from '@/lib/secret-storage'
@@ -497,33 +498,11 @@ function syncOpenGitTabFromDraft(documentId: string, draft: GitDraftFile | undef
   }
 
   tabsStore.updateTabContent(tab.id, draft.draftContent)
-  if (draft.hasConflict || draft.isDirty || draft.isNew) {
-    tabsStore.markTabAsModified(tab.id, true)
-    return
-  }
-
   tabsStore.markTabAsSaved(tab.id, draft.name)
 }
 
 function buildGitTabStateFromDraft(draft: GitDraftFile) {
-  return {
-    fileName: draft.name,
-    content: draft.draftContent,
-    savedContent: draft.draftContent,
-    isModified: draft.isDirty || draft.isNew === true,
-    isNew: false,
-    fileId: draft.documentId,
-    sourceType: 'git' as const,
-    gitMeta: {
-      provider: draft.provider,
-      ownerOrNamespace: draft.ownerOrNamespace,
-      repo: draft.repo,
-      branch: draft.branch,
-      path: draft.path,
-      sha: draft.sha,
-      fileKind: 'text' as const,
-    },
-  }
+  return buildGitTabDraftState(draft)
 }
 
 function syncLocalTabToGitDraft(localFileId: string, draft: GitDraftFile) {
@@ -2760,12 +2739,12 @@ export const useGitStore = create<GitStore>()(
             name: getGitFileName(normalizedPath),
             sha: undefined,
             content: normalizedContent,
-            originalContent: '',
+            originalContent: normalizedContent,
             draftContent: normalizedContent,
-            isDirty: normalizedContent.length > 0,
+            isDirty: false,
             isNew: true,
             creationSource: 'git',
-            status: normalizedContent.length > 0 ? 'dirty' : 'clean',
+            status: 'clean',
             remoteContent: undefined,
             remoteSha: undefined,
             hasRemoteUpdates: false,
