@@ -307,7 +307,6 @@ export function GitWorktreePanel() {
     isConnecting,
     isLoadingTree,
     openFile,
-    loadTree,
     refreshRepositoryFromRemote,
     toggleExpandedPath,
     setCurrentDocumentId,
@@ -413,14 +412,6 @@ export function GitWorktreePanel() {
 
   const handleRefreshTree = async () => {
     await refreshRepositoryFromRemote()
-    await loadTree('')
-    await Promise.all(
-      expandedPaths
-        .filter((path) => normalizeGitPath(path).length > 0)
-        .map(async (path) => {
-          await loadTree(path)
-        })
-    )
     toast({ title: t('git.refreshTree') })
   }
 

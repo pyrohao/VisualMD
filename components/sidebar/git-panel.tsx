@@ -6,10 +6,12 @@ import {
   AlertTriangle,
   ChevronDown,
   ChevronRight,
+  File,
   FileText,
   Folder,
   GitBranch,
   ImageIcon,
+  Loader2,
   Music,
   RotateCcw,
   Save,
@@ -23,11 +25,12 @@ import { useTabsStore } from '@/stores/tabsStore'
 import { requestNavigationWithUnsavedGuard } from '@/stores/unsavedChangesStore'
 import { useDocumentStore } from '@/stores/documentStore'
 import { useFileSystemStore } from '@/stores/fileSystemStore'
-import { inferGitFileKind } from '@/lib/git/file-kind'
+import { inferGitFileKind, inferGitFileMimeType, isGitBinaryFileKind } from '@/lib/git/file-kind'
 import { buildGitTabDraftState } from '@/lib/git/tab-state'
-import { normalizeGitPath } from '@/lib/git/utils'
+import { buildGitDocumentId, getGitFileName, normalizeGitPath } from '@/lib/git/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { ThemedDeleteDialog } from '@/components/ui/themed-delete-dialog'
 import { toast } from '@/hooks/use-toast'
 import type { StagedGitChange } from '@/lib/git/types'
 
@@ -309,11 +312,12 @@ function GitChangeTree({
 
 export function GitPanel() {
   const { getThemeConfig } = useThemeStore()
-  const { t } = useTranslation()
+  const { t, currentLanguage } = useTranslation()
   const [mounted, setMounted] = useState(false)
   const [commitMessage, setCommitMessage] = useState('')
   const [collapsedPendingPaths, setCollapsedPendingPaths] = useState<string[]>([])
   const [collapsedStagedPaths, setCollapsedStagedPaths] = useState<string[]>([])
+  const [pendingDiscardTargets, setPendingDiscardTargets] = useState<GitChangeActionTarget[] | null>(null)
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
 
   const { loadDocument } = useDocumentStore()
@@ -335,6 +339,8 @@ export function GitPanel() {
     refreshRepositoryFromRemote,
     openFile,
     setCurrentDocumentId,
+    toggleExpandedPath,
+    stageGitDraft,
     unstageChange,
     restagePendingAsset,
     stagePendingStructuralChange,
@@ -442,13 +448,13 @@ export function GitPanel() {
     pendingStructuralStageChanges.length > 0
   const hasCommitCandidates = stagedChanges.length > 0
   const hasUnresolvedConflicts = conflictedDrafts.length > 0
-  const pendingSummary = useMemo(() => {
+  const pendingSummary = (() => {
     const pendingCount = pendingDrafts.length + pendingGitAssetChanges.length + pendingStructuralStageChanges.length
     if (pendingCount > 0) {
       return t('git.pendingCount').replace('{count}', String(pendingCount))
     }
     return t('git.noPendingChanges')
-  }, [pendingDrafts.length, pendingGitAssetChanges.length, pendingStructuralStageChanges.length, t])
+  })()
 
   useEffect(() => {
     setMounted(true)
@@ -534,6 +540,29 @@ export function GitPanel() {
 
       setCommitMessage('')
       toast({ title: t('git.commitSuccess') })
+
+      void (async () => {
+        try {
+          const result = await refreshRepositoryFromRemote()
+
+          if (activeDocumentId) {
+            const refreshedDraft = useGitStore.getState().drafts[activeDocumentId]
+            const latestActiveTab = useTabsStore.getState().getActiveTab()
+
+            if (refreshedDraft && latestActiveTab?.fileId === activeDocumentId) {
+              useTabsStore.getState().updateTabContent(latestActiveTab.id, refreshedDraft.draftContent)
+              useTabsStore.getState().markTabAsSaved(latestActiveTab.id, refreshedDraft.name)
+              loadDocument(refreshedDraft.draftContent, refreshedDraft.name, refreshedDraft.documentId)
+            }
+          }
+
+          if (!result.addedPaths.length && !result.deletedPaths.length && !result.updatedPaths.length) {
+            return
+          }
+        } catch {
+          // handled by store
+        }
+      })()
     } catch {
       // handled by store
     }
@@ -686,6 +715,15 @@ export function GitPanel() {
   }
 
   const handleDiscardPendingTargets = (targets: GitChangeActionTarget[]) => {
+    setPendingDiscardTargets(targets)
+  }
+
+  const confirmDiscardPendingTargets = () => {
+    const targets = pendingDiscardTargets
+    if (!targets?.length) {
+      return
+    }
+
     const dedupedTargets = targets.filter((target, index, list) => (
       list.findIndex((candidate) => candidate.kind === target.kind && candidate.value === target.value) === index
     ))
@@ -716,6 +754,8 @@ export function GitPanel() {
     if (dedupedTargets.length > 0) {
       toast({ title: t('toast.deleted') })
     }
+
+    setPendingDiscardTargets(null)
   }
 
   const handleStagedActionTargets = (targets: GitChangeActionTarget[]) => {
@@ -729,6 +769,21 @@ export function GitPanel() {
         unstageChange(target.value)
       })
   }
+
+  const pendingDiscardDescription = useMemo(() => {
+    const targets = pendingDiscardTargets || []
+    if (targets.length === 0) {
+      return ''
+    }
+
+    const count = targets.filter((target, index, list) => (
+      list.findIndex((candidate) => candidate.kind === target.kind && candidate.value === target.value) === index
+    )).length
+
+    return currentLanguage === 'zh'
+      ? `将丢弃 ${count} 项未提交变更，此操作不可撤销。`
+      : `This will discard ${count} uncommitted change${count > 1 ? 's' : ''} and cannot be undone.`
+  }, [currentLanguage, pendingDiscardTargets])
 
   return (
     <div className="flex h-full flex-col" style={{ backgroundColor: themeConfig.sidebar }}>
@@ -893,6 +948,16 @@ export function GitPanel() {
         </div>
         </div>
       </div>
+
+      <ThemedDeleteDialog
+        isOpen={pendingDiscardTargets !== null}
+        onClose={() => setPendingDiscardTargets(null)}
+        onConfirm={confirmDiscardPendingTargets}
+        title={t('git.discard')}
+        description={pendingDiscardDescription}
+        confirmText={t('git.discard')}
+        cancelText={t('common.cancel')}
+      />
     </div>
   )
 }

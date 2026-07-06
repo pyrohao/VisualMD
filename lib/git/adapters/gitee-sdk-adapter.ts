@@ -46,6 +46,13 @@ const runtimeImport = new Function(
 
 let giteeSdkPromise: Promise<GiteeSdkModule | null> | null = null
 
+function gitFetch(url: string, init?: RequestInit) {
+  return fetch(url, {
+    ...init,
+    cache: 'no-store',
+  })
+}
+
 function getRequestBaseUrl(baseUrl: string) {
   const trimmed = baseUrl.trim()
   return trimmed || 'https://gitee.com/api/v5'
@@ -120,7 +127,7 @@ async function validateWithRawRepoName(config: GitProviderConfig, baseUrl: strin
 
   const queryString = query.toString()
   const url = `${normalizedBaseUrl}/repos/${encodeURIComponent(owner)}/${repo}${queryString ? `?${queryString}` : ''}`
-  await safeJson<unknown>(await fetch(url, { headers }))
+  await safeJson<unknown>(await gitFetch(url, { headers }))
 }
 
 async function tryListReposWithSdk(config: GitProviderConfig, baseUrl: string): Promise<GitRepoRef[] | null> {
@@ -272,7 +279,7 @@ async function tryGetLatestCommitIdForPath(
 
   try {
     const commits = await safeJson<GiteeCommitSummary[]>(
-      await fetch(url, {
+      await gitFetch(url, {
         headers: getGiteeHeaders(token),
       })
     )
@@ -299,7 +306,7 @@ async function getGiteeRemoteFileState(
     { ref: config.branch }
   )
 
-  const response = await fetch(url, {
+  const response = await gitFetch(url, {
     headers: getGiteeHeaders(token),
   })
 
@@ -435,7 +442,7 @@ async function commitBatchViaCommitsApi(
 
   const url = getGiteeRepoUrl(baseUrl, owner, repo, '/commits', token)
   await safeJson<unknown>(
-    await fetch(url, {
+    await gitFetch(url, {
       method: 'POST',
       headers: getGiteeHeaders(token),
       body: JSON.stringify(payload),

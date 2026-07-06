@@ -33,6 +33,12 @@ function createOctokitClient(config: GitProviderConfig, baseUrl: string) {
   return new Octokit({
     auth: config.token,
     baseUrl: getRequestBaseUrl(baseUrl),
+    request: {
+      fetch: (url, options = {}) => fetch(url, {
+        ...options,
+        cache: 'no-store',
+      }),
+    },
   })
 }
 

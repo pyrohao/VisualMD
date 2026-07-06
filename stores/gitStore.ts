@@ -474,18 +474,6 @@ async function loadRemoteFolderSubtree(
   }
 }
 
-async function reloadVisibleGitTreePaths(store: Pick<GitStore, 'expandedPaths' | 'loadTree'>) {
-  await store.loadTree('')
-
-  const visibleExpandedPaths = store.expandedPaths
-    .filter((path) => normalizeGitPath(path).length > 0)
-    .sort((a, b) => a.localeCompare(b))
-
-  for (const path of visibleExpandedPaths) {
-    await store.loadTree(path)
-  }
-}
-
 function syncOpenGitTabFromDraft(documentId: string, draft: GitDraftFile | undefined) {
   if (!draft) {
     return
@@ -2649,7 +2637,7 @@ export const useGitStore = create<GitStore>()(
                 const snapshot = committedDraftSnapshots.get(documentId)
                 if (!currentDraft || !snapshot) return
 
-                const keepLocalEdits = currentDraft.draftContent !== snapshot.content
+                const keepLocalEdits = hasMeaningfulLocalGitChange(currentDraft.draftContent, snapshot.content)
                 const nextContent = keepLocalEdits ? currentDraft.draftContent : remoteDraft.content
 
                 nextDrafts[documentId] = {
@@ -2675,6 +2663,7 @@ export const useGitStore = create<GitStore>()(
               return {
                 drafts: nextDrafts,
                 stagedChanges: state.stagedChanges.filter((item) => !committedChangeIds.has(item.id)),
+                pendingAssetChanges: state.pendingAssetChanges.filter((item) => !committedChangeIds.has(item.id)),
                 pendingStructuralChanges: state.pendingStructuralChanges.filter((item) => !committedChangeIds.has(item.id)),
                 currentDocumentId:
                   state.currentDocumentId && deletedDocumentIds.has(state.currentDocumentId)
@@ -2704,12 +2693,6 @@ export const useGitStore = create<GitStore>()(
               }
             })
 
-            try {
-              await get().refreshRepositoryFromRemote()
-              await reloadVisibleGitTreePaths(get())
-            } catch {
-              set({ error: 'Commit succeeded, but repository view refresh failed' })
-            }
           } catch (error) {
             const message = error instanceof Error ? error.message : 'Failed to commit file'
             set({ error: message })

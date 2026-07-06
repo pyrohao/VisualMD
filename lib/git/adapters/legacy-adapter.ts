@@ -10,6 +10,13 @@ import type {
 } from '../types'
 import { decodeBase64, encodeBase64, getGitFileName, joinGitPath, normalizeGitPath, safeJson } from '../utils'
 
+function gitFetch(url: string, init?: RequestInit) {
+  return fetch(url, {
+    ...init,
+    cache: 'no-store',
+  })
+}
+
 function getHeaders(config: GitProviderConfig) {
   const headers: HeadersInit = {
     Accept: 'application/json',
@@ -38,7 +45,7 @@ function getEncodedProject(config: GitProviderConfig) {
 async function githubLikeListRepos(config: GitProviderConfig, baseUrl: string): Promise<GitRepoRef[]> {
   const headers = getHeaders(config)
   const orgUrl = `${baseUrl}/users/${encodeURIComponent(config.ownerOrNamespace)}/repos?per_page=100`
-  const repos = await safeJson<any[]>(await fetch(orgUrl, { headers }))
+  const repos = await safeJson<any[]>(await gitFetch(orgUrl, { headers }))
   return repos.map((repo) => ({
     id: String(repo.id),
     name: repo.name,
@@ -50,7 +57,7 @@ async function githubLikeListRepos(config: GitProviderConfig, baseUrl: string): 
 async function githubLikeGetBranches(config: GitProviderConfig, baseUrl: string): Promise<GitBranchRef[]> {
   const headers = getHeaders(config)
   const url = `${baseUrl}/repos/${encodeURIComponent(config.ownerOrNamespace)}/${encodeURIComponent(config.repo)}/branches?per_page=100`
-  const branches = await safeJson<any[]>(await fetch(url, { headers }))
+  const branches = await safeJson<any[]>(await gitFetch(url, { headers }))
   return branches.map((branch) => ({
     name: branch.name,
     commitSha: branch.commit?.sha,
@@ -62,7 +69,7 @@ async function githubLikeListTree(config: GitProviderConfig, baseUrl: string, pa
   const normalizedPath = normalizeGitPath(path)
   const pathSuffix = normalizedPath ? `/${normalizedPath}` : ''
   const url = `${baseUrl}/repos/${encodeURIComponent(config.ownerOrNamespace)}/${encodeURIComponent(config.repo)}/contents${pathSuffix}?ref=${encodeURIComponent(config.branch)}`
-  const result = await safeJson<any>(await fetch(url, { headers }))
+  const result = await safeJson<any>(await gitFetch(url, { headers }))
   const items = Array.isArray(result) ? result : [result]
   return items.map((item) => ({
     path: item.path,
@@ -77,7 +84,7 @@ async function githubLikeGetFile(config: GitProviderConfig, baseUrl: string, pat
   const headers = getHeaders(config)
   const normalizedPath = normalizeGitPath(path)
   const url = `${baseUrl}/repos/${encodeURIComponent(config.ownerOrNamespace)}/${encodeURIComponent(config.repo)}/contents/${normalizedPath}?ref=${encodeURIComponent(config.branch)}`
-  const result = await safeJson<any>(await fetch(url, { headers }))
+  const result = await safeJson<any>(await gitFetch(url, { headers }))
   return {
     path: result.path,
     name: result.name,
@@ -90,7 +97,7 @@ async function githubLikeGetBinaryFile(config: GitProviderConfig, baseUrl: strin
   const headers = getHeaders(config)
   const normalizedPath = normalizeGitPath(path)
   const url = `${baseUrl}/repos/${encodeURIComponent(config.ownerOrNamespace)}/${encodeURIComponent(config.repo)}/contents/${normalizedPath}?ref=${encodeURIComponent(config.branch)}`
-  const result = await safeJson<any>(await fetch(url, { headers }))
+  const result = await safeJson<any>(await gitFetch(url, { headers }))
   return {
     contentBase64: String(result.content || '').replace(/\n/g, ''),
     mimeType: result.type === 'file' ? undefined : undefined,
@@ -107,7 +114,7 @@ async function githubLikePutEncodedFile(config: GitProviderConfig, baseUrl: stri
     branch: config.branch,
   }
   if (sha) payload.sha = sha
-  const response = await safeJson<any>(await fetch(url, { method: 'PUT', headers, body: JSON.stringify(payload) }))
+  const response = await safeJson<any>(await gitFetch(url, { method: 'PUT', headers, body: JSON.stringify(payload) }))
   return { sha: response.content?.sha as string | undefined }
 }
 
@@ -123,7 +130,7 @@ async function githubLikeDeleteFile(config: GitProviderConfig, baseUrl: string, 
   const headers = getHeaders(config)
   const normalizedPath = normalizeGitPath(path)
   const url = `${baseUrl}/repos/${encodeURIComponent(config.ownerOrNamespace)}/${encodeURIComponent(config.repo)}/contents/${normalizedPath}`
-  await safeJson<any>(await fetch(url, {
+  await safeJson<any>(await gitFetch(url, {
     method: 'DELETE',
     headers,
     body: JSON.stringify({
@@ -137,14 +144,14 @@ async function githubLikeDeleteFile(config: GitProviderConfig, baseUrl: string, 
 async function githubLikeGetReferenceSha(config: GitProviderConfig, baseUrl: string) {
   const headers = getHeaders(config)
   const url = `${baseUrl}/repos/${encodeURIComponent(config.ownerOrNamespace)}/${encodeURIComponent(config.repo)}/git/ref/heads/${encodeURIComponent(config.branch)}`
-  const result = await safeJson<any>(await fetch(url, { headers }))
+  const result = await safeJson<any>(await gitFetch(url, { headers }))
   return String(result.object?.sha || '')
 }
 
 async function githubLikeGetCommitTreeSha(config: GitProviderConfig, baseUrl: string, commitSha: string) {
   const headers = getHeaders(config)
   const url = `${baseUrl}/repos/${encodeURIComponent(config.ownerOrNamespace)}/${encodeURIComponent(config.repo)}/git/commits/${commitSha}`
-  const result = await safeJson<any>(await fetch(url, { headers }))
+  const result = await safeJson<any>(await gitFetch(url, { headers }))
   return String(result.tree?.sha || '')
 }
 
@@ -156,7 +163,7 @@ async function githubLikeCreateBlob(
 ) {
   const headers = getHeaders(config)
   const url = `${baseUrl}/repos/${encodeURIComponent(config.ownerOrNamespace)}/${encodeURIComponent(config.repo)}/git/blobs`
-  const result = await safeJson<any>(await fetch(url, {
+  const result = await safeJson<any>(await gitFetch(url, {
     method: 'POST',
     headers,
     body: JSON.stringify({ content, encoding }),
@@ -172,7 +179,7 @@ async function githubLikeCreateTree(
 ) {
   const headers = getHeaders(config)
   const url = `${baseUrl}/repos/${encodeURIComponent(config.ownerOrNamespace)}/${encodeURIComponent(config.repo)}/git/trees`
-  const result = await safeJson<any>(await fetch(url, {
+  const result = await safeJson<any>(await gitFetch(url, {
     method: 'POST',
     headers,
     body: JSON.stringify({
@@ -192,7 +199,7 @@ async function githubLikeCreateCommit(
 ) {
   const headers = getHeaders(config)
   const url = `${baseUrl}/repos/${encodeURIComponent(config.ownerOrNamespace)}/${encodeURIComponent(config.repo)}/git/commits`
-  const result = await safeJson<any>(await fetch(url, {
+  const result = await safeJson<any>(await gitFetch(url, {
     method: 'POST',
     headers,
     body: JSON.stringify({
@@ -207,7 +214,7 @@ async function githubLikeCreateCommit(
 async function githubLikeUpdateReference(config: GitProviderConfig, baseUrl: string, commitSha: string) {
   const headers = getHeaders(config)
   const url = `${baseUrl}/repos/${encodeURIComponent(config.ownerOrNamespace)}/${encodeURIComponent(config.repo)}/git/refs/heads/${encodeURIComponent(config.branch)}`
-  await safeJson<any>(await fetch(url, {
+  await safeJson<any>(await gitFetch(url, {
     method: 'PATCH',
     headers,
     body: JSON.stringify({
@@ -262,7 +269,7 @@ async function githubLikeCommitBatch(
 async function gitlabListRepos(config: GitProviderConfig, baseUrl: string): Promise<GitRepoRef[]> {
   const headers = getHeaders(config)
   const url = `${baseUrl}/projects?membership=true&simple=true&per_page=100`
-  const repos = await safeJson<any[]>(await fetch(url, { headers }))
+  const repos = await safeJson<any[]>(await gitFetch(url, { headers }))
   return repos.map((repo) => ({
     id: String(repo.id),
     name: repo.name,
@@ -274,7 +281,7 @@ async function gitlabListRepos(config: GitProviderConfig, baseUrl: string): Prom
 async function gitlabGetBranches(config: GitProviderConfig, baseUrl: string): Promise<GitBranchRef[]> {
   const headers = getHeaders(config)
   const url = `${baseUrl}/projects/${getEncodedProject(config)}/repository/branches?per_page=100`
-  const branches = await safeJson<any[]>(await fetch(url, { headers }))
+  const branches = await safeJson<any[]>(await gitFetch(url, { headers }))
   return branches.map((branch) => ({
     name: branch.name,
     commitSha: branch.commit?.id,
@@ -290,7 +297,7 @@ async function gitlabListTree(config: GitProviderConfig, baseUrl: string, path =
   const normalizedPath = normalizeGitPath(path)
   if (normalizedPath) query.set('path', normalizedPath)
   const url = `${baseUrl}/projects/${getEncodedProject(config)}/repository/tree?${query.toString()}`
-  const items = await safeJson<any[]>(await fetch(url, { headers }))
+  const items = await safeJson<any[]>(await gitFetch(url, { headers }))
   return items.map((item) => ({
     path: item.path,
     name: item.name,
@@ -303,7 +310,7 @@ async function gitlabGetFile(config: GitProviderConfig, baseUrl: string, path: s
   const headers = getHeaders(config)
   const normalizedPath = normalizeGitPath(path)
   const url = `${baseUrl}/projects/${getEncodedProject(config)}/repository/files/${encodeURIComponent(normalizedPath)}?ref=${encodeURIComponent(config.branch)}`
-  const result = await safeJson<any>(await fetch(url, { headers }))
+  const result = await safeJson<any>(await gitFetch(url, { headers }))
   return {
     path: result.file_path,
     name: getGitFileName(result.file_path),
@@ -316,7 +323,7 @@ async function gitlabGetBinaryFile(config: GitProviderConfig, baseUrl: string, p
   const headers = getHeaders(config)
   const normalizedPath = normalizeGitPath(path)
   const url = `${baseUrl}/projects/${getEncodedProject(config)}/repository/files/${encodeURIComponent(normalizedPath)}?ref=${encodeURIComponent(config.branch)}`
-  const result = await safeJson<any>(await fetch(url, { headers }))
+  const result = await safeJson<any>(await gitFetch(url, { headers }))
   return {
     contentBase64: String(result.content || ''),
     mimeType: undefined,
@@ -336,7 +343,7 @@ async function gitlabCreateOrUpdateWithEncoding(
   const normalizedPath = normalizeGitPath(path)
   const method = sha ? 'PUT' : 'POST'
   const url = `${baseUrl}/projects/${getEncodedProject(config)}/repository/files/${encodeURIComponent(normalizedPath)}`
-  const response = await safeJson<any>(await fetch(url, {
+  const response = await safeJson<any>(await gitFetch(url, {
     method,
     headers,
     body: JSON.stringify({
@@ -357,7 +364,7 @@ async function gitlabDelete(config: GitProviderConfig, baseUrl: string, path: st
   const headers = getHeaders(config)
   const normalizedPath = normalizeGitPath(path)
   const url = `${baseUrl}/projects/${getEncodedProject(config)}/repository/files/${encodeURIComponent(normalizedPath)}`
-  await safeJson<any>(await fetch(url, {
+  await safeJson<any>(await gitFetch(url, {
     method: 'DELETE',
     headers,
     body: JSON.stringify({
@@ -370,7 +377,7 @@ async function gitlabDelete(config: GitProviderConfig, baseUrl: string, path: st
 async function gitlabCommitActions(config: GitProviderConfig, baseUrl: string, message: string, actions: any[]) {
   const headers = getHeaders(config)
   const url = `${baseUrl}/projects/${getEncodedProject(config)}/repository/commits`
-  await safeJson<any>(await fetch(url, {
+  await safeJson<any>(await gitFetch(url, {
     method: 'POST',
     headers,
     body: JSON.stringify({
