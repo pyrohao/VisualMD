@@ -1,6 +1,8 @@
 import React from "react"
 import type { Metadata } from 'next'
 import { Analytics } from '@vercel/analytics/next'
+import { headers } from 'next/headers'
+import { ThemeProvider } from '@/components/theme-provider'
 import { Toaster } from '@/components/ui/toaster'
 import './globals.css'
 import 'katex/dist/katex.min.css'
@@ -19,17 +21,27 @@ export const metadata: Metadata = {
   },
 }
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode
 }>) {
+  const shouldEnableAnalytics = process.env.NODE_ENV === 'production'
+  const nonce = (await headers()).get('x-nonce') || undefined
+
   return (
     <html lang="zh-CN" suppressHydrationWarning>
       <body className="font-sans antialiased">
-        {children}
-        <Toaster />
-        <Analytics />
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="light"
+          enableSystem={false}
+          nonce={nonce}
+        >
+          {children}
+          <Toaster />
+          {shouldEnableAnalytics ? <Analytics /> : null}
+        </ThemeProvider>
       </body>
     </html>
   )
