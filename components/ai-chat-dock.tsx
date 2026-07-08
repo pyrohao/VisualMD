@@ -55,6 +55,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { toast } from '@/hooks/use-toast'
+import { sanitizeRenderedHtml } from '@/lib/safe-html'
 
 type DockView = 'history' | 'conversation'
 
@@ -224,7 +225,7 @@ function ChatMarkdownMessage({
         .process(content)
 
       if (!cancelled) {
-        setHtml(String(result))
+        setHtml(sanitizeRenderedHtml(String(result)))
       }
     }
 

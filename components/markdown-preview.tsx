@@ -52,6 +52,7 @@ import {
   prepareLocalHtmlImageSources,
   resolveLocalHtmlImageSources,
 } from '@/lib/local-image-resolution'
+import { sanitizeRenderedHtml } from '@/lib/safe-html'
 import { toast } from '@/hooks/use-toast'
 import { Button } from '@/components/ui/button'
 
@@ -908,11 +909,12 @@ export function MarkdownPreview() {
         .process(content)
       
       const rawHtml = String(result)
+      const sanitizedHtml = sanitizeRenderedHtml(rawHtml)
       const immediateHtml = activeGitMeta?.path
-        ? prepareGitHtmlImageSources(rawHtml, activeGitMeta.path, gitAssets)
+        ? prepareGitHtmlImageSources(sanitizedHtml, activeGitMeta.path, gitAssets)
         : activeLocalMarkdownPath
-          ? prepareLocalHtmlImageSources(rawHtml, activeLocalMarkdownPath, localAssetPaths)
-          : rawHtml
+          ? prepareLocalHtmlImageSources(sanitizedHtml, activeLocalMarkdownPath, localAssetPaths)
+          : sanitizedHtml
       if (!cancelled) {
         setHtml(immediateHtml)
       }
