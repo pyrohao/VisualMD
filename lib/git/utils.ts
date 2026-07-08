@@ -37,6 +37,30 @@ export function getGitFileName(path: string) {
   return segments[segments.length - 1] || normalized
 }
 
+export function buildGitRepoRelativePath(fromPath: string, targetPath: string) {
+  const normalizedFromPath = normalizeGitPath(fromPath)
+  const normalizedTargetPath = normalizeGitPath(targetPath)
+  const fromDirSegments = normalizedFromPath.includes('/')
+    ? normalizedFromPath.split('/').slice(0, -1).filter(Boolean)
+    : []
+  const targetSegments = normalizedTargetPath.split('/').filter(Boolean)
+  let sharedLength = 0
+
+  while (
+    sharedLength < fromDirSegments.length &&
+    sharedLength < targetSegments.length &&
+    fromDirSegments[sharedLength] === targetSegments[sharedLength]
+  ) {
+    sharedLength += 1
+  }
+
+  const upSegments = fromDirSegments.slice(sharedLength).map(() => '..')
+  const downSegments = targetSegments.slice(sharedLength)
+  const relativeSegments = [...upSegments, ...downSegments]
+
+  return relativeSegments.join('/') || getGitFileName(normalizedTargetPath)
+}
+
 export function encodeBase64(content: string) {
   const bytes = new TextEncoder().encode(content)
   let binary = ''

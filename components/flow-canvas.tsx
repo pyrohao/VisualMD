@@ -27,8 +27,7 @@ import {
   Panel,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { FileJson, Trash2 } from 'lucide-react'
-import { Button } from './ui/button'
+import { Trash2 } from 'lucide-react'
 import { MarkdownNode } from './markdown-node'
 import { CreateNodesDialog } from './create-nodes-dialog'
 import {
@@ -320,7 +319,6 @@ export function FlowCanvas() {
   const themeConfig = getThemeConfig()
   const { t } = useTranslation()
   const { mode: layoutMode } = useCanvasLayoutStore()
-  const hideVirtualRoot = document ? shouldHideVirtualRoot(document.root) : false
   const nodeCallbacks = useMemo(
     () =>
       createNodeCallbacks(updateNode, toggleNode, (nodeId) => {
@@ -1104,38 +1102,6 @@ export function FlowCanvas() {
           } as React.CSSProperties}
           showInteractive={false}
         />
-
-        {/* 元数据按钮 */}
-        {hideVirtualRoot && (
-          <Panel
-            position="top-right"
-            className="z-20"
-            style={{
-              top: 16,
-              right: 16,
-              margin: 0,
-              zIndex: 20,
-            }}
-          >
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => selectNode('root')}
-              className="h-9 gap-2 transition-shadow hover:shadow-lg hover:[background-color:var(--button-hover-bg)]"
-              style={{
-                '--button-hover-bg': themeConfig.hover,
-                backgroundColor: `${themeConfig.card}e8`,
-                borderColor: themeConfig.border,
-                color: themeConfig.text,
-                boxShadow: `0 8px 20px ${themeConfig.border}55`,
-                backdropFilter: 'blur(8px)',
-              } as React.CSSProperties}
-            >
-              <FileJson className="h-4 w-4" />
-              {t('node.metadata')}
-            </Button>
-          </Panel>
-        )}
 
         {/* 小地图 */}
         <MiniMap

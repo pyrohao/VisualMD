@@ -238,8 +238,8 @@ describe('gitStore stageLocalFile', () => {
     const documentId = buildGitDocumentId(config, 'docs/note.md')
     useGitStore.setState({
       remoteSnapshotEntries: {
-        'docs/.visualmd-assets/note-asset01.png': {
-          path: 'docs/.visualmd-assets/note-asset01.png',
+        '.visualmd-assets/note-asset01.png': {
+          path: '.visualmd-assets/note-asset01.png',
           name: 'note-asset01.png',
           type: 'file',
           sha: 'remote-asset-sha',
@@ -277,7 +277,7 @@ describe('gitStore stageLocalFile', () => {
       expect.objectContaining({
         documentId,
         label: 'note-asset01.png',
-        repoPath: 'docs/.visualmd-assets/note-asset01.png',
+        repoPath: '.visualmd-assets/note-asset01.png',
         baseSha: 'remote-asset-sha',
         originalSha: 'remote-asset-sha',
       }),

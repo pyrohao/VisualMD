@@ -681,13 +681,13 @@ export function EditorToolbar({
         <div className="mx-1 h-4 w-px" style={{ backgroundColor: themeConfig.border }} />
         <Button
           variant="ghost"
-          size="icon"
           onClick={onToggleAiDock}
-          className="h-8 w-8 transition-colors"
+          className="h-8 gap-1.5 px-2.5 transition-colors"
           {...interactiveIconProps(aiDockOpen)}
           title={mounted ? t('sidebar.ai') : 'AI'}
         >
           <Sparkles className="h-4 w-4" />
+          <span className="text-sm font-medium leading-none">AI</span>
         </Button>
 
         <ThemeToggle />

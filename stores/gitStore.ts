@@ -22,7 +22,7 @@ import type {
   RemoteTextFileDto,
   StagedGitChange,
 } from '@/lib/git/types'
-import { arrayBufferToBase64, buildGitDocumentId, getGitFileName, joinGitPath, normalizeGitPath, parseGitDocumentId } from '@/lib/git/utils'
+import { arrayBufferToBase64, buildGitDocumentId, buildGitRepoRelativePath, getGitFileName, joinGitPath, normalizeGitPath, parseGitDocumentId } from '@/lib/git/utils'
 import { decryptSecret, encryptSecret, normalizeEncryptedSecret } from '@/lib/secret-storage'
 import { useDocumentStore } from './documentStore'
 import { useFileSystemStore } from './fileSystemStore'
@@ -169,14 +169,10 @@ function buildConfigSignature(config: GitProviderConfig) {
   })
 }
 
+const GIT_ASSET_ROOT_DIRECTORY = '.visualmd-assets'
+
 function draftReferencesRepoPath(draftPath: string, content: string, repoPath: string) {
-  const normalizedDraftPath = normalizeGitPath(draftPath)
-  const draftDir = normalizedDraftPath.includes('/')
-    ? normalizedDraftPath.split('/').slice(0, -1).join('/')
-    : ''
-  const relativePath = draftDir && repoPath.startsWith(`${draftDir}/`)
-    ? repoPath.slice(draftDir.length + 1)
-    : repoPath
+  const relativePath = buildGitRepoRelativePath(draftPath, repoPath)
   const encodedRelativePath = encodeURI(relativePath)
   const encodedRepoPath = encodeURI(repoPath)
 
@@ -1087,31 +1083,8 @@ function createAssetFileName(draftPath: string, file: File) {
 }
 
 function getDocumentAssetDirectory(draftPath: string) {
-  const normalizedDraftPath = normalizeGitPath(draftPath)
-  const draftDir = normalizedDraftPath.includes('/')
-    ? normalizedDraftPath.split('/').slice(0, -1).join('/')
-    : ''
-  return joinGitPath(draftDir, '.visualmd-assets')
-}
-
-function rebaseDocumentAssetPathForFileRename(
-  sourceDraftPath: string,
-  nextDraftPath: string,
-  assetRepoPath: string
-) {
-  const normalizedAssetPath = normalizeGitPath(assetRepoPath)
-  const sourceAssetDir = getDocumentAssetDirectory(sourceDraftPath)
-  const nextAssetDir = getDocumentAssetDirectory(nextDraftPath)
-
-  if (normalizedAssetPath === sourceAssetDir) {
-    return nextAssetDir
-  }
-
-  if (!normalizedAssetPath.startsWith(`${sourceAssetDir}/`)) {
-    return normalizedAssetPath
-  }
-
-  return joinGitPath(nextAssetDir, normalizedAssetPath.slice(sourceAssetDir.length + 1))
+  void draftPath
+  return GIT_ASSET_ROOT_DIRECTORY
 }
 
 function normalizePersistedDraftFileOrigin(draft: Record<string, unknown>) {
@@ -2495,11 +2468,8 @@ export const useGitStore = create<GitStore>()(
           }
 
           const normalizedDraftPath = normalizeGitPath(draft.path)
-          const draftDir = normalizedDraftPath.includes('/')
-            ? normalizedDraftPath.split('/').slice(0, -1).join('/')
-            : ''
           const assetFileName = createAssetFileName(normalizedDraftPath, file)
-          const repoPath = joinGitPath(draftDir, '.visualmd-assets', assetFileName)
+          const repoPath = joinGitPath(GIT_ASSET_ROOT_DIRECTORY, assetFileName)
           const contentBase64 = arrayBufferToBase64(await file.arrayBuffer())
           const mimeType = file.type || undefined
           const remoteAssetSha = remoteSnapshotEntries[repoPath]?.type === 'file'
@@ -4330,48 +4300,6 @@ export const useGitStore = create<GitStore>()(
 
           const nextDraft = buildRenamedGitDraft(config, draft, nextPath)
           const renameTimestamp = Date.now()
-          const relatedAssetChanges = [
-            ...pendingAssetChanges.filter((item) => item.kind === 'git-asset' && item.documentId === draft.documentId),
-            ...stagedChanges.filter((item) => item.kind === 'git-asset' && item.documentId === draft.documentId),
-          ]
-          const assetMoveTargets = relatedAssetChanges
-            .map((item) => ({
-              sourcePath: normalizeGitPath(item.repoPath),
-              nextPath: rebaseDocumentAssetPathForFileRename(normalizedOld, nextPath, item.repoPath),
-            }))
-            .filter((item, index, list) => (
-              item.nextPath !== item.sourcePath &&
-              list.findIndex((candidate) => candidate.nextPath === item.nextPath) === index
-            ))
-
-          for (const assetTarget of assetMoveTargets) {
-            const assetTargetTaken =
-              Object.values(drafts).some((item) => normalizeGitPath(item.path) === assetTarget.nextPath) ||
-              Object.prototype.hasOwnProperty.call(remoteSnapshotEntries, assetTarget.nextPath) ||
-              stagedChanges.some((item) => (
-                normalizeGitPath(item.repoPath) === assetTarget.nextPath &&
-                !(
-                  item.kind === 'git-asset' &&
-                  item.documentId === draft.documentId &&
-                  normalizeGitPath(item.repoPath) === assetTarget.sourcePath
-                )
-              )) ||
-              pendingAssetChanges.some((item) => (
-                normalizeGitPath(item.repoPath) === assetTarget.nextPath &&
-                !(
-                  item.kind === 'git-asset' &&
-                  item.documentId === draft.documentId &&
-                  normalizeGitPath(item.repoPath) === assetTarget.sourcePath
-                )
-              )) ||
-              pendingStructuralChanges.some((item) => normalizeGitPath(item.repoPath) === assetTarget.nextPath)
-
-            if (assetTargetTaken) {
-              set({ error: `Target path '${assetTarget.nextPath}' already exists` })
-              throw new Error(`Target path '${assetTarget.nextPath}' already exists`)
-            }
-          }
-
           set((state) => {
             const nextDrafts = { ...state.drafts }
             delete nextDrafts[draft.documentId]
@@ -4393,9 +4321,9 @@ export const useGitStore = create<GitStore>()(
                   : item.kind === 'git-asset'
                     ? {
                         ...item,
-                        id: `git-asset:${nextDocumentId}:${rebaseDocumentAssetPathForFileRename(normalizedOld, nextPath, item.repoPath)}`,
+                        id: `git-asset:${nextDocumentId}:${normalizeGitPath(item.repoPath)}`,
                         documentId: nextDocumentId,
-                        repoPath: rebaseDocumentAssetPathForFileRename(normalizedOld, nextPath, item.repoPath),
+                        repoPath: normalizeGitPath(item.repoPath),
                         updatedAt: renameTimestamp,
                       }
                   : {
@@ -4435,9 +4363,9 @@ export const useGitStore = create<GitStore>()(
                 item.kind === 'git-asset' && item.documentId === draft.documentId
                   ? {
                       ...item,
-                      id: `git-asset:${nextDocumentId}:${rebaseDocumentAssetPathForFileRename(normalizedOld, nextPath, item.repoPath)}`,
+                      id: `git-asset:${nextDocumentId}:${normalizeGitPath(item.repoPath)}`,
                       documentId: nextDocumentId,
-                      repoPath: rebaseDocumentAssetPathForFileRename(normalizedOld, nextPath, item.repoPath),
+                      repoPath: normalizeGitPath(item.repoPath),
                       updatedAt: renameTimestamp,
                     }
                   : item

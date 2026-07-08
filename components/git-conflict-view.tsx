@@ -121,6 +121,16 @@ export function GitConflictView({
 
   const paneClassName =
     'h-full min-h-0 w-full resize-none rounded-none border-0 bg-transparent px-4 py-4 font-mono text-[13px] leading-6 shadow-none focus-visible:ring-0'
+  const secondaryButtonStyle = {
+    backgroundColor: themeConfig.buttonSecondaryBg,
+    borderColor: themeConfig.border,
+    color: themeConfig.heading,
+  } satisfies React.CSSProperties
+  const primaryButtonStyle = {
+    backgroundColor: themeConfig.primary,
+    borderColor: themeConfig.primary,
+    color: themeConfig.buttonText,
+  } satisfies React.CSSProperties
 
   const renderPane = (
     key: PaneKey,
@@ -229,16 +239,35 @@ export function GitConflictView({
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setMergedContent(mergeResult.mergedText)}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setMergedContent(mergeResult.mergedText)}
+            style={secondaryButtonStyle}
+          >
             {t('git.mergeAutoResolved')}
           </Button>
-          <Button variant="outline" size="sm" onClick={onUseLocal}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onUseLocal}
+            style={secondaryButtonStyle}
+          >
             {t('git.acceptLocal')}
           </Button>
-          <Button variant="outline" size="sm" onClick={onUseRemote}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onUseRemote}
+            style={secondaryButtonStyle}
+          >
             {t('git.acceptRemote')}
           </Button>
-          <Button size="sm" onClick={() => onApplyMerged(mergedContent)}>
+          <Button
+            size="sm"
+            onClick={() => onApplyMerged(mergedContent)}
+            style={primaryButtonStyle}
+          >
             {t('git.applyMerged')}
           </Button>
         </div>

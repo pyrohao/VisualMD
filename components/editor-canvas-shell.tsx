@@ -1,8 +1,7 @@
 'use client'
 
 import { ReactFlowProvider } from '@xyflow/react'
-import { CanvasLayoutSwitcher } from '@/components/canvas-layout-switcher'
-import { CanvasViewSwitcher } from '@/components/canvas-view-switcher'
+import { CanvasSettingsMenu } from '@/components/canvas-settings-menu'
 import { FlowCanvas } from '@/components/flow-canvas'
 import { PrototypeCanvas } from '@/components/prototype-canvas'
 import { themeConfigs, useThemeStore } from '@/stores/themeStore'
@@ -35,8 +34,7 @@ export function EditorCanvasShell({ document }: EditorCanvasShellProps) {
   return (
     <div className="relative h-full w-full" style={{ backgroundColor: themeConfig.background }}>
       <div className="absolute left-4 top-4 z-30 flex items-center gap-2">
-        <CanvasViewSwitcher />
-        <CanvasLayoutSwitcher />
+        <CanvasSettingsMenu document={document} />
       </div>
 
       {mode === 'flow' && <FlowCanvasContainer />}

@@ -1,4 +1,5 @@
 import { getClipboardImageFilesWithAltText, insertMarkdownAtSelection, type MarkdownImagePasteResult } from '@/lib/clipboard-image'
+import { buildGitRepoRelativePath } from '@/lib/git/utils'
 import { useGitStore } from '@/stores/gitStore'
 
 interface GitMarkdownImagePasteOptions {
@@ -21,12 +22,7 @@ export async function getGitMarkdownImagePasteResult({
 
   const snippets = await Promise.all(imageFiles.map(async ({ file, altText }) => {
     const { repoPath, draftPath } = await useGitStore.getState().uploadAsset(documentId, file)
-    const draftDir = draftPath.includes('/')
-      ? draftPath.split('/').slice(0, -1).join('/')
-      : ''
-    const relativePath = draftDir && repoPath.startsWith(`${draftDir}/`)
-      ? repoPath.slice(draftDir.length + 1)
-      : repoPath
+    const relativePath = buildGitRepoRelativePath(draftPath, repoPath)
     const encodedPath = encodeURI(relativePath)
 
     return `![${altText}](${encodedPath})`

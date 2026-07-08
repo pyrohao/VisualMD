@@ -257,7 +257,7 @@ describe('gitStore renameFile', () => {
     ])
   })
 
-  it('moves pending and staged document assets alongside a file renamed into another folder', async () => {
+  it('keeps pending and staged document assets at the repo asset root when a file is renamed into another folder', async () => {
     const oldDocumentId = buildGitDocumentId(config, 'README.md')
     const nextDocumentId = buildGitDocumentId(config, 'docs/README-renamed.md')
 
@@ -318,23 +318,23 @@ describe('gitStore renameFile', () => {
     const nextState = useGitStore.getState()
     expect(nextState.pendingAssetChanges).toEqual([
       expect.objectContaining({
-        id: `git-asset:${nextDocumentId}:docs/.visualmd-assets/logo.png`,
+        id: `git-asset:${nextDocumentId}:.visualmd-assets/logo.png`,
         documentId: nextDocumentId,
-        repoPath: 'docs/.visualmd-assets/logo.png',
+        repoPath: '.visualmd-assets/logo.png',
       }),
     ])
     expect(nextState.stagedChanges).toEqual([
       expect.objectContaining({
-        id: `git-asset:${nextDocumentId}:docs/.visualmd-assets/banner.png`,
+        id: `git-asset:${nextDocumentId}:.visualmd-assets/banner.png`,
         documentId: nextDocumentId,
-        repoPath: 'docs/.visualmd-assets/banner.png',
+        repoPath: '.visualmd-assets/banner.png',
         baseSha: 'banner-sha',
         originalSha: 'banner-sha',
       }),
     ])
   })
 
-  it('fails fast when a file rename would move a document asset onto an existing path', async () => {
+  it('does not treat file rename as an asset move when assets live at the repo root', async () => {
     const oldDocumentId = buildGitDocumentId(config, 'README.md')
 
     useGitStore.setState({
@@ -373,8 +373,8 @@ describe('gitStore renameFile', () => {
         },
       ],
       remoteSnapshotEntries: {
-        'docs/.visualmd-assets/logo.png': {
-          path: 'docs/.visualmd-assets/logo.png',
+        '.visualmd-assets/logo.png': {
+          path: '.visualmd-assets/logo.png',
           name: 'logo.png',
           type: 'file',
           sha: 'existing-sha',
@@ -384,7 +384,7 @@ describe('gitStore renameFile', () => {
 
     await expect(
       useGitStore.getState().renameFile('README.md', 'docs/README-renamed.md', 'rename')
-    ).rejects.toThrow("Target path 'docs/.visualmd-assets/logo.png' already exists")
+    ).resolves.toBeUndefined()
   })
 
   it('renames a local-only folder by remapping its child drafts and folder placeholders', async () => {
