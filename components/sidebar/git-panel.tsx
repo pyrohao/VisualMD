@@ -24,9 +24,9 @@ import { useGitStore } from '@/stores/gitStore'
 import { useTabsStore } from '@/stores/tabsStore'
 import { requestNavigationWithUnsavedGuard } from '@/stores/unsavedChangesStore'
 import { useDocumentStore } from '@/stores/documentStore'
-import { useFileSystemStore } from '@/stores/fileSystemStore'
 import { inferGitFileKind, inferGitFileMimeType, isGitBinaryFileKind } from '@/lib/git/file-kind'
 import { buildGitTabDraftState } from '@/lib/git/tab-state'
+import { shouldShowDraftInPendingChanges } from '@/lib/git/change-sections'
 import { buildGitDocumentId, getGitFileName, normalizeGitPath } from '@/lib/git/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -334,7 +334,7 @@ export function GitPanel() {
     isCommitting,
     error,
     connected,
-    lastFetchedAt,
+    remoteSnapshotFetchedAt,
     clearError,
     refreshRepositoryFromRemote,
     openFile,
@@ -352,11 +352,22 @@ export function GitPanel() {
 
   const activeTab = getActiveTab()
   const currentDraft = currentDocumentId ? drafts[currentDocumentId] : null
+  const showFileCheckedAt =
+    !!currentDraft?.lastCheckedAt &&
+    (!remoteSnapshotFetchedAt || currentDraft.lastCheckedAt !== remoteSnapshotFetchedAt)
   const conflictedDrafts = useMemo(
     () => Object.values(drafts).filter((draft) => draft.status === 'conflict'),
     [drafts]
   )
   const stagedChangeIdSet = useMemo(() => new Set(stagedChanges.map((item) => item.id)), [stagedChanges])
+  const stagedDraftByDocumentId = useMemo(
+    () => new Map(
+      stagedChanges
+        .filter((item) => item.kind === 'git-draft' && item.documentId)
+        .map((item) => [item.documentId as string, item] as const)
+    ),
+    [stagedChanges]
+  )
   const deletedDocumentIdSet = useMemo(
     () => new Set(
       [...stagedChanges, ...pendingStructuralChanges]
@@ -375,12 +386,14 @@ export function GitPanel() {
   )
   const pendingDrafts = useMemo(
     () => Object.values(drafts).filter((draft) => (
-      (draft.isDirty || draft.isNew) &&
-      !stagedChangeIdSet.has(`git-draft:${draft.documentId}`) &&
-      !deletedDocumentIdSet.has(draft.documentId) &&
-      !Array.from(deletedFolderPathSet).some((folderPath) => isGitPathWithinFolder(draft.path, folderPath))
+      shouldShowDraftInPendingChanges(
+        draft,
+        stagedDraftByDocumentId.get(draft.documentId),
+        deletedDocumentIdSet.has(draft.documentId) ||
+          Array.from(deletedFolderPathSet).some((folderPath) => isGitPathWithinFolder(draft.path, folderPath))
+      )
     )),
-    [deletedDocumentIdSet, deletedFolderPathSet, drafts, stagedChangeIdSet]
+    [deletedDocumentIdSet, deletedFolderPathSet, drafts, stagedDraftByDocumentId]
   )
   const pendingGitAssetChanges = useMemo(
     () => pendingAssetChanges.filter((item) => (
@@ -610,7 +623,7 @@ export function GitPanel() {
 
     if (change.kind === 'git-draft' && change.documentId) {
       await requestNavigationWithUnsavedGuard(() => {
-        openDraftInTab(change.documentId!)
+        openDraftInTab(change.documentId!, change.content)
       }, change.label)
       return
     }
@@ -624,17 +637,6 @@ export function GitPanel() {
       } else {
         await handleOpenFile(change.repoPath)
       }
-      return
-    }
-
-    if (change.kind === 'local-file' && change.localFileId) {
-      const file = useFileSystemStore.getState().files.find((item) => item.id === change.localFileId)
-      if (!file) return
-      await requestNavigationWithUnsavedGuard(() => {
-        useFileSystemStore.getState().openFile(change.localFileId!)
-        openFileInTab(file.name, file.content, change.localFileId)
-        loadDocument(file.content, file.name, change.localFileId)
-      }, file.name)
       return
     }
 
@@ -909,9 +911,15 @@ export function GitPanel() {
             </div>
           ) : null}
 
-          {currentDraft?.lastCheckedAt ? (
+          {remoteSnapshotFetchedAt ? (
             <div className="shrink-0 text-[11px]" style={{ color: themeConfig.muted }}>
-              {t('git.lastFetched')}: {new Date(lastFetchedAt || currentDraft.lastCheckedAt).toLocaleString()}
+              {t('git.lastSnapshotFetched')}: {new Date(remoteSnapshotFetchedAt).toLocaleString()}
+            </div>
+          ) : null}
+
+          {showFileCheckedAt ? (
+            <div className="shrink-0 text-[11px]" style={{ color: themeConfig.muted }}>
+              {t('git.lastFileChecked')}: {new Date(currentDraft!.lastCheckedAt!).toLocaleString()}
             </div>
           ) : null}
 
@@ -929,15 +937,15 @@ export function GitPanel() {
 
           <Button
             onClick={handleCommit}
-            disabled={!hasCommitCandidates || !commitMessage.trim() || isCommitting || hasUnresolvedConflicts}
+            disabled={!hasCommitCandidates || !commitMessage.trim() || isCommitting}
             className="w-full shrink-0"
             style={{
               backgroundColor:
-                hasCommitCandidates && commitMessage.trim() && !isCommitting && !hasUnresolvedConflicts
+                hasCommitCandidates && commitMessage.trim() && !isCommitting
                   ? themeConfig.primary
                   : themeConfig.border,
               color:
-                hasCommitCandidates && commitMessage.trim() && !isCommitting && !hasUnresolvedConflicts
+                hasCommitCandidates && commitMessage.trim() && !isCommitting
                   ? themeConfig.buttonText || '#fff'
                   : themeConfig.muted,
             }}

@@ -9,9 +9,7 @@ export type GitFileKind = 'text' | 'image' | 'audio' | 'video' | 'pdf' | 'binary
 export type GitDraftStatus =
   | 'clean'
   | 'dirty'
-  | 'auto-merged'
   | 'conflict'
-  | 'resolved-pending-commit'
 
 export interface GitProviderConfig {
   provider: GitProvider
@@ -30,12 +28,14 @@ export interface GitRepoRef {
   defaultBranch?: string
 }
 
-export interface GitBranchRef {
+export interface BranchDto {
   name: string
   commitSha?: string
 }
 
-export interface GitTreeItem {
+export interface GitBranchRef extends BranchDto {}
+
+export interface RemoteTreeEntryDto {
   path: string
   name: string
   type: 'file' | 'dir'
@@ -43,12 +43,38 @@ export interface GitTreeItem {
   size?: number
 }
 
-export interface GitFileRef {
-  documentId: string
+export interface GitTreeItem extends RemoteTreeEntryDto {}
+
+export interface GitRemoteSnapshotEntry extends RemoteTreeEntryDto {}
+
+export interface GitRemoteSnapshotState {
+  branch: string
+  fetchedAt: number
+  entriesByPath: Record<string, GitRemoteSnapshotEntry>
+  treeByPath: Record<string, GitTreeItem[]>
+}
+
+export interface RemoteTextFileDto {
   path: string
   name: string
   sha?: string
   content: string
+}
+
+export interface GitRemoteTextCacheEntry extends RemoteTextFileDto {
+  loadedAt: number
+}
+
+export interface RemoteBinaryFileDto {
+  path: string
+  name: string
+  sha?: string
+  contentBase64: string
+  mimeType?: string
+}
+
+export interface GitFileRef extends RemoteTextFileDto {
+  documentId: string
   provider: GitProvider
   repo: string
   ownerOrNamespace: string
@@ -56,6 +82,7 @@ export interface GitFileRef {
 }
 
 export interface GitConflictSnapshot {
+  kind?: 'content' | 'modify-delete' | 'path' | 'rename'
   baseContent: string
   baseSha?: string
   localContent: string
@@ -63,6 +90,7 @@ export interface GitConflictSnapshot {
   remoteSha?: string
   remoteMissing?: boolean
   resolvedContent?: string
+  pathHint?: string
 }
 
 export interface GitDraftFile extends GitFileRef {
@@ -70,7 +98,10 @@ export interface GitDraftFile extends GitFileRef {
   draftContent: string
   isDirty: boolean
   isNew?: boolean
-  creationSource?: 'git' | 'local'
+  localFileId?: string
+  renamedFromPath?: string
+  renamedFromSha?: string
+  fileOrigin?: 'remote' | 'local'
   status?: GitDraftStatus
   remoteContent?: string
   remoteSha?: string
@@ -84,16 +115,23 @@ export interface GitDraftFile extends GitFileRef {
 
 export interface StagedGitChange {
   id: string
-  kind: 'git-draft' | 'local-file' | 'git-asset' | 'git-delete-file' | 'git-delete-folder' | 'git-create-folder'
+  kind: 'git-draft' | 'git-asset' | 'git-delete-file' | 'git-delete-folder' | 'git-create-folder'
   label: string
   repoPath: string
   documentId?: string
-  localFileId?: string
-  localFileName?: string
+  content?: string
   originalContent?: string
+  baseSha?: string
   originalSha?: string
+  blobSha?: string
+  renamedFromPath?: string
+  renamedFromSha?: string
   contentBase64?: string
   mimeType?: string
+  shelvedDrafts?: GitDraftFile[]
+  shelvedStagedChanges?: StagedGitChange[]
+  shelvedPendingAssetChanges?: StagedGitChange[]
+  shelvedPendingStructuralChanges?: StagedGitChange[]
   updatedAt: number
 }
 
@@ -109,10 +147,10 @@ export interface GitBatchCommitAction {
 export interface GitProviderClient {
   validateConnection(config: GitProviderConfig): Promise<void>
   listRepos(config: GitProviderConfig): Promise<GitRepoRef[]>
-  getBranches(config: GitProviderConfig): Promise<GitBranchRef[]>
-  listTree(config: GitProviderConfig, path?: string): Promise<GitTreeItem[]>
-  getFile(config: GitProviderConfig, path: string): Promise<Pick<GitFileRef, 'path' | 'name' | 'sha' | 'content'>>
-  getBinaryFile?(config: GitProviderConfig, path: string): Promise<{ contentBase64: string; mimeType?: string }>
+  getBranches(config: GitProviderConfig): Promise<BranchDto[]>
+  listTree(config: GitProviderConfig, path?: string): Promise<RemoteTreeEntryDto[]>
+  getFile(config: GitProviderConfig, path: string): Promise<RemoteTextFileDto>
+  getBinaryFile?(config: GitProviderConfig, path: string): Promise<RemoteBinaryFileDto>
   createOrUpdateFile(
     config: GitProviderConfig,
     path: string,

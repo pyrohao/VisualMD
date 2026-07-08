@@ -3,11 +3,25 @@ import { devtools, persist } from 'zustand/middleware'
 import { nanoid } from 'nanoid'
 import { getGitProviderClient } from '@/lib/git/providers'
 import { mergeGitText } from '@/lib/git/merge'
+import { findGitDirectoryPathConflicts, findGitPullBlockers, findGitStagedAssetConflicts } from '@/lib/git/pull-guards'
 import { hasMeaningfulLocalGitChange, hasMeaningfulRemoteGitChange } from '@/lib/git/sync'
 import { isPureLocalNewGitDraft } from '@/lib/git/draft-guards'
+import { createBinaryStageChange, createDraftStageChange } from '@/lib/git/staging'
 import { createIndexedDbPersistStorage } from '@/lib/git-store-persist-storage'
 import { buildGitTabDraftState } from '@/lib/git/tab-state'
-import type { GitBatchCommitAction, GitBranchRef, GitConflictSnapshot, GitDraftFile, GitProviderConfig, GitRepoRef, GitTreeItem, StagedGitChange } from '@/lib/git/types'
+import type {
+  GitBatchCommitAction,
+  GitBranchRef,
+  GitConflictSnapshot,
+  GitDraftFile,
+  GitProviderConfig,
+  GitRemoteSnapshotEntry,
+  GitRemoteTextCacheEntry,
+  GitRepoRef,
+  GitTreeItem,
+  RemoteTextFileDto,
+  StagedGitChange,
+} from '@/lib/git/types'
 import { arrayBufferToBase64, buildGitDocumentId, getGitFileName, joinGitPath, normalizeGitPath, parseGitDocumentId } from '@/lib/git/utils'
 import { decryptSecret, encryptSecret, normalizeEncryptedSecret } from '@/lib/secret-storage'
 import { useDocumentStore } from './documentStore'
@@ -20,7 +34,9 @@ interface GitStore {
   repos: GitRepoRef[]
   branches: GitBranchRef[]
   treeByPath: Record<string, GitTreeItem[]>
-  baseTreeMap: Record<string, string>
+  remoteSnapshotEntries: Record<string, GitRemoteSnapshotEntry>
+  remoteSnapshotFetchedAt: number | null
+  remoteContentCache: Record<string, GitRemoteTextCacheEntry>
   expandedPaths: string[]
   drafts: Record<string, GitDraftFile>
   stagedChanges: StagedGitChange[]
@@ -93,7 +109,9 @@ type GitWorkspaceState = {
   currentDocumentId: string | null
   expandedPaths: string[]
   pendingCommitMessage: string | null
-  baseTreeMap: Record<string, string>
+  remoteSnapshotEntries: Record<string, GitRemoteSnapshotEntry>
+  remoteSnapshotFetchedAt: number | null
+  remoteContentCache: Record<string, GitRemoteTextCacheEntry>
 }
 
 type GitStorePersistedState = {
@@ -107,7 +125,10 @@ type GitStorePersistedState = {
   currentDocumentId: string | null
   expandedPaths: string[]
   pendingCommitMessage: string | null
+  remoteSnapshotEntries: Record<string, GitRemoteSnapshotEntry>
+  remoteSnapshotFetchedAt: number | null
   baseTreeMap: Record<string, string>
+  remoteContentCache: Record<string, GitRemoteTextCacheEntry>
   workspaceStateByKey: Record<string, GitWorkspaceState>
 }
 
@@ -190,24 +211,20 @@ function resolveDraftAgainstRemoteBase(draft: GitDraftFile, nextContent: string)
     ? undefined
     : (draft.remoteSha ?? draft.sha)
   const isDirty = hasMeaningfulLocalGitChange(nextContent, nextBaseContent)
-  const status = isDirty ? 'resolved-pending-commit' : 'clean'
+  const status = isDirty ? 'dirty' : 'clean'
 
-  return {
+  return clearDraftRemoteTracking({
     ...draft,
     sha: nextSha,
     content: nextContent,
     originalContent: nextBaseContent,
     draftContent: nextContent,
-    remoteContent: nextBaseContent,
-    remoteSha: nextSha,
-    remoteMissing,
     conflictResolvedContent: nextContent,
     conflictSnapshot: undefined,
     isDirty,
     status,
     hasConflict: false,
-    hasRemoteUpdates: false,
-  }
+  })
 }
 
 function createConflictSnapshot(
@@ -215,9 +232,12 @@ function createConflictSnapshot(
   remoteContent: string,
   remoteSha?: string,
   resolvedContent?: string,
-  remoteMissing = false
+  remoteMissing = false,
+  kind: NonNullable<GitConflictSnapshot['kind']> = 'content',
+  pathHint?: string
 ): GitConflictSnapshot {
   return {
+    kind,
     baseContent: draft.originalContent,
     baseSha: draft.sha,
     localContent: draft.draftContent,
@@ -225,6 +245,7 @@ function createConflictSnapshot(
     remoteSha: remoteSha ?? draft.remoteSha,
     remoteMissing,
     resolvedContent,
+    pathHint,
   }
 }
 
@@ -237,6 +258,7 @@ function getDraftConflictSnapshot(draft: GitDraftFile) {
     remoteSha: draft.remoteSha,
     remoteMissing: draft.remoteMissing ?? false,
     resolvedContent: draft.conflictResolvedContent,
+    kind: 'content',
   }
 }
 
@@ -279,9 +301,11 @@ function applyConflictState(
   remoteContent: string,
   remoteSha: string | undefined,
   resolvedContent: string,
-  remoteMissing = false
+  remoteMissing = false,
+  kind: NonNullable<GitConflictSnapshot['kind']> = remoteMissing ? 'modify-delete' : 'content',
+  pathHint?: string
 ): GitDraftFile {
-  const snapshot = createConflictSnapshot(draft, remoteContent, remoteSha, resolvedContent, remoteMissing)
+  const snapshot = createConflictSnapshot(draft, remoteContent, remoteSha, resolvedContent, remoteMissing, kind, pathHint)
 
   return {
     ...draft,
@@ -300,19 +324,30 @@ function applyConflictState(
 
 function syncGitDraftStageState(store: Pick<GitStore, 'drafts' | 'stagedChanges' | 'stageGitDraft' | 'unstageChange'>, documentId: string) {
   const nextDraft = store.drafts[documentId]
-  if (!nextDraft) {
-    return
-  }
-
   const stagedItem = store.stagedChanges.find((item) => item.kind === 'git-draft' && item.documentId === documentId)
-  if (!nextDraft.isDirty && !nextDraft.isNew && stagedItem) {
+  if (!nextDraft && stagedItem) {
     store.unstageChange(stagedItem.id)
-    return
+  }
+}
+
+function clearDraftRemoteTracking(draft: GitDraftFile): GitDraftFile {
+  return {
+    ...draft,
+    remoteContent: undefined,
+    remoteSha: undefined,
+    remoteMissing: false,
+    hasRemoteUpdates: false,
+  }
+}
+
+function getRequiredStagedDraftContent(change: Pick<StagedGitChange, 'repoPath' | 'content'>) {
+  if (typeof change.content === 'string') {
+    return change.content
   }
 
-  if (stagedItem) {
-    store.unstageChange(stagedItem.id)
-  }
+  throw new Error(
+    `Staged file '${normalizeGitPath(change.repoPath)}' is missing its frozen snapshot. Please stage it again before committing`
+  )
 }
 
 function isConflictLikeGitErrorMessage(message: string) {
@@ -363,9 +398,91 @@ function buildTreeItemsForPath(remoteItems: GitTreeItem[] = []) {
   return sortGitTreeItems(Array.from(itemMap.values()))
 }
 
-function buildTreeShaMap(items: GitTreeItem[]) {
+function buildRemoteSnapshotEntries(items: GitTreeItem[]) {
   return Object.fromEntries(
-    items
+    items.map((item) => {
+      const normalizedPath = normalizeGitPath(item.path)
+      return [
+        normalizedPath,
+        {
+          path: normalizedPath,
+          name: item.name,
+          type: item.type,
+          sha: item.sha,
+          size: item.size,
+        } satisfies GitRemoteSnapshotEntry,
+      ]
+    })
+  )
+}
+
+export function mergeGitRemoteSnapshotEntriesForTreePath(
+  existingEntries: Record<string, GitRemoteSnapshotEntry>,
+  existingTreeByPath: Record<string, GitTreeItem[]>,
+  folderPath: string,
+  items: GitTreeItem[]
+) {
+  const normalizedFolderPath = normalizeGitPath(folderPath)
+  const nextEntries = { ...existingEntries }
+  const previousChildren = existingTreeByPath[normalizedFolderPath] || []
+  const normalizedItems = items.map((item) => ({
+    ...item,
+    path: normalizeGitPath(item.path),
+  }))
+  const nextImmediatePathSet = new Set(normalizedItems.map((item) => item.path))
+
+  previousChildren.forEach((child) => {
+    const normalizedChildPath = normalizeGitPath(child.path)
+    if (nextImmediatePathSet.has(normalizedChildPath)) {
+      const nextChild = normalizedItems.find((item) => item.path === normalizedChildPath)
+      if (child.type === 'dir' && nextChild?.type === 'dir') {
+        return
+      }
+    }
+
+    Object.keys(nextEntries).forEach((entryPath) => {
+      if (
+        entryPath === normalizedChildPath ||
+        entryPath.startsWith(`${normalizedChildPath}/`)
+      ) {
+        delete nextEntries[entryPath]
+      }
+    })
+  })
+
+  normalizedItems.forEach((item) => {
+    nextEntries[item.path] = {
+      path: item.path,
+      name: item.name,
+      type: item.type,
+      sha: item.sha,
+      size: item.size,
+    }
+  })
+
+  return nextEntries
+}
+
+function buildFileSnapshotEntriesFromShaMap(treeShaMap: Record<string, string>) {
+  return Object.fromEntries(
+    Object.entries(treeShaMap).map(([path, sha]) => {
+      const normalizedPath = normalizeGitPath(path)
+      return [
+        normalizedPath,
+        {
+          path: normalizedPath,
+          name: getGitFileName(normalizedPath),
+          type: 'file' as const,
+          sha: sha || undefined,
+        } satisfies GitRemoteSnapshotEntry,
+      ]
+    })
+  )
+}
+
+function buildTreeShaMap(entriesByPath: Record<string, GitRemoteSnapshotEntry>) {
+  return Object.fromEntries(
+    Object.values(entriesByPath)
       .filter((item) => item.type === 'file')
       .map((item) => [normalizeGitPath(item.path), item.sha || ''])
   )
@@ -389,12 +506,22 @@ function diffTreeShaMaps(baseTreeMap: Record<string, string>, remoteTreeMap: Rec
   }
 }
 
+export function diffGitRemoteSnapshotEntries(
+  baseEntries: Record<string, GitRemoteSnapshotEntry>,
+  nextEntries: Record<string, GitRemoteSnapshotEntry>
+) {
+  return diffTreeShaMaps(
+    buildTreeShaMap(baseEntries),
+    buildTreeShaMap(nextEntries)
+  )
+}
+
 async function loadCompleteRemoteTree(
   client: ReturnType<typeof getGitProviderClient>,
   config: GitProviderConfig
 ) {
   const treeByPath: Record<string, GitTreeItem[]> = {}
-  const fileItems: GitTreeItem[] = []
+  const snapshotItems: GitTreeItem[] = []
   const queue = ['']
   const visited = new Set<string>()
 
@@ -406,29 +533,357 @@ async function loadCompleteRemoteTree(
     visited.add(currentPath)
 
     const items = await client.listTree(config, currentPath)
-    treeByPath[currentPath] = sortGitTreeItems(items.filter((item) => item.name !== '.gitkeep'))
+    const normalizedItems = items
+      .filter((item) => item.name !== '.gitkeep')
+      .map((item) => ({
+        ...item,
+        path: normalizeGitPath(item.path),
+      }))
+    treeByPath[currentPath] = sortGitTreeItems(normalizedItems)
 
-    items.forEach((item) => {
+    normalizedItems.forEach((item) => {
       if (item.name === '.gitkeep') {
         return
       }
+
+      snapshotItems.push(item)
 
       if (item.type === 'dir') {
         queue.push(normalizeGitPath(item.path))
         return
       }
-
-      fileItems.push({
-        ...item,
-        path: normalizeGitPath(item.path),
-      })
     })
   }
 
+  const entriesByPath = buildRemoteSnapshotEntries(snapshotItems)
+
   return {
     treeByPath,
-    treeMap: buildTreeShaMap(fileItems),
+    entriesByPath,
   }
+}
+
+function buildLoadedRemoteTreeState(
+  treeByPath: Record<string, GitTreeItem[]>,
+  remoteSnapshotEntries: Record<string, GitRemoteSnapshotEntry>,
+  remoteContentCache: Record<string, GitRemoteTextCacheEntry>,
+  fetchedAt: number
+) {
+  return {
+    treeByPath: Object.fromEntries(
+      Object.entries(treeByPath).map(([path, items]) => [
+        path,
+        buildTreeItemsForPath(items),
+      ])
+    ),
+    remoteSnapshotEntries,
+    remoteSnapshotFetchedAt: fetchedAt,
+    remoteContentCache: pruneGitRemoteContentCache(remoteContentCache, remoteSnapshotEntries),
+    lastFetchedAt: fetchedAt,
+  }
+}
+
+function hasAnyRemoteSnapshotMetadata(remoteSnapshotEntries: Record<string, GitRemoteSnapshotEntry>) {
+  return Object.keys(remoteSnapshotEntries).length > 0
+}
+
+function hasCompleteRemoteSnapshotBaseline(remoteSnapshotFetchedAt: number | null | undefined) {
+  return typeof remoteSnapshotFetchedAt === 'number'
+}
+
+function buildScopedRemoteTreeState(
+  currentRemoteSnapshotEntries: Record<string, GitRemoteSnapshotEntry>,
+  currentTreeByPath: Record<string, GitTreeItem[]>,
+  path: string,
+  items: GitTreeItem[],
+  fetchedAt: number
+) {
+  const normalizedPath = normalizeGitPath(path)
+
+  return {
+    remoteSnapshotEntries: mergeGitRemoteSnapshotEntriesForTreePath(
+      currentRemoteSnapshotEntries,
+      currentTreeByPath,
+      normalizedPath,
+      items
+    ),
+    treeByPath: {
+      ...currentTreeByPath,
+      [normalizedPath]: buildTreeItemsForPath(items),
+    },
+    lastFetchedAt: fetchedAt,
+  }
+}
+
+function createRemoteTextCacheEntry(file: RemoteTextFileDto, loadedAt = Date.now()): GitRemoteTextCacheEntry {
+  return {
+    path: normalizeGitPath(file.path),
+    name: file.name || getGitFileName(file.path),
+    sha: file.sha,
+    content: file.content,
+    loadedAt,
+  }
+}
+
+export function getGitRemoteContentCacheHit(
+  remoteContentCache: Record<string, GitRemoteTextCacheEntry>,
+  path: string,
+  sha?: string
+) {
+  const normalizedPath = normalizeGitPath(path)
+  const cachedFile = remoteContentCache[normalizedPath]
+  if (!cachedFile) {
+    return null
+  }
+
+  return (sha || '') === (cachedFile.sha || '') ? cachedFile : null
+}
+
+function sanitizePersistedRemoteContentCache(input: unknown): Record<string, GitRemoteTextCacheEntry> {
+  if (!input || typeof input !== 'object') return {}
+
+  return Object.fromEntries(
+    Object.entries(input as Record<string, unknown>)
+      .filter(([, value]) => !!value && typeof value === 'object')
+      .map(([, value]) => value as Partial<GitRemoteTextCacheEntry>)
+      .filter((entry) => typeof entry.path === 'string' && typeof entry.name === 'string' && typeof entry.content === 'string')
+      .map((entry) => {
+        const normalizedPath = normalizeGitPath(entry.path!)
+        return [
+          normalizedPath,
+          {
+            path: normalizedPath,
+            name: entry.name!,
+            sha: typeof entry.sha === 'string' ? entry.sha : undefined,
+            content: entry.content!,
+            loadedAt: typeof entry.loadedAt === 'number' ? entry.loadedAt : Date.now(),
+          } satisfies GitRemoteTextCacheEntry,
+        ]
+      })
+  )
+}
+
+function sanitizePersistedRemoteSnapshotEntries(input: unknown): Record<string, GitRemoteSnapshotEntry> {
+  if (!input || typeof input !== 'object') return {}
+
+  return Object.fromEntries(
+    Object.entries(input as Record<string, unknown>)
+      .filter(([, value]) => !!value && typeof value === 'object')
+      .map(([, value]) => value as Partial<GitRemoteSnapshotEntry>)
+      .filter((entry) => (
+        typeof entry.path === 'string' &&
+        typeof entry.name === 'string' &&
+        (entry.type === 'file' || entry.type === 'dir')
+      ))
+      .map((entry) => {
+        const normalizedPath = normalizeGitPath(entry.path!)
+        return [
+          normalizedPath,
+          {
+            path: normalizedPath,
+            name: entry.name!,
+            type: entry.type!,
+            sha: typeof entry.sha === 'string' ? entry.sha : undefined,
+            size: typeof entry.size === 'number' ? entry.size : undefined,
+          } satisfies GitRemoteSnapshotEntry,
+        ]
+      })
+  )
+}
+
+function toGitPullBlockerMessage(
+  kind: 'untracked-overwrite' | 'unstaged-overwrite' | 'directory-delete-add-file',
+  path: string,
+  folderPath?: string
+) {
+  if (kind === 'directory-delete-add-file') {
+    return `Remote added '${path}' inside locally deleted folder '${folderPath || path}'`
+  }
+
+  if (kind === 'untracked-overwrite') {
+    return `Local untracked file '${path}' would be overwritten by remote changes`
+  }
+
+  return `Local file '${path}' has unstaged changes that would be overwritten by remote changes`
+}
+
+export function pruneGitRemoteContentCache(
+  remoteContentCache: Record<string, GitRemoteTextCacheEntry>,
+  remoteSnapshotEntries: Record<string, GitRemoteSnapshotEntry>
+) {
+  const remoteTreeMap = buildTreeShaMap(remoteSnapshotEntries)
+
+  return Object.fromEntries(
+    Object.entries(remoteContentCache).filter(([path, entry]) => {
+      const normalizedPath = normalizeGitPath(path)
+      if (!Object.prototype.hasOwnProperty.call(remoteTreeMap, normalizedPath)) {
+        return false
+      }
+
+      return (remoteTreeMap[normalizedPath] || '') === (entry.sha || '')
+    })
+  )
+}
+
+function createGitDraftFromRemoteSource(
+  config: GitProviderConfig,
+  path: string,
+  file: RemoteTextFileDto,
+  loadedAt = Date.now()
+): GitDraftFile {
+  const normalizedPath = normalizeGitPath(path)
+  return clearDraftRemoteTracking({
+    documentId: buildGitDocumentId(config, normalizedPath),
+    path: normalizedPath,
+    name: file.name || getGitFileName(normalizedPath),
+    sha: file.sha,
+    content: file.content,
+    originalContent: file.content,
+    draftContent: file.content,
+    isDirty: false,
+    isNew: false,
+    fileOrigin: undefined,
+    status: 'clean',
+    hasConflict: false,
+    lastCheckedAt: loadedAt,
+    provider: config.provider,
+    repo: config.repo,
+    ownerOrNamespace: config.ownerOrNamespace,
+    branch: config.branch,
+  })
+}
+
+function findRenameSourceDeleteChange(
+  stagedChanges: StagedGitChange[],
+  pendingStructuralChanges: StagedGitChange[],
+  renamedFromPath: string
+) {
+  const normalizedPath = normalizeGitPath(renamedFromPath)
+  return [...stagedChanges, ...pendingStructuralChanges].find((item) => (
+    item.kind === 'git-delete-file' &&
+    normalizeGitPath(item.repoPath) === normalizedPath
+  ))
+}
+
+function replaceGitPathPrefix(path: string, oldPrefix: string, newPrefix: string) {
+  const normalizedPath = normalizeGitPath(path)
+  const normalizedOldPrefix = normalizeGitPath(oldPrefix)
+  const normalizedNewPrefix = normalizeGitPath(newPrefix)
+
+  if (normalizedPath === normalizedOldPrefix) {
+    return normalizedNewPrefix
+  }
+
+  if (!normalizedPath.startsWith(`${normalizedOldPrefix}/`)) {
+    return normalizedPath
+  }
+
+  return joinGitPath(normalizedNewPrefix, normalizedPath.slice(normalizedOldPrefix.length + 1))
+}
+
+function isFolderRenamePathTaken(
+  candidatePath: string,
+  sourceFolderPath: string,
+  drafts: Record<string, GitDraftFile>,
+  remoteSnapshotEntries: Record<string, GitRemoteSnapshotEntry>,
+  stagedChanges: StagedGitChange[],
+  pendingAssetChanges: StagedGitChange[],
+  pendingStructuralChanges: StagedGitChange[]
+) {
+  const normalizedCandidatePath = normalizeGitPath(candidatePath)
+  const normalizedSourceFolderPath = normalizeGitPath(sourceFolderPath)
+  const isOutsideSourceSubtree = (path: string) => !isGitPathWithinFolder(path, normalizedSourceFolderPath)
+
+  return (
+    Object.values(drafts).some((item) => (
+      isOutsideSourceSubtree(normalizeGitPath(item.path)) &&
+      normalizeGitPath(item.path) === normalizedCandidatePath
+    )) ||
+    Object.keys(remoteSnapshotEntries).some((path) => (
+      isOutsideSourceSubtree(normalizeGitPath(path)) &&
+      normalizeGitPath(path) === normalizedCandidatePath
+    )) ||
+    stagedChanges.some((item) => (
+      isOutsideSourceSubtree(normalizeGitPath(item.repoPath)) &&
+      normalizeGitPath(item.repoPath) === normalizedCandidatePath
+    )) ||
+    pendingAssetChanges.some((item) => (
+      isOutsideSourceSubtree(normalizeGitPath(item.repoPath)) &&
+      normalizeGitPath(item.repoPath) === normalizedCandidatePath
+    )) ||
+    pendingStructuralChanges.some((item) => (
+      isOutsideSourceSubtree(normalizeGitPath(item.repoPath)) &&
+      normalizeGitPath(item.repoPath) === normalizedCandidatePath
+    ))
+  )
+}
+
+function buildRenamedGitDraft(
+  config: GitProviderConfig,
+  sourceDraft: GitDraftFile,
+  nextPath: string
+): GitDraftFile {
+  const normalizedNextPath = normalizeGitPath(nextPath)
+  const nextDocumentId = buildGitDocumentId(config, normalizedNextPath)
+  const nextName = getGitFileName(normalizedNextPath)
+
+  if (sourceDraft.isNew) {
+    return {
+      ...sourceDraft,
+      documentId: nextDocumentId,
+      path: normalizedNextPath,
+      name: nextName,
+      provider: config.provider,
+      repo: config.repo,
+      ownerOrNamespace: config.ownerOrNamespace,
+      branch: config.branch,
+    }
+  }
+
+  const nextContent = sourceDraft.draftContent
+  const nextDirty = hasMeaningfulLocalGitChange(nextContent, '')
+
+  return {
+    ...sourceDraft,
+    documentId: nextDocumentId,
+    path: normalizedNextPath,
+    name: nextName,
+    sha: undefined,
+    content: nextContent,
+    originalContent: '',
+    draftContent: nextContent,
+    isDirty: nextDirty,
+    isNew: true,
+    renamedFromPath: sourceDraft.renamedFromPath ?? sourceDraft.path,
+    renamedFromSha: sourceDraft.renamedFromSha ?? sourceDraft.sha,
+    fileOrigin: 'remote',
+    status: nextDirty ? 'dirty' : 'clean',
+    remoteContent: undefined,
+    remoteSha: undefined,
+    remoteMissing: false,
+    hasRemoteUpdates: false,
+    hasConflict: false,
+    conflictResolvedContent: undefined,
+    conflictSnapshot: undefined,
+    lastCheckedAt: Date.now(),
+    provider: config.provider,
+    repo: config.repo,
+    ownerOrNamespace: config.ownerOrNamespace,
+    branch: config.branch,
+  }
+}
+
+function findContainingDeleteFolderChange(
+  stagedChanges: StagedGitChange[],
+  pendingStructuralChanges: StagedGitChange[],
+  path: string
+) {
+  const normalizedPath = normalizeGitPath(path)
+  const allFolderDeletes = [...stagedChanges, ...pendingStructuralChanges]
+    .filter((item) => item.kind === 'git-delete-folder' && isGitPathWithinFolder(normalizedPath, item.repoPath))
+    .sort((left, right) => normalizeGitPath(right.repoPath).length - normalizeGitPath(left.repoPath).length)
+
+  return allFolderDeletes[0]
 }
 
 async function loadRemoteFolderSubtree(
@@ -558,6 +1013,34 @@ function syncLocalTabToGitDraft(localFileId: string, draft: GitDraftFile) {
   return activeTab?.sourceType === 'git' && activeTab.fileId === draft.documentId
 }
 
+function restoreGitDraftBackToLocalFile(draft: GitDraftFile | undefined) {
+  if (!draft?.localFileId) {
+    return false
+  }
+
+  const fileSystemStore = useFileSystemStore.getState()
+  const localFile = fileSystemStore.files.find((item) => item.id === draft.localFileId)
+  if (!localFile) {
+    return false
+  }
+
+  const tabsStore = useTabsStore.getState()
+  const gitTab = tabsStore.tabs.find((tab) => tab.sourceType === 'git' && tab.fileId === draft.documentId) || null
+
+  if (gitTab) {
+    tabsStore.openFileInCurrentTab(gitTab.id, localFile.name, localFile.content, localFile.id)
+  }
+
+  fileSystemStore.openFile(localFile.id)
+
+  const activeTab = useTabsStore.getState().getActiveTab()
+  if (activeTab?.sourceType === 'local' && activeTab.fileId === localFile.id) {
+    useDocumentStore.getState().loadDocument(localFile.content, localFile.name, localFile.id)
+  }
+
+  return true
+}
+
 function ensureTreePath(
   treeByPath: Record<string, GitTreeItem[]>,
   path: string,
@@ -603,30 +1086,133 @@ function createAssetFileName(draftPath: string, file: File) {
   return `${baseName}-${shortSuffix}.${safeExtension}`
 }
 
+function getDocumentAssetDirectory(draftPath: string) {
+  const normalizedDraftPath = normalizeGitPath(draftPath)
+  const draftDir = normalizedDraftPath.includes('/')
+    ? normalizedDraftPath.split('/').slice(0, -1).join('/')
+    : ''
+  return joinGitPath(draftDir, '.visualmd-assets')
+}
+
+function rebaseDocumentAssetPathForFileRename(
+  sourceDraftPath: string,
+  nextDraftPath: string,
+  assetRepoPath: string
+) {
+  const normalizedAssetPath = normalizeGitPath(assetRepoPath)
+  const sourceAssetDir = getDocumentAssetDirectory(sourceDraftPath)
+  const nextAssetDir = getDocumentAssetDirectory(nextDraftPath)
+
+  if (normalizedAssetPath === sourceAssetDir) {
+    return nextAssetDir
+  }
+
+  if (!normalizedAssetPath.startsWith(`${sourceAssetDir}/`)) {
+    return normalizedAssetPath
+  }
+
+  return joinGitPath(nextAssetDir, normalizedAssetPath.slice(sourceAssetDir.length + 1))
+}
+
+function normalizePersistedDraftFileOrigin(draft: Record<string, unknown>) {
+  if (draft.fileOrigin === 'local' || draft.fileOrigin === 'remote') {
+    return draft.fileOrigin
+  }
+
+  if (draft.creationSource === 'local') {
+    return 'local'
+  }
+
+  if (draft.creationSource === 'git') {
+    return 'remote'
+  }
+
+  return undefined
+}
+
 function sanitizePersistedDrafts(input: unknown): Record<string, GitDraftFile> {
   if (!input || typeof input !== 'object') return {}
 
   return Object.fromEntries(
     Object.entries(input as Record<string, GitDraftFile>).map(([documentId, draft]) => {
-      const status = draft.status || (
-        draft.hasConflict
+      const normalizedDraft = draft as GitDraftFile & { creationSource?: 'git' | 'local' }
+      const status =
+        normalizedDraft.hasConflict
           ? 'conflict'
-          : (draft.isDirty || draft.isNew)
+          : (normalizedDraft.isDirty || normalizedDraft.isNew)
             ? 'dirty'
             : 'clean'
-      )
 
       return [documentId, {
-        ...draft,
+        ...normalizedDraft,
+        fileOrigin: normalizePersistedDraftFileOrigin(normalizedDraft),
         status,
       }]
     })
   )
 }
 
-function sanitizePersistedStagedChanges(input: unknown): StagedGitChange[] {
+function sanitizePersistedStagedChanges(
+  input: unknown,
+  drafts: Record<string, GitDraftFile>
+): StagedGitChange[] {
   if (!Array.isArray(input)) return []
-  return input as StagedGitChange[]
+
+  return input.flatMap((rawItem) => {
+    if (!rawItem || typeof rawItem !== 'object') {
+      return []
+    }
+
+    const item = rawItem as Record<string, unknown> & {
+      id?: string
+      kind?: string
+      label?: string
+      repoPath?: string
+      documentId?: string
+      updatedAt?: number
+      localFileId?: string
+    }
+    if (
+      typeof item.id !== 'string' ||
+      typeof item.kind !== 'string' ||
+      typeof item.label !== 'string' ||
+      typeof item.repoPath !== 'string'
+    ) {
+      return []
+    }
+
+    const normalizedRepoPath = normalizeGitPath(item.repoPath)
+    const updatedAt = typeof item.updatedAt === 'number' ? item.updatedAt : Date.now()
+
+    if (item.kind === 'local-file') {
+      const matchingDraft =
+        (typeof item.localFileId === 'string' &&
+          Object.values(drafts).find((draft) => normalizeGitPath(draft.path) === normalizedRepoPath)) ||
+        (typeof item.documentId === 'string' ? drafts[item.documentId] : undefined)
+
+      if (!matchingDraft) {
+        return []
+      }
+
+      return [createDraftStageChange(matchingDraft, `git-draft:${matchingDraft.documentId}`)]
+    }
+
+    if (
+      item.kind !== 'git-draft' &&
+      item.kind !== 'git-asset' &&
+      item.kind !== 'git-delete-file' &&
+      item.kind !== 'git-delete-folder' &&
+      item.kind !== 'git-create-folder'
+    ) {
+      return []
+    }
+
+    return [{
+      ...(item as Partial<StagedGitChange>),
+      repoPath: normalizedRepoPath,
+      updatedAt,
+    } as StagedGitChange]
+  })
 }
 
 function sanitizePersistedPendingAssetChanges(input: unknown): StagedGitChange[] {
@@ -669,7 +1255,9 @@ function createEmptyGitWorkspaceState(): GitWorkspaceState {
     currentDocumentId: null,
     expandedPaths: [],
     pendingCommitMessage: null,
-    baseTreeMap: {},
+    remoteSnapshotEntries: {},
+    remoteSnapshotFetchedAt: null,
+    remoteContentCache: {},
   }
 }
 
@@ -678,8 +1266,13 @@ function sanitizePersistedWorkspaceState(input: unknown): GitWorkspaceState {
     return createEmptyGitWorkspaceState()
   }
 
-  const state = input as Partial<GitWorkspaceState>
+  const state = input as Partial<GitWorkspaceState> & { baseTreeMap?: Record<string, string> }
   const drafts = sanitizePersistedDrafts(state.drafts)
+  const legacyBaseTreeMap =
+    state.baseTreeMap && typeof state.baseTreeMap === 'object'
+      ? state.baseTreeMap as Record<string, string>
+      : {}
+  const remoteSnapshotEntries = sanitizePersistedRemoteSnapshotEntries(state.remoteSnapshotEntries)
   const currentDocumentId =
     typeof state.currentDocumentId === 'string' && drafts[state.currentDocumentId]
       ? state.currentDocumentId
@@ -687,16 +1280,18 @@ function sanitizePersistedWorkspaceState(input: unknown): GitWorkspaceState {
 
   return {
     drafts,
-    stagedChanges: sanitizePersistedStagedChanges(state.stagedChanges),
+    stagedChanges: sanitizePersistedStagedChanges(state.stagedChanges, drafts),
     pendingAssetChanges: sanitizePersistedPendingAssetChanges(state.pendingAssetChanges),
     pendingStructuralChanges: sanitizePersistedPendingStructuralChanges(state.pendingStructuralChanges),
     currentDocumentId,
     expandedPaths: sanitizePersistedExpandedPaths(state.expandedPaths),
     pendingCommitMessage: typeof state.pendingCommitMessage === 'string' ? state.pendingCommitMessage : null,
-    baseTreeMap:
-      state.baseTreeMap && typeof state.baseTreeMap === 'object'
-        ? state.baseTreeMap as Record<string, string>
-        : {},
+    remoteSnapshotEntries:
+      hasAnyRemoteSnapshotMetadata(remoteSnapshotEntries)
+        ? remoteSnapshotEntries
+        : buildFileSnapshotEntriesFromShaMap(legacyBaseTreeMap),
+    remoteSnapshotFetchedAt: typeof state.remoteSnapshotFetchedAt === 'number' ? state.remoteSnapshotFetchedAt : null,
+    remoteContentCache: sanitizePersistedRemoteContentCache(state.remoteContentCache),
   }
 }
 
@@ -728,7 +1323,7 @@ function buildGitWorkspaceKey(config: Pick<GitProviderConfig, 'provider' | 'owne
 }
 
 function captureGitWorkspaceState(
-  state: Pick<GitStore, 'drafts' | 'stagedChanges' | 'pendingAssetChanges' | 'pendingStructuralChanges' | 'currentDocumentId' | 'expandedPaths' | 'pendingCommitMessage' | 'baseTreeMap'>
+  state: Pick<GitStore, 'drafts' | 'stagedChanges' | 'pendingAssetChanges' | 'pendingStructuralChanges' | 'currentDocumentId' | 'expandedPaths' | 'pendingCommitMessage' | 'remoteSnapshotEntries' | 'remoteSnapshotFetchedAt' | 'remoteContentCache'>
 ): GitWorkspaceState {
   return {
     drafts: state.drafts,
@@ -741,7 +1336,9 @@ function captureGitWorkspaceState(
         : null,
     expandedPaths: state.expandedPaths,
     pendingCommitMessage: state.pendingCommitMessage || null,
-    baseTreeMap: state.baseTreeMap,
+    remoteSnapshotEntries: state.remoteSnapshotEntries,
+    remoteSnapshotFetchedAt: state.remoteSnapshotFetchedAt,
+    remoteContentCache: state.remoteContentCache,
   }
 }
 
@@ -772,7 +1369,7 @@ function getWorkspaceStateForConfig(
 }
 
 function resolveGitWorkspaceTransition(
-  state: Pick<GitStore, 'config' | 'drafts' | 'stagedChanges' | 'pendingAssetChanges' | 'pendingStructuralChanges' | 'currentDocumentId' | 'expandedPaths' | 'pendingCommitMessage' | 'baseTreeMap' | 'workspaceStateByKey'>,
+  state: Pick<GitStore, 'config' | 'drafts' | 'stagedChanges' | 'pendingAssetChanges' | 'pendingStructuralChanges' | 'currentDocumentId' | 'expandedPaths' | 'pendingCommitMessage' | 'remoteSnapshotEntries' | 'remoteSnapshotFetchedAt' | 'remoteContentCache' | 'workspaceStateByKey'>,
   nextConfig: GitProviderConfig
 ) {
   const currentWorkspaceKey = buildGitWorkspaceKey(state.config)
@@ -806,6 +1403,19 @@ function resolveGitWorkspaceConfigForDocumentId(state: Pick<GitStore, 'config'>,
   }
 }
 
+function hasMeaningfulGitWorkspaceState(state: GitWorkspaceState) {
+  return (
+    Object.keys(state.drafts).length > 0 ||
+    state.stagedChanges.length > 0 ||
+    state.pendingAssetChanges.length > 0 ||
+    state.pendingStructuralChanges.length > 0 ||
+    state.expandedPaths.length > 0 ||
+    !!state.pendingCommitMessage ||
+    hasAnyRemoteSnapshotMetadata(state.remoteSnapshotEntries) ||
+    Object.keys(state.remoteContentCache).length > 0
+  )
+}
+
 export function migrateGitStorePersistedState(
   persistedState: unknown,
   fromVersion: number
@@ -830,9 +1440,17 @@ export function migrateGitStorePersistedState(
     currentDocumentId: state.currentDocumentId,
     expandedPaths: state.expandedPaths,
     pendingCommitMessage: state.pendingCommitMessage,
+    remoteSnapshotEntries: state.remoteSnapshotEntries,
+    remoteSnapshotFetchedAt: state.remoteSnapshotFetchedAt,
     baseTreeMap: state.baseTreeMap,
+    remoteContentCache: state.remoteContentCache,
   })
-  const migratedWorkspaceStateByKey = fromVersion < 3
+  const currentWorkspaceKey = buildGitWorkspaceKey(normalizedConfig)
+  const currentWorkspaceMissingFromBuckets = !!currentWorkspaceKey && !normalizedWorkspaceStateByKey[currentWorkspaceKey]
+  const migratedWorkspaceStateByKey = (
+    fromVersion < 3 ||
+    (currentWorkspaceMissingFromBuckets && hasMeaningfulGitWorkspaceState(legacyWorkspaceState))
+  )
     ? upsertWorkspaceStateForConfig(normalizedWorkspaceStateByKey, normalizedConfig, legacyWorkspaceState)
     : normalizedWorkspaceStateByKey
   const currentWorkspaceState = buildGitWorkspaceKey(normalizedConfig)
@@ -842,6 +1460,9 @@ export function migrateGitStorePersistedState(
   // v1 only persisted connection config. v2 adds a single global Git workspace.
   // v3 buckets Git workspace state by provider + owner/namespace + repo + branch.
   // v4 adds pending structural Git changes separate from staged changes.
+  // v5 adds a remote text content cache split from drafts.
+  // v6 adds explicit remote snapshot entries/fetchedAt alongside the projected tree.
+  // v7 retires persisted baseTreeMap as an active runtime field; legacy values only seed snapshot migration.
   if (fromVersion < 2) {
     return {
       config: normalizedConfig,
@@ -854,7 +1475,9 @@ export function migrateGitStorePersistedState(
       currentDocumentId: currentWorkspaceState.currentDocumentId,
       expandedPaths: currentWorkspaceState.expandedPaths,
       pendingCommitMessage: currentWorkspaceState.pendingCommitMessage,
-      baseTreeMap: currentWorkspaceState.baseTreeMap,
+      remoteSnapshotEntries: currentWorkspaceState.remoteSnapshotEntries,
+      remoteSnapshotFetchedAt: currentWorkspaceState.remoteSnapshotFetchedAt,
+      remoteContentCache: currentWorkspaceState.remoteContentCache,
       workspaceStateByKey: migratedWorkspaceStateByKey,
     }
   }
@@ -871,7 +1494,9 @@ export function migrateGitStorePersistedState(
     currentDocumentId: currentWorkspaceState.currentDocumentId,
     expandedPaths: currentWorkspaceState.expandedPaths,
     pendingCommitMessage: currentWorkspaceState.pendingCommitMessage,
-    baseTreeMap: currentWorkspaceState.baseTreeMap,
+    remoteSnapshotEntries: currentWorkspaceState.remoteSnapshotEntries,
+    remoteSnapshotFetchedAt: currentWorkspaceState.remoteSnapshotFetchedAt,
+    remoteContentCache: currentWorkspaceState.remoteContentCache,
     workspaceStateByKey: migratedWorkspaceStateByKey,
   }
 }
@@ -885,7 +1510,9 @@ export const useGitStore = create<GitStore>()(
         repos: [],
         branches: [],
         treeByPath: {},
-        baseTreeMap: {},
+        remoteSnapshotEntries: {},
+        remoteSnapshotFetchedAt: null,
+        remoteContentCache: {},
         expandedPaths: [],
         drafts: {},
         stagedChanges: [],
@@ -928,7 +1555,9 @@ export const useGitStore = create<GitStore>()(
               repos: configChanged ? [] : state.repos,
               branches: configChanged ? [] : state.branches,
               treeByPath: configChanged ? {} : state.treeByPath,
-              baseTreeMap: configChanged ? {} : state.baseTreeMap,
+              remoteSnapshotEntries: configChanged ? {} : state.remoteSnapshotEntries,
+              remoteSnapshotFetchedAt: configChanged ? null : state.remoteSnapshotFetchedAt,
+              remoteContentCache: nextWorkspace.remoteContentCache,
               expandedPaths: nextWorkspace.expandedPaths,
             }
           })
@@ -964,7 +1593,9 @@ export const useGitStore = create<GitStore>()(
                 connected: true,
                 lastConnectedConfigSignature: buildConfigSignature(nextConfig),
                 treeByPath: {},
-                baseTreeMap: nextWorkspace.baseTreeMap,
+                remoteSnapshotEntries: nextWorkspace.remoteSnapshotEntries,
+                remoteSnapshotFetchedAt: nextWorkspace.remoteSnapshotFetchedAt,
+                remoteContentCache: nextWorkspace.remoteContentCache,
                 workspaceStateByKey: nextWorkspace.workspaceStateByKey,
                 drafts: nextWorkspace.drafts,
                 stagedChanges: nextWorkspace.stagedChanges,
@@ -1020,12 +1651,20 @@ export const useGitStore = create<GitStore>()(
             const client = getGitProviderClient(runtimeConfig)
             const normalizedPath = normalizeGitPath(path)
             const items = await client.listTree(runtimeConfig, normalizedPath)
-            set((state) => ({
-              treeByPath: {
-                ...state.treeByPath,
-                [normalizedPath]: buildTreeItemsForPath(items),
-              },
+            const normalizedItems = items.map((item) => ({
+              ...item,
+              path: normalizeGitPath(item.path),
             }))
+            const fetchedAt = Date.now()
+            set((state) => {
+              return buildScopedRemoteTreeState(
+                state.remoteSnapshotEntries,
+                state.treeByPath,
+                normalizedPath,
+                normalizedItems,
+                fetchedAt
+              )
+            })
           } catch (error) {
             set({ error: error instanceof Error ? error.message : 'Failed to load repository tree' })
             throw error
@@ -1057,45 +1696,36 @@ export const useGitStore = create<GitStore>()(
           const { config } = get()
           const normalizedPath = normalizeGitPath(path)
           const existingDraft = Object.values(get().drafts).find((item) => item.path === normalizedPath)
+          const snapshotSha = get().remoteSnapshotEntries[normalizedPath]?.sha
           if (existingDraft && (existingDraft.isNew || existingDraft.isDirty)) {
+            set({ currentDocumentId: existingDraft.documentId })
+            return existingDraft
+          }
+          if (existingDraft && !existingDraft.hasConflict && (snapshotSha || '') === (existingDraft.sha || '')) {
             set({ currentDocumentId: existingDraft.documentId })
             return existingDraft
           }
 
           const runtimeConfig = toRuntimeConfig(config)
           const client = getGitProviderClient(runtimeConfig)
-          const file = await client.getFile(runtimeConfig, normalizedPath)
+          const cachedFile = getGitRemoteContentCacheHit(get().remoteContentCache, normalizedPath, snapshotSha)
+          const file = cachedFile
+            ? cachedFile
+            : await client.getFile(runtimeConfig, normalizedPath)
+          const loadedAt = Date.now()
           const documentId = buildGitDocumentId(config, normalizedPath)
-          const draft: GitDraftFile = {
-            documentId,
-            path: normalizedPath,
-            name: file.name || getGitFileName(normalizedPath),
-            sha: file.sha,
-            content: file.content,
-            originalContent: file.content,
-            draftContent: file.content,
-            isDirty: false,
-            isNew: false,
-            creationSource: undefined,
-            status: 'clean',
-            remoteContent: file.content,
-            remoteSha: file.sha,
-            remoteMissing: false,
-            hasRemoteUpdates: false,
-            hasConflict: false,
-            lastCheckedAt: Date.now(),
-            provider: config.provider,
-            repo: config.repo,
-            ownerOrNamespace: config.ownerOrNamespace,
-            branch: config.branch,
-          }
+          const draft = createGitDraftFromRemoteSource(config, normalizedPath, file, loadedAt)
           set((state) => ({
             drafts: {
               ...state.drafts,
               [documentId]: draft,
             },
+            remoteContentCache: {
+              ...state.remoteContentCache,
+              [normalizedPath]: createRemoteTextCacheEntry(file, loadedAt),
+            },
             currentDocumentId: documentId,
-            lastFetchedAt: Date.now(),
+            lastFetchedAt: loadedAt,
           }))
           return draft
         },
@@ -1128,7 +1758,9 @@ export const useGitStore = create<GitStore>()(
               expandedPaths: nextWorkspace.expandedPaths,
               branches: workspaceChanged ? [] : state.branches,
               treeByPath: workspaceChanged ? {} : state.treeByPath,
-              baseTreeMap: workspaceChanged ? {} : state.baseTreeMap,
+              remoteSnapshotEntries: workspaceChanged ? {} : state.remoteSnapshotEntries,
+              remoteSnapshotFetchedAt: workspaceChanged ? null : state.remoteSnapshotFetchedAt,
+              remoteContentCache: nextWorkspace.remoteContentCache,
             }
           })
         },
@@ -1194,11 +1826,6 @@ export const useGitStore = create<GitStore>()(
               }),
             }
           })
-
-          const stagedItem = get().stagedChanges.find((item) => item.kind === 'git-draft' && item.documentId === documentId)
-          if (stagedItem) {
-            get().unstageChange(stagedItem.id)
-          }
         },
 
         stageGitDraft: (documentId) => {
@@ -1215,14 +1842,7 @@ export const useGitStore = create<GitStore>()(
             }
 
             const existing = state.stagedChanges.find((item) => item.kind === 'git-draft' && item.documentId === documentId)
-            const nextChange: StagedGitChange = {
-              id: existing?.id || `git-draft:${documentId}`,
-              kind: 'git-draft',
-              label: draft.name,
-              repoPath: draft.path,
-              documentId,
-              updatedAt: Date.now(),
-            }
+            const nextChange = createDraftStageChange(draft, existing?.id)
 
             return {
               stagedChanges: existing
@@ -1260,10 +1880,11 @@ export const useGitStore = create<GitStore>()(
                   isDirty: existingDraft.isNew
                     ? nextContent.length > 0
                     : isExistingDraftDirty,
+                  localFileId: existingDraft.localFileId ?? fileId,
                   status: existingDraft.isNew
                     ? (nextContent.length > 0 ? 'dirty' : 'clean')
                     : (isExistingDraftDirty ? 'dirty' : 'clean'),
-                  creationSource: existingDraft.creationSource ?? 'local',
+                  fileOrigin: existingDraft.fileOrigin ?? 'local',
                   provider: state.config.provider,
                   repo: state.config.repo,
                   ownerOrNamespace: state.config.ownerOrNamespace,
@@ -1279,7 +1900,8 @@ export const useGitStore = create<GitStore>()(
                   draftContent: nextContent,
                   isDirty: nextContent.length > 0,
                   isNew: true,
-                  creationSource: 'local',
+                  localFileId: fileId,
+                  fileOrigin: 'local',
                   status: nextContent.length > 0 ? 'dirty' : 'clean',
                   remoteContent: undefined,
                   remoteSha: undefined,
@@ -1289,11 +1911,12 @@ export const useGitStore = create<GitStore>()(
                   provider: state.config.provider,
                   repo: state.config.repo,
                   ownerOrNamespace: state.config.ownerOrNamespace,
-                  branch: state.config.branch,
-                }
+                    branch: state.config.branch,
+                  }
+            const existingStagedDraft = state.stagedChanges.find((item) => item.kind === 'git-draft' && item.documentId === documentId)
+            const nextStagedChange = createDraftStageChange(nextDraft, existingStagedDraft?.id)
             const nextStagedChanges = state.stagedChanges.filter((item) => !(
-              (item.kind === 'local-file' && item.localFileId === fileId) ||
-              (item.kind === 'git-draft' && item.documentId === documentId)
+              item.kind === 'git-draft' && item.documentId === documentId
             ))
 
             return {
@@ -1301,7 +1924,7 @@ export const useGitStore = create<GitStore>()(
                 ...state.drafts,
                 [documentId]: nextDraft,
               },
-              stagedChanges: nextStagedChanges,
+              stagedChanges: [...nextStagedChanges, nextStagedChange],
             }
           })
 
@@ -1346,27 +1969,39 @@ export const useGitStore = create<GitStore>()(
             return
           }
 
-          set((state) => ({
-            stagedChanges: [
-              ...state.stagedChanges.filter((item) => !(
-                (item.kind === 'git-draft' && item.documentId === existingDraft.documentId) ||
-                (item.kind === 'git-delete-file' && item.repoPath === normalizedPath)
-              )),
-            ],
-            pendingStructuralChanges: [
-              ...state.pendingStructuralChanges.filter((item) => !(item.kind === 'git-delete-file' && item.repoPath === normalizedPath)),
-              {
-                id: `git-delete-file:${normalizedPath}`,
-                kind: 'git-delete-file',
-                label: existingDraft.name,
-                repoPath: normalizedPath,
-                documentId: existingDraft.documentId,
-                originalContent: existingDraft.originalContent,
-                originalSha: existingDraft.sha,
-                updatedAt: Date.now(),
-              },
-            ],
-          }))
+          set((state) => {
+            const shelvedStagedChanges = state.stagedChanges.filter((item) => (
+              (item.kind === 'git-draft' || item.kind === 'git-asset') &&
+              item.documentId === existingDraft.documentId
+            ))
+            const shelvedPendingAssetChanges = state.pendingAssetChanges.filter((item) => item.documentId === existingDraft.documentId)
+
+            return {
+              stagedChanges: [
+                ...state.stagedChanges.filter((item) => !(
+                  (item.kind === 'git-draft' && item.documentId === existingDraft.documentId) ||
+                  (item.kind === 'git-asset' && item.documentId === existingDraft.documentId) ||
+                  (item.kind === 'git-delete-file' && item.repoPath === normalizedPath)
+                )),
+              ],
+              pendingAssetChanges: state.pendingAssetChanges.filter((item) => item.documentId !== existingDraft.documentId),
+              pendingStructuralChanges: [
+                ...state.pendingStructuralChanges.filter((item) => !(item.kind === 'git-delete-file' && item.repoPath === normalizedPath)),
+                {
+                  id: `git-delete-file:${normalizedPath}`,
+                  kind: 'git-delete-file',
+                  label: existingDraft.name,
+                  repoPath: normalizedPath,
+                  documentId: existingDraft.documentId,
+                  originalContent: existingDraft.originalContent,
+                  originalSha: existingDraft.sha,
+                  shelvedStagedChanges,
+                  shelvedPendingAssetChanges,
+                  updatedAt: Date.now(),
+                },
+              ],
+            }
+          })
         },
 
         stageDeletedGitFolder: async (path) => {
@@ -1433,6 +2068,13 @@ export const useGitStore = create<GitStore>()(
           set((state) => {
             const nextDrafts = { ...state.drafts }
             const removedPureLocalDocumentIds = removedPureLocalDrafts.map((draft) => draft.documentId)
+            const shelvedDrafts = removedPureLocalDrafts.map((draft) => ({ ...draft }))
+            const shelvedStagedChanges = state.stagedChanges.filter((item) => (
+              isGitPathWithinFolder(item.repoPath, normalizedPath) ||
+              removedPureLocalDocumentIds.includes(item.documentId || '')
+            ))
+            const shelvedPendingAssetChanges = state.pendingAssetChanges.filter((item) => isGitPathWithinFolder(item.repoPath, normalizedPath))
+            const shelvedPendingStructuralChanges = state.pendingStructuralChanges.filter((item) => isGitPathWithinFolder(item.repoPath, normalizedPath))
 
             removedPureLocalDrafts.forEach((draft) => {
               if (nextDrafts[draft.documentId]) {
@@ -1462,6 +2104,10 @@ export const useGitStore = create<GitStore>()(
                 kind: 'git-delete-folder',
                 label: getGitFileName(dirPath),
                 repoPath: normalizeGitPath(dirPath),
+                shelvedDrafts: normalizeGitPath(dirPath) === normalizedPath ? shelvedDrafts : undefined,
+                shelvedStagedChanges: normalizeGitPath(dirPath) === normalizedPath ? shelvedStagedChanges : undefined,
+                shelvedPendingAssetChanges: normalizeGitPath(dirPath) === normalizedPath ? shelvedPendingAssetChanges : undefined,
+                shelvedPendingStructuralChanges: normalizeGitPath(dirPath) === normalizedPath ? shelvedPendingStructuralChanges : undefined,
                 updatedAt: deleteTimestamp,
               }))
 
@@ -1502,6 +2148,36 @@ export const useGitStore = create<GitStore>()(
         unstageChange: (changeId) => {
           const change = get().stagedChanges.find((item) => item.id === changeId)
           if (!change) return
+
+          if (change.kind === 'git-draft' && change.documentId) {
+            const currentDraft = get().drafts[change.documentId]
+
+            if (currentDraft?.isNew) {
+              const restoredToLocal = restoreGitDraftBackToLocalFile(currentDraft)
+
+              set((state) => {
+                const nextDrafts = { ...state.drafts }
+                delete nextDrafts[change.documentId!]
+
+                return {
+                  drafts: nextDrafts,
+                  stagedChanges: state.stagedChanges.filter((item) => item.id !== changeId),
+                  pendingAssetChanges: state.pendingAssetChanges.filter((item) => item.documentId !== change.documentId),
+                  pendingStructuralChanges: state.pendingStructuralChanges.filter((item) => item.documentId !== change.documentId),
+                  currentDocumentId: state.currentDocumentId === change.documentId ? null : state.currentDocumentId,
+                }
+              })
+
+              if (!restoredToLocal) {
+                const tab = useTabsStore.getState().findTabByFileId(change.documentId)
+                if (tab) {
+                  useTabsStore.getState().closeTab(tab.id)
+                }
+              }
+
+              return
+            }
+          }
 
           set((state) => {
             const nextState: Partial<GitStore> & {
@@ -1549,11 +2225,10 @@ export const useGitStore = create<GitStore>()(
               return state
             }
 
-            const restagedAsset: StagedGitChange = {
+            const restagedAsset = createBinaryStageChange({
               ...asset,
               kind: 'git-asset',
-              updatedAt: Date.now(),
-            }
+            })
 
             return {
               stagedChanges: [
@@ -1617,26 +2292,52 @@ export const useGitStore = create<GitStore>()(
             if (!currentDraft) {
               return state
             }
+            const originalContent = currentDraft.originalContent
+            const shouldKeepStagedAsset = (item: StagedGitChange) => (
+              item.kind === 'git-asset' &&
+              item.documentId === documentId &&
+              draftReferencesRepoPath(currentDraft.path, originalContent, item.repoPath)
+            )
+            const shouldKeepPendingAsset = (item: StagedGitChange) => (
+              item.documentId === documentId &&
+              draftReferencesRepoPath(currentDraft.path, originalContent, item.repoPath)
+            )
 
             return {
               drafts: {
                 ...state.drafts,
                 [documentId]: {
                   ...currentDraft,
-                  content: currentDraft.originalContent,
-                  draftContent: currentDraft.originalContent,
+                  content: originalContent,
+                  draftContent: originalContent,
                   isDirty: false,
                   status: currentDraft.hasConflict ? 'conflict' : 'clean',
                   conflictResolvedContent: currentDraft.hasConflict
                     ? currentDraft.conflictResolvedContent
-                    : undefined,
+                  : undefined,
                 },
               },
-              pendingAssetChanges: state.pendingAssetChanges.filter((item) => item.documentId !== documentId),
+              pendingAssetChanges: state.pendingAssetChanges.filter((item) => {
+                if (item.documentId !== documentId) {
+                  return true
+                }
+
+                return shouldKeepPendingAsset(item)
+              }),
               pendingStructuralChanges: state.pendingStructuralChanges.filter((item) => !(
                 item.kind === 'git-delete-file' && item.documentId === documentId
               )),
-              stagedChanges: state.stagedChanges.filter((item) => !(item.kind === 'git-delete-file' && item.documentId === documentId)),
+              stagedChanges: state.stagedChanges.filter((item) => {
+                if (item.kind === 'git-delete-file' && item.documentId === documentId) {
+                  return false
+                }
+
+                if (item.kind === 'git-asset' && item.documentId === documentId) {
+                  return shouldKeepStagedAsset(item)
+                }
+
+                return true
+              }),
             }
           })
 
@@ -1669,6 +2370,18 @@ export const useGitStore = create<GitStore>()(
 
           if (targetChange.kind === 'git-delete-file') {
             set((state) => ({
+              stagedChanges: [
+                ...state.stagedChanges.filter((item) => !(
+                  targetChange.shelvedStagedChanges?.some((shelved) => shelved.id === item.id)
+                )),
+                ...(targetChange.shelvedStagedChanges || []),
+              ],
+              pendingAssetChanges: [
+                ...state.pendingAssetChanges.filter((item) => !(
+                  targetChange.shelvedPendingAssetChanges?.some((shelved) => shelved.id === item.id)
+                )),
+                ...(targetChange.shelvedPendingAssetChanges || []),
+              ],
               pendingStructuralChanges: state.pendingStructuralChanges.filter((item) => item.id !== changeId),
             }))
             return
@@ -1709,9 +2422,37 @@ export const useGitStore = create<GitStore>()(
 
           if (targetChange.kind === 'git-delete-folder') {
             const normalizedPath = normalizeGitPath(targetChange.repoPath)
-            set((state) => ({
-              pendingStructuralChanges: state.pendingStructuralChanges.filter((item) => !isGitPathWithinFolder(item.repoPath, normalizedPath)),
-            }))
+            set((state) => {
+              const nextDrafts = { ...state.drafts }
+              ;(targetChange.shelvedDrafts || []).forEach((draft) => {
+                nextDrafts[draft.documentId] = draft
+              })
+
+              return {
+                drafts: nextDrafts,
+                stagedChanges: [
+                  ...state.stagedChanges.filter((item) => !(
+                    isGitPathWithinFolder(item.repoPath, normalizedPath) ||
+                    targetChange.shelvedStagedChanges?.some((shelved) => shelved.id === item.id)
+                  )),
+                  ...(targetChange.shelvedStagedChanges || []),
+                ],
+                pendingAssetChanges: [
+                  ...state.pendingAssetChanges.filter((item) => !(
+                    isGitPathWithinFolder(item.repoPath, normalizedPath) ||
+                    targetChange.shelvedPendingAssetChanges?.some((shelved) => shelved.id === item.id)
+                  )),
+                  ...(targetChange.shelvedPendingAssetChanges || []),
+                ],
+                pendingStructuralChanges: [
+                  ...state.pendingStructuralChanges.filter((item) => !(
+                    isGitPathWithinFolder(item.repoPath, normalizedPath) ||
+                    targetChange.shelvedPendingStructuralChanges?.some((shelved) => shelved.id === item.id)
+                  )),
+                  ...(targetChange.shelvedPendingStructuralChanges || []),
+                ],
+              }
+            })
           }
         },
 
@@ -1721,7 +2462,7 @@ export const useGitStore = create<GitStore>()(
             get().setCurrentDocumentId(documentId)
           }
 
-          const { config, drafts } = get()
+          const { config, drafts, remoteSnapshotEntries } = get()
           let draft = drafts[documentId]
 
           if (!draft) {
@@ -1761,6 +2502,9 @@ export const useGitStore = create<GitStore>()(
           const repoPath = joinGitPath(draftDir, '.visualmd-assets', assetFileName)
           const contentBase64 = arrayBufferToBase64(await file.arrayBuffer())
           const mimeType = file.type || undefined
+          const remoteAssetSha = remoteSnapshotEntries[repoPath]?.type === 'file'
+            ? remoteSnapshotEntries[repoPath]?.sha
+            : undefined
 
           set((state) => ({
             stagedChanges: state.stagedChanges.filter((item) => item.id !== `git-asset:${documentId}:${repoPath}`),
@@ -1772,6 +2516,8 @@ export const useGitStore = create<GitStore>()(
                 label: assetFileName,
                 repoPath,
                 documentId,
+                baseSha: remoteAssetSha,
+                originalSha: remoteAssetSha,
                 contentBase64,
                 mimeType,
                 updatedAt: Date.now(),
@@ -1814,8 +2560,62 @@ export const useGitStore = create<GitStore>()(
           try {
             const runtimeConfig = toRuntimeConfig(config)
             const client = getGitProviderClient(runtimeConfig)
-            const remoteFile = await client.getFile(runtimeConfig, draft.path)
             const checkedAt = Date.now()
+            const normalizedDraftPath = normalizeGitPath(draft.path)
+            const parentPath = getParentGitPath(normalizedDraftPath)
+            const parentItems = await client.listTree(runtimeConfig, parentPath)
+            const normalizedParentItems = parentItems
+              .filter((item) => item.name !== '.gitkeep')
+              .map((item) => ({
+                ...item,
+                path: normalizeGitPath(item.path),
+              }))
+
+            set((state) => ({
+              ...buildScopedRemoteTreeState(
+                state.remoteSnapshotEntries,
+                state.treeByPath,
+                parentPath,
+                normalizedParentItems,
+                checkedAt
+              ),
+            }))
+
+            const latestDraft = get().drafts[targetDocumentId] || draft
+            const remoteEntry = normalizedParentItems.find((item) => (
+              item.type === 'file' &&
+              normalizeGitPath(item.path) === normalizedDraftPath
+            ))
+            const cacheHit = remoteEntry
+              ? getGitRemoteContentCacheHit(get().remoteContentCache, normalizedDraftPath, remoteEntry.sha)
+              : null
+            const remoteFile = remoteEntry
+              ? (
+                  (remoteEntry.sha || '') === (latestDraft.sha || '')
+                    ? {
+                        path: normalizedDraftPath,
+                        name: remoteEntry.name || latestDraft.name,
+                        sha: remoteEntry.sha,
+                        content: latestDraft.originalContent,
+                      } satisfies RemoteTextFileDto
+                    : latestDraft.remoteContent && (remoteEntry.sha || '') === (latestDraft.remoteSha || '')
+                      ? {
+                          path: normalizedDraftPath,
+                          name: remoteEntry.name || latestDraft.name,
+                          sha: remoteEntry.sha,
+                          content: latestDraft.remoteContent,
+                        } satisfies RemoteTextFileDto
+                      : cacheHit
+                        ? {
+                            path: cacheHit.path,
+                            name: remoteEntry.name || cacheHit.name,
+                            sha: cacheHit.sha,
+                            content: cacheHit.content,
+                          } satisfies RemoteTextFileDto
+                        : await client.getFile(runtimeConfig, normalizedDraftPath)
+                )
+              : await client.getFile(runtimeConfig, normalizedDraftPath)
+            const remoteCacheEntry = createRemoteTextCacheEntry(remoteFile, checkedAt)
             const reconcileLocalChanges = options?.reconcileLocalChanges === true
 
             let nextDraft: GitDraftFile | null = null
@@ -1857,7 +2657,10 @@ export const useGitStore = create<GitStore>()(
                     ...resolveDraftAgainstRemoteBase(currentDraft, mergeResult.mergedText),
                     name: remoteFile.name || currentDraft.name,
                     lastCheckedAt: checkedAt,
-                    status: 'auto-merged',
+                    status: hasMeaningfulLocalGitChange(
+                      mergeResult.mergedText,
+                      remoteFile.content
+                    ) ? 'dirty' : 'clean',
                   }
                 }
 
@@ -1866,6 +2669,10 @@ export const useGitStore = create<GitStore>()(
                     ...state.drafts,
                     [targetDocumentId]: nextDraft!,
                   },
+                  remoteContentCache: {
+                    ...state.remoteContentCache,
+                    [remoteCacheEntry.path]: remoteCacheEntry,
+                  },
                   lastFetchedAt: checkedAt,
                 }
               }
@@ -1873,11 +2680,7 @@ export const useGitStore = create<GitStore>()(
               nextDraft = {
                 ...currentDraft,
                 name: remoteFile.name || currentDraft.name,
-                remoteSha: remoteFile.sha,
-                remoteContent: remoteFile.content,
-                remoteMissing: false,
                 lastCheckedAt: checkedAt,
-                hasRemoteUpdates: remoteChanged,
                 hasConflict: false,
                 status:
                   preserveLocalDraft
@@ -1896,10 +2699,26 @@ export const useGitStore = create<GitStore>()(
                     }),
               }
 
+              if (remoteChanged) {
+                nextDraft = {
+                  ...nextDraft,
+                  remoteSha: remoteFile.sha,
+                  remoteContent: remoteFile.content,
+                  remoteMissing: false,
+                  hasRemoteUpdates: true,
+                }
+              } else {
+                nextDraft = clearDraftRemoteTracking(nextDraft)
+              }
+
               return {
                 drafts: {
                   ...state.drafts,
                   [targetDocumentId]: nextDraft!,
+                },
+                remoteContentCache: {
+                  ...state.remoteContentCache,
+                  [remoteCacheEntry.path]: remoteCacheEntry,
                 },
                 lastFetchedAt: checkedAt,
               }
@@ -1938,15 +2757,52 @@ export const useGitStore = create<GitStore>()(
               remoteSha: snapshot.remoteSha,
               remoteMissing: snapshot.remoteMissing,
             }, content)
+            const isLegacyRenameConflict = snapshot.kind === 'rename' && !!snapshot.pathHint
+            const shouldClearRenameTracking = Boolean(isLegacyRenameConflict || (snapshot.remoteMissing && draft.renamedFromPath))
+            const renamedFromPath = shouldClearRenameTracking && draft.renamedFromPath
+              ? normalizeGitPath(draft.renamedFromPath)
+              : ''
+            const existingStagedDraft = state.stagedChanges.find((item) => (
+              item.kind === 'git-draft' &&
+              item.documentId === documentId
+            ))
+            const nextResolvedStagedDraft = existingStagedDraft
+              ? createDraftStageChange(
+                  shouldClearRenameTracking
+                    ? {
+                        ...resolvedDraft,
+                        renamedFromPath: undefined,
+                        renamedFromSha: undefined,
+                      }
+                    : resolvedDraft,
+                  existingStagedDraft.id
+                )
+              : null
 
             return {
               drafts: {
                 ...state.drafts,
                 [documentId]: {
                   ...resolvedDraft,
-                  status: 'resolved-pending-commit',
+                  renamedFromPath: shouldClearRenameTracking ? undefined : resolvedDraft.renamedFromPath,
+                  renamedFromSha: shouldClearRenameTracking ? undefined : resolvedDraft.renamedFromSha,
+                  status: resolvedDraft.isDirty ? 'dirty' : 'clean',
                 },
               },
+              stagedChanges: shouldClearRenameTracking
+                  ? [
+                      ...state.stagedChanges.filter((item) => !(
+                        item.id === existingStagedDraft?.id ||
+                        normalizeGitPath(item.repoPath) === renamedFromPath
+                      )),
+                      ...(nextResolvedStagedDraft ? [nextResolvedStagedDraft] : []),
+                    ]
+                  : nextResolvedStagedDraft
+                  ? state.stagedChanges.map((item) => item.id === nextResolvedStagedDraft.id ? nextResolvedStagedDraft : item)
+                  : state.stagedChanges,
+              pendingStructuralChanges: shouldClearRenameTracking
+                  ? state.pendingStructuralChanges.filter((item) => normalizeGitPath(item.repoPath) !== renamedFromPath)
+                  : state.pendingStructuralChanges,
             }
           })
 
@@ -1960,18 +2816,83 @@ export const useGitStore = create<GitStore>()(
           const draft = get().drafts[documentId]
           if (!draft) return
           const snapshot = getDraftConflictSnapshot(draft)
-          if (snapshot.remoteMissing) {
+          if (snapshot.kind === 'path' && snapshot.pathHint) {
+            const remoteAddedPath = normalizeGitPath(snapshot.pathHint)
+            const folderDeleteChange = findContainingDeleteFolderChange(
+              get().stagedChanges,
+              get().pendingStructuralChanges,
+              remoteAddedPath
+            )
+            const folderPath = folderDeleteChange ? normalizeGitPath(folderDeleteChange.repoPath) : getParentGitPath(remoteAddedPath)
+            const tab = useTabsStore.getState().findTabByFileId(documentId)
+
+            set((state) => {
+              const nextDrafts = { ...state.drafts }
+              delete nextDrafts[documentId]
+              ;(folderDeleteChange?.shelvedDrafts || []).forEach((draft) => {
+                nextDrafts[draft.documentId] = draft
+              })
+
+              return {
+                drafts: nextDrafts,
+                stagedChanges: [
+                  ...state.stagedChanges.filter((item) => !(
+                    (item.kind === 'git-draft' && item.documentId === documentId) ||
+                    (item.kind === 'git-asset' && item.documentId === documentId) ||
+                    (folderPath && isGitPathWithinFolder(item.repoPath, folderPath) && (
+                      item.kind === 'git-delete-file' || item.kind === 'git-delete-folder'
+                    )) ||
+                    folderDeleteChange?.shelvedStagedChanges?.some((shelved) => shelved.id === item.id)
+                  )),
+                  ...(folderDeleteChange?.shelvedStagedChanges || []),
+                ],
+                pendingAssetChanges: [
+                  ...state.pendingAssetChanges.filter((item) => !(
+                    item.documentId === documentId ||
+                    (folderPath && isGitPathWithinFolder(item.repoPath, folderPath)) ||
+                    folderDeleteChange?.shelvedPendingAssetChanges?.some((shelved) => shelved.id === item.id)
+                  )),
+                  ...(folderDeleteChange?.shelvedPendingAssetChanges || []),
+                ],
+                pendingStructuralChanges: [
+                  ...state.pendingStructuralChanges.filter((item) => !(
+                    (folderPath && isGitPathWithinFolder(item.repoPath, folderPath) && (
+                      item.kind === 'git-delete-file' || item.kind === 'git-delete-folder'
+                    )) ||
+                    folderDeleteChange?.shelvedPendingStructuralChanges?.some((shelved) => shelved.id === item.id)
+                  )),
+                  ...(folderDeleteChange?.shelvedPendingStructuralChanges || []),
+                ],
+                currentDocumentId: state.currentDocumentId === documentId ? null : state.currentDocumentId,
+              }
+            })
+
+            if (tab) {
+              useTabsStore.getState().closeTab(tab.id)
+            }
+            return
+          }
+          if (snapshot.remoteMissing || snapshot.kind === 'rename') {
             const tab = useTabsStore.getState().findTabByFileId(documentId)
             const parentPath = getParentGitPath(draft.path)
+            const renamedFromPath = draft.renamedFromPath
+              ? normalizeGitPath(draft.renamedFromPath)
+              : ''
             set((state) => {
               const nextDrafts = { ...state.drafts }
               delete nextDrafts[documentId]
 
               return {
                 drafts: nextDrafts,
-                stagedChanges: state.stagedChanges.filter((item) => item.documentId !== documentId),
+                stagedChanges: state.stagedChanges.filter((item) => (
+                  item.documentId !== documentId &&
+                  (!renamedFromPath || normalizeGitPath(item.repoPath) !== renamedFromPath)
+                )),
                 pendingAssetChanges: state.pendingAssetChanges.filter((item) => item.documentId !== documentId),
-                pendingStructuralChanges: state.pendingStructuralChanges.filter((item) => item.documentId !== documentId),
+                pendingStructuralChanges: state.pendingStructuralChanges.filter((item) => (
+                  item.documentId !== documentId &&
+                  (!renamedFromPath || normalizeGitPath(item.repoPath) !== renamedFromPath)
+                )),
                 treeByPath: {
                   ...state.treeByPath,
                   [parentPath]: (state.treeByPath[parentPath] || []).filter((item) => normalizeGitPath(item.path) !== normalizeGitPath(draft.path)),
@@ -1984,7 +2905,7 @@ export const useGitStore = create<GitStore>()(
             }
             return
           }
-          if (!snapshot.remoteContent) return
+          if (typeof snapshot.remoteContent !== 'string') return
 
           set((state) => {
             const currentDraft = state.drafts[documentId]
@@ -1993,22 +2914,20 @@ export const useGitStore = create<GitStore>()(
             return {
               drafts: {
                 ...state.drafts,
-                [documentId]: {
+                [documentId]: clearDraftRemoteTracking({
                   ...currentDraft,
                   sha: snapshot.remoteSha || currentDraft.remoteSha || currentDraft.sha,
                   content: snapshot.remoteContent,
                   originalContent: snapshot.remoteContent,
                   draftContent: snapshot.remoteContent,
-                  remoteContent: snapshot.remoteContent,
-                  remoteSha: snapshot.remoteSha || currentDraft.remoteSha,
                   isDirty: false,
-                  creationSource: undefined,
+                  isNew: false,
+                  fileOrigin: undefined,
                   status: 'clean',
-                  hasRemoteUpdates: false,
                   hasConflict: false,
                   conflictResolvedContent: undefined,
                   conflictSnapshot: undefined,
-                },
+                }),
               },
             }
           })
@@ -2020,7 +2939,7 @@ export const useGitStore = create<GitStore>()(
         },
 
         refreshRepositoryFromRemote: async () => {
-          const { config, drafts, stagedChanges } = get()
+          const { config, drafts, stagedChanges, remoteSnapshotFetchedAt } = get()
           if (hasAnyConflictDraft(drafts)) {
             throw new Error('Resolve all conflicted files before refreshing repository content')
           }
@@ -2029,11 +2948,12 @@ export const useGitStore = create<GitStore>()(
           try {
             const runtimeConfig = toRuntimeConfig(config)
             const client = getGitProviderClient(runtimeConfig)
-            const { treeByPath: remoteTreeByPath, treeMap: remoteTreeMap } = await loadCompleteRemoteTree(client, runtimeConfig)
-            const currentBaseTreeMap = get().baseTreeMap
-            const hasBaseline = Object.keys(currentBaseTreeMap).length > 0
+            const { treeByPath: remoteTreeByPath, entriesByPath: remoteSnapshotEntries } = await loadCompleteRemoteTree(client, runtimeConfig)
+            const currentRemoteSnapshotEntries = get().remoteSnapshotEntries
+            const remoteTreeMap = buildTreeShaMap(remoteSnapshotEntries)
+            const hasBaseline = hasCompleteRemoteSnapshotBaseline(remoteSnapshotFetchedAt)
             const treeDiff = hasBaseline
-              ? diffTreeShaMaps(currentBaseTreeMap, remoteTreeMap)
+              ? diffGitRemoteSnapshotEntries(currentRemoteSnapshotEntries, remoteSnapshotEntries)
               : {
                   addedPaths: Object.keys(remoteTreeMap),
                   deletedPaths: [] as string[],
@@ -2045,7 +2965,78 @@ export const useGitStore = create<GitStore>()(
                   ...treeDiff.deletedPaths,
                   ...treeDiff.updatedPaths,
                 ]))
-              : [] as string[]
+              : Object.keys(remoteTreeMap)
+            const pullBlockers = findGitPullBlockers({
+              drafts: get().drafts,
+              stagedChanges: get().stagedChanges,
+              pendingAssetChanges: get().pendingAssetChanges,
+              pendingStructuralChanges: get().pendingStructuralChanges,
+              changedPaths,
+              remoteTreeMap,
+            })
+            if (pullBlockers.length > 0) {
+              throw new Error(toGitPullBlockerMessage(pullBlockers[0].kind, pullBlockers[0].path))
+            }
+            const stagedAssetConflicts = findGitStagedAssetConflicts(
+              get().stagedChanges,
+              changedPaths,
+              remoteTreeMap
+            )
+            if (stagedAssetConflicts.length > 0) {
+              throw new Error(`Remote file '${stagedAssetConflicts[0]}' changed since the asset was staged`)
+            }
+            const directoryPathConflicts = findGitDirectoryPathConflicts(
+              get().stagedChanges,
+              get().pendingStructuralChanges,
+              treeDiff.addedPaths
+            )
+            if (directoryPathConflicts.length > 0) {
+              const conflict = directoryPathConflicts[0]
+              if (conflict.kind === 'directory-delete-add-file') {
+                const representativeDelete =
+                  get().stagedChanges.find((item) => item.kind === 'git-delete-file' && isGitPathWithinFolder(item.repoPath, conflict.folderPath)) ||
+                  get().pendingStructuralChanges.find((item) => item.kind === 'git-delete-file' && isGitPathWithinFolder(item.repoPath, conflict.folderPath))
+                let representativeDraft = representativeDelete?.documentId
+                  ? get().drafts[representativeDelete.documentId]
+                  : undefined
+
+                if (!representativeDraft && representativeDelete?.repoPath) {
+                  try {
+                    representativeDraft = await get().openFile(representativeDelete.repoPath)
+                  } catch {
+                    representativeDraft = undefined
+                  }
+                }
+
+                if (representativeDraft) {
+                  set((state) => ({
+                    drafts: {
+                      ...state.drafts,
+                      [representativeDraft.documentId]: applyConflictState(
+                        state.drafts[representativeDraft.documentId],
+                        '',
+                        undefined,
+                        representativeDraft.draftContent,
+                        true,
+                        'path',
+                        conflict.path
+                      ),
+                    },
+                  }))
+                }
+
+                throw new Error(toGitPullBlockerMessage(conflict.kind, conflict.path, conflict.folderPath))
+              }
+            }
+            const snapshotFetchedAt = Date.now()
+            const nextRemoteContentCache = pruneGitRemoteContentCache(get().remoteContentCache, remoteSnapshotEntries)
+            const conflictedDocumentIds: string[] = []
+            const handledRenameConflictDocumentIds = new Set<string>()
+            const deletedSourcePaths = new Set(treeDiff.deletedPaths.map((path) => normalizeGitPath(path)))
+            const remoteAddedPathsBySha = new Map<string, string[]>()
+            const remoteAddedFilePaths = treeDiff.addedPaths
+              .map((path) => normalizeGitPath(path))
+              .filter((path) => remoteSnapshotEntries[path]?.type === 'file')
             const remoteFileCache = new Map<string, Awaited<ReturnType<typeof client.getFile>>>()
 
             const getRemoteFileForPath = async (path: string) => {
@@ -2056,11 +3047,93 @@ export const useGitStore = create<GitStore>()(
 
               const remoteFile = await client.getFile(runtimeConfig, normalizedPath)
               remoteFileCache.set(normalizedPath, remoteFile)
+              nextRemoteContentCache[normalizedPath] = createRemoteTextCacheEntry(remoteFile, snapshotFetchedAt)
               return remoteFile
+            }
+
+            treeDiff.addedPaths.forEach((path) => {
+              const normalizedPath = normalizeGitPath(path)
+              const sha = remoteSnapshotEntries[normalizedPath]?.sha
+              if (!sha) {
+                return
+              }
+
+              const currentCandidates = remoteAddedPathsBySha.get(sha) || []
+              remoteAddedPathsBySha.set(sha, [...currentCandidates, normalizedPath])
+            })
+
+            for (const draft of Object.values(get().drafts)) {
+              const normalizedDraftPath = normalizeGitPath(draft.path)
+              const renamedFromPath = draft.renamedFromPath
+                ? normalizeGitPath(draft.renamedFromPath)
+                : ''
+              const renamedFromSha = draft.renamedFromSha || ''
+
+              if (!draft.isNew || !renamedFromPath || !renamedFromSha) {
+                continue
+              }
+
+              if (!deletedSourcePaths.has(renamedFromPath)) {
+                continue
+              }
+
+              const exactRenameTargets = (remoteAddedPathsBySha.get(renamedFromSha) || [])
+                .filter((path) => normalizeGitPath(path) !== normalizeGitPath(draft.path))
+              const inferredRenameTargets = remoteAddedFilePaths
+                .filter((path) => normalizeGitPath(path) !== normalizeGitPath(draft.path))
+              const remoteRenameTargets = exactRenameTargets.length > 0
+                ? exactRenameTargets
+                : inferredRenameTargets
+
+              if (exactRenameTargets.length === 0 && remoteRenameTargets.length !== 1) {
+                continue
+              }
+
+              if (!remoteRenameTargets.length) {
+                continue
+              }
+
+              const sourceDeleteChange = findRenameSourceDeleteChange(
+                get().stagedChanges,
+                get().pendingStructuralChanges,
+                renamedFromPath
+              )
+              const sourceBaseContent = sourceDeleteChange?.originalContent ?? ''
+              const sourceBaseSha = sourceDeleteChange?.originalSha ?? draft.renamedFromSha
+
+              handledRenameConflictDocumentIds.add(draft.documentId)
+              conflictedDocumentIds.push(draft.documentId)
+              set((state) => ({
+                drafts: {
+                  ...state.drafts,
+                  [draft.documentId]: applyConflictState(
+                    {
+                      ...state.drafts[draft.documentId],
+                      originalContent: sourceBaseContent,
+                      sha: sourceBaseSha,
+                      lastCheckedAt: snapshotFetchedAt,
+                    },
+                    '',
+                    undefined,
+                    draft.draftContent,
+                    true,
+                    'modify-delete'
+                  ),
+                },
+              }))
             }
 
             const reconcileDocumentIds = new Set<string>()
             Object.values(get().drafts).forEach((draft) => {
+              const normalizedDraftPath = normalizeGitPath(draft.path)
+              if (
+                isPureLocalNewGitDraft(draft) &&
+                Object.prototype.hasOwnProperty.call(remoteTreeMap, normalizedDraftPath)
+              ) {
+                reconcileDocumentIds.add(draft.documentId)
+                return
+              }
+
               if (isPureLocalNewGitDraft(draft)) {
                 return
               }
@@ -2078,10 +3151,13 @@ export const useGitStore = create<GitStore>()(
               }
             }
 
-            const conflictedDocumentIds: string[] = []
             const deletedDocumentIds = new Set<string>()
 
             for (const documentId of reconcileDocumentIds) {
+              if (handledRenameConflictDocumentIds.has(documentId)) {
+                continue
+              }
+
               const currentDraft = get().drafts[documentId]
               if (!currentDraft) {
                 continue
@@ -2108,7 +3184,40 @@ export const useGitStore = create<GitStore>()(
                 get().stagedChanges.find((item) => item.kind === 'git-delete-file' && item.documentId === documentId) ||
                 get().pendingStructuralChanges.find((item) => item.kind === 'git-delete-file' && item.documentId === documentId)
               const hasDeleteIntent = Boolean(deleteIntent)
-              const hasEffectiveLocalChange = hasDeleteIntent || hasLocalChange
+              const stagedDraftChange =
+                get().stagedChanges.find((item) => item.kind === 'git-draft' && item.documentId === documentId) ||
+                null
+              const hasAssetChange =
+                get().stagedChanges.some((item) => item.kind === 'git-asset' && item.documentId === documentId) ||
+                get().pendingAssetChanges.some((item) => item.kind === 'git-asset' && item.documentId === documentId)
+              const hasEffectiveLocalChange = hasDeleteIntent || hasLocalChange || hasAssetChange
+
+              if (
+                isPureLocalNewGitDraft(currentDraft) &&
+                remotePathExists &&
+                stagedDraftChange
+              ) {
+                const remoteFile = await getRemoteFileForPath(draftPath)
+                set((state) => ({
+                  drafts: {
+                    ...state.drafts,
+                    [documentId]: applyConflictState(
+                      {
+                        ...state.drafts[documentId],
+                        name: remoteFile.name || state.drafts[documentId].name,
+                        lastCheckedAt: Date.now(),
+                      },
+                      remoteFile.content,
+                      remoteFile.sha,
+                      currentDraft.draftContent,
+                      false,
+                      'content'
+                    ),
+                  },
+                }))
+                conflictedDocumentIds.push(documentId)
+                continue
+              }
 
               if (pathDeletedRemotely) {
                 if (deleteIntent) {
@@ -2118,7 +3227,11 @@ export const useGitStore = create<GitStore>()(
 
                     return {
                       drafts: nextDrafts,
-                      stagedChanges: state.stagedChanges.filter((item) => item.id !== deleteIntent.id),
+                      stagedChanges: state.stagedChanges.filter((item) => !(
+                        item.id === deleteIntent.id ||
+                        (item.kind === 'git-asset' && item.documentId === documentId)
+                      )),
+                      pendingAssetChanges: state.pendingAssetChanges.filter((item) => item.documentId !== documentId),
                       pendingStructuralChanges: state.pendingStructuralChanges.filter((item) => item.id !== deleteIntent.id),
                       currentDocumentId: state.currentDocumentId === documentId ? null : state.currentDocumentId,
                     }
@@ -2148,6 +3261,24 @@ export const useGitStore = create<GitStore>()(
                   continue
                 }
 
+                if (stagedDraftChange) {
+                  set((state) => ({
+                    drafts: {
+                      ...state.drafts,
+                      [documentId]: applyConflictState(
+                        state.drafts[documentId],
+                        '',
+                        undefined,
+                        currentDraft.draftContent,
+                        true,
+                        'modify-delete'
+                      ),
+                    },
+                  }))
+                  conflictedDocumentIds.push(documentId)
+                  continue
+                }
+
                 const mergeResult = mergeGitText(currentDraft.originalContent, currentDraft.draftContent, '')
                 if (mergeResult.hasConflicts) {
                   set((state) => ({
@@ -2164,15 +3295,18 @@ export const useGitStore = create<GitStore>()(
                   }))
                   conflictedDocumentIds.push(documentId)
                 } else {
+                  const nextMergedText = !hasLocalChange && hasAssetChange
+                    ? currentDraft.draftContent
+                    : mergeResult.mergedText
                   set((state) => ({
                     drafts: {
                       ...state.drafts,
                       [documentId]: {
-                        ...resolveDraftAgainstRemoteBase(state.drafts[documentId], mergeResult.mergedText),
+                        ...resolveDraftAgainstRemoteBase(state.drafts[documentId], nextMergedText),
                         remoteMissing: true,
                         remoteContent: '',
                         remoteSha: undefined,
-                        status: 'auto-merged',
+                        status: hasMeaningfulLocalGitChange(nextMergedText, '') ? 'dirty' : 'clean',
                         hasRemoteUpdates: true,
                       },
                     },
@@ -2203,26 +3337,22 @@ export const useGitStore = create<GitStore>()(
                 set((state) => ({
                   drafts: {
                     ...state.drafts,
-                    [documentId]: {
+                    [documentId]: clearDraftRemoteTracking({
                       ...state.drafts[documentId],
                       name: remoteFile.name || state.drafts[documentId].name,
                       sha: remoteFile.sha,
                       content: remoteFile.content,
                       originalContent: remoteFile.content,
                       draftContent: remoteFile.content,
-                      remoteContent: remoteFile.content,
-                      remoteSha: remoteFile.sha,
-                      remoteMissing: false,
                       isDirty: false,
                       isNew: false,
-                      creationSource: undefined,
+                      fileOrigin: undefined,
                       status: 'clean',
                       hasConflict: false,
-                      hasRemoteUpdates: false,
                       conflictSnapshot: undefined,
                       conflictResolvedContent: undefined,
                       lastCheckedAt: Date.now(),
-                    },
+                    }),
                   },
                 }))
                 syncOpenGitTabFromDraft(documentId, get().drafts[documentId])
@@ -2233,14 +3363,10 @@ export const useGitStore = create<GitStore>()(
                 set((state) => ({
                   drafts: {
                     ...state.drafts,
-                    [documentId]: {
+                    [documentId]: clearDraftRemoteTracking({
                       ...state.drafts[documentId],
-                      remoteContent: remoteFile.content,
-                      remoteSha: remoteFile.sha,
-                      remoteMissing: false,
-                      hasRemoteUpdates: false,
                       lastCheckedAt: Date.now(),
-                    },
+                    }),
                   },
                 }))
                 continue
@@ -2259,7 +3385,9 @@ export const useGitStore = create<GitStore>()(
                       },
                       remoteFile.content,
                       remoteFile.sha,
-                      mergeResult.mergedText
+                      mergeResult.mergedText,
+                      false,
+                      'modify-delete'
                     ),
                   },
                 }))
@@ -2294,30 +3422,29 @@ export const useGitStore = create<GitStore>()(
                 set((state) => ({
                   drafts: {
                     ...state.drafts,
-                    [documentId]: {
-                      ...resolveDraftAgainstRemoteBase(state.drafts[documentId], mergeResult.mergedText),
-                      name: remoteFile.name || state.drafts[documentId].name,
-                      remoteMissing: false,
-                      lastCheckedAt: Date.now(),
-                      status: 'auto-merged',
+                      [documentId]: {
+                        ...resolveDraftAgainstRemoteBase(state.drafts[documentId], mergeResult.mergedText),
+                        name: remoteFile.name || state.drafts[documentId].name,
+                        remoteMissing: false,
+                        lastCheckedAt: Date.now(),
+                        status: hasMeaningfulLocalGitChange(
+                          mergeResult.mergedText,
+                          remoteFile.content
+                        ) ? 'dirty' : 'clean',
+                      },
                     },
-                  },
-                }))
+                  }))
                 syncGitDraftStageState(get(), documentId)
                 syncOpenGitTabFromDraft(documentId, get().drafts[documentId])
               }
             }
 
-            set((state) => ({
-              treeByPath: Object.fromEntries(
-                Object.entries(remoteTreeByPath).map(([path, items]) => [
-                  path,
-                  buildTreeItemsForPath(items),
-                ])
-              ),
-              baseTreeMap: remoteTreeMap,
-              lastFetchedAt: Date.now(),
-            }))
+            set(() => buildLoadedRemoteTreeState(
+              remoteTreeByPath,
+              remoteSnapshotEntries,
+              nextRemoteContentCache,
+              snapshotFetchedAt
+            ))
 
             return {
               addedPaths: treeDiff.addedPaths,
@@ -2337,6 +3464,69 @@ export const useGitStore = create<GitStore>()(
           const draft = get().drafts[documentId]
           if (!draft) return
           const snapshot = getDraftConflictSnapshot(draft)
+          if (snapshot.kind === 'path' && snapshot.pathHint) {
+            const remoteAddedPath = normalizeGitPath(snapshot.pathHint)
+            const folderDeleteChange = findContainingDeleteFolderChange(
+              get().stagedChanges,
+              get().pendingStructuralChanges,
+              remoteAddedPath
+            )
+            const addDeleteToStaged = folderDeleteChange
+              ? get().stagedChanges.some((item) => item.id === folderDeleteChange.id)
+              : false
+            const folderPath = folderDeleteChange
+              ? normalizeGitPath(folderDeleteChange.repoPath)
+              : getParentGitPath(remoteAddedPath)
+            const nextDeleteChange: StagedGitChange = {
+              id: `git-delete-file:${remoteAddedPath}`,
+              kind: 'git-delete-file',
+              label: getGitFileName(remoteAddedPath),
+              repoPath: remoteAddedPath,
+              originalContent: snapshot.remoteContent,
+              originalSha: snapshot.remoteSha,
+              updatedAt: Date.now(),
+            }
+            const tab = useTabsStore.getState().findTabByFileId(documentId)
+
+            set((state) => {
+              const nextDrafts = { ...state.drafts }
+              delete nextDrafts[documentId]
+
+              return {
+                drafts: nextDrafts,
+                stagedChanges: addDeleteToStaged
+                  ? [
+                      ...state.stagedChanges.filter((item) => !(
+                        (item.kind === 'git-draft' && item.documentId === documentId) ||
+                        (item.kind === 'git-asset' && folderPath && isGitPathWithinFolder(item.repoPath, folderPath)) ||
+                        normalizeGitPath(item.repoPath) === remoteAddedPath
+                      )),
+                      nextDeleteChange,
+                    ]
+                  : state.stagedChanges.filter((item) => !(
+                    (item.kind === 'git-draft' && item.documentId === documentId) ||
+                    (item.kind === 'git-asset' && folderPath && isGitPathWithinFolder(item.repoPath, folderPath))
+                  )),
+                pendingAssetChanges: state.pendingAssetChanges.filter((item) => !(
+                  item.kind === 'git-asset' &&
+                  folderPath &&
+                  isGitPathWithinFolder(item.repoPath, folderPath)
+                )),
+                pendingStructuralChanges: addDeleteToStaged
+                  ? state.pendingStructuralChanges.filter((item) => normalizeGitPath(item.repoPath) !== remoteAddedPath)
+                  : [
+                      ...state.pendingStructuralChanges.filter((item) => normalizeGitPath(item.repoPath) !== remoteAddedPath),
+                      nextDeleteChange,
+                    ],
+                currentDocumentId: state.currentDocumentId === documentId ? null : state.currentDocumentId,
+              }
+            })
+
+            if (tab) {
+              useTabsStore.getState().closeTab(tab.id)
+            }
+            return
+          }
           get().resolveConflictUsingContent(documentId, snapshot.localContent)
         },
 
@@ -2364,6 +3554,7 @@ export const useGitStore = create<GitStore>()(
               throw new Error('Resolve all conflicted files before committing')
             }
 
+            // Treat commit as "pull gate -> remote batch commit -> refresh".
             await get().refreshRepositoryFromRemote()
 
             const conflictedAfterRefresh = getFirstConflictDocumentId(get().drafts)
@@ -2385,44 +3576,34 @@ export const useGitStore = create<GitStore>()(
               for (const change of stagedChanges) {
                 if (change.kind === 'git-draft' && change.documentId) {
                   const stagedDraft = get().drafts[change.documentId]
-                  if (!stagedDraft) continue
+                  const stagedContent = getRequiredStagedDraftContent(change)
+                  const repoPath = normalizeGitPath(change.repoPath || stagedDraft?.path || '')
+                  const baseSha = change.baseSha ?? change.originalSha ?? stagedDraft?.sha
 
                   committedDraftSnapshots.set(change.documentId, {
-                    path: stagedDraft.path,
-                    content: stagedDraft.draftContent,
+                    path: repoPath,
+                    content: stagedContent,
                   })
                   batchActions.push({
                     kind: 'upsert',
-                    path: stagedDraft.path,
-                    content: stagedDraft.draftContent,
+                    path: repoPath,
+                    content: stagedContent,
                     encoding: 'text',
-                    previousSha: stagedDraft.sha,
-                    isCreate: stagedDraft.isNew || !stagedDraft.sha,
-                  })
-                  continue
-                }
-
-                if (change.kind === 'local-file' && change.localFileId) {
-                  const file = useFileSystemStore.getState().files.find((item) => item.id === change.localFileId)
-                  if (!file) continue
-
-                  batchActions.push({
-                    kind: 'upsert',
-                    path: change.repoPath,
-                    content: file.content,
-                    encoding: 'text',
-                    isCreate: true,
+                    previousSha: baseSha,
+                    isCreate: !baseSha,
                   })
                   continue
                 }
 
                 if (change.kind === 'git-asset' && change.contentBase64) {
+                  const previousSha = change.baseSha ?? change.originalSha
                   batchActions.push({
                     kind: 'upsert',
                     path: change.repoPath,
                     content: change.contentBase64,
                     encoding: 'base64',
-                    isCreate: true,
+                    previousSha,
+                    isCreate: !previousSha,
                   })
                   continue
                 }
@@ -2477,24 +3658,26 @@ export const useGitStore = create<GitStore>()(
                 }
 
                 const stagedDraft = get().drafts[change.documentId]
-                if (!stagedDraft || stagedDraft.isNew) {
+                const stagedContent = getRequiredStagedDraftContent(change)
+                const currentPath = normalizeGitPath(change.repoPath || stagedDraft?.path || '')
+                const baseContent = change.originalContent ?? stagedDraft?.originalContent ?? ''
+                const baseSha = change.baseSha ?? change.originalSha ?? stagedDraft?.sha
+
+                if (!baseSha) {
                   continue
                 }
 
-                const remoteDraft = await get().fetchRemoteFile(change.documentId)
-                if (!remoteDraft) {
-                  continue
-                }
+                const remoteFile = await client.getFile(runtimeConfig, currentPath)
 
                 const hasRemoteChange = hasMeaningfulRemoteGitChange(
-                  remoteDraft.remoteContent ?? remoteDraft.originalContent,
-                  stagedDraft.originalContent,
-                  remoteDraft.remoteSha,
-                  stagedDraft.sha
+                  remoteFile.content,
+                  baseContent,
+                  remoteFile.sha,
+                  baseSha
                 )
                 const hasLocalChange = hasMeaningfulLocalGitChange(
-                  stagedDraft.draftContent,
-                  stagedDraft.originalContent
+                  stagedContent,
+                  baseContent
                 )
 
                 if (!hasRemoteChange || !hasLocalChange) {
@@ -2502,12 +3685,18 @@ export const useGitStore = create<GitStore>()(
                 }
 
                 const mergeResult = mergeGitText(
-                  stagedDraft.originalContent,
-                  stagedDraft.draftContent,
-                  remoteDraft.remoteContent ?? remoteDraft.originalContent
+                  baseContent,
+                  stagedContent,
+                  remoteFile.content
                 )
 
                 if (mergeResult.hasConflicts) {
+                  if (!stagedDraft) {
+                    set({ error: `Conflict detected: remote file '${currentPath}' changed since last sync` })
+                    encounteredConflict = true
+                    continue
+                  }
+
                   set((state) => {
                     const currentDraft = state.drafts[change.documentId!]
                     if (!currentDraft) {
@@ -2520,8 +3709,8 @@ export const useGitStore = create<GitStore>()(
                         ...state.drafts,
                         [change.documentId!]: applyConflictState(
                           currentDraft,
-                          remoteDraft.remoteContent ?? remoteDraft.originalContent,
-                          remoteDraft.remoteSha ?? currentDraft.remoteSha,
+                          remoteFile.content,
+                          remoteFile.sha ?? currentDraft.remoteSha,
                           mergeResult.mergedText
                         ),
                       },
@@ -2531,25 +3720,28 @@ export const useGitStore = create<GitStore>()(
                   continue
                 }
 
-                const currentPath = normalizeGitPath(stagedDraft.path)
                 const nextContent = mergeResult.mergedText
 
-                set((state) => {
-                  const currentDraft = state.drafts[change.documentId!]
-                  if (!currentDraft) {
-                    return state
-                  }
+                if (stagedDraft) {
+                  set((state) => {
+                    const currentDraft = state.drafts[change.documentId!]
+                    if (!currentDraft) {
+                      return state
+                    }
 
-                  return {
-                    drafts: {
-                      ...state.drafts,
-                      [change.documentId!]: {
-                        ...resolveDraftAgainstRemoteBase(currentDraft, nextContent),
-                        status: 'auto-merged',
+                    return {
+                      drafts: {
+                        ...state.drafts,
+                        [change.documentId!]: {
+                          ...resolveDraftAgainstRemoteBase(currentDraft, nextContent),
+                          status: hasMeaningfulLocalGitChange(nextContent, currentDraft.remoteContent ?? currentDraft.originalContent)
+                            ? 'dirty'
+                            : 'clean',
+                        },
                       },
-                    },
-                  }
-                })
+                    }
+                  })
+                }
 
                 const actionIndex = batchActions.findIndex((action) => (
                   action.kind === 'upsert' &&
@@ -2560,13 +3752,13 @@ export const useGitStore = create<GitStore>()(
                   batchActions[actionIndex] = {
                     ...batchActions[actionIndex],
                     content: nextContent,
-                    previousSha: remoteDraft.remoteSha ?? stagedDraft.remoteSha ?? stagedDraft.sha,
+                    previousSha: remoteFile.sha ?? stagedDraft?.remoteSha ?? baseSha,
                     isCreate: false,
                   }
                 }
 
                 committedDraftSnapshots.set(change.documentId, {
-                  path: stagedDraft.path,
+                  path: currentPath,
                   content: nextContent,
                 })
               }
@@ -2641,18 +3833,17 @@ export const useGitStore = create<GitStore>()(
                 const nextContent = keepLocalEdits ? currentDraft.draftContent : remoteDraft.content
 
                 nextDrafts[documentId] = {
-                  ...currentDraft,
+                  ...clearDraftRemoteTracking(currentDraft),
                   sha: remoteDraft.sha || currentDraft.sha,
                   content: nextContent,
                   originalContent: remoteDraft.content,
                   draftContent: nextContent,
                   isNew: false,
-                  creationSource: undefined,
+                  renamedFromPath: undefined,
+                  renamedFromSha: undefined,
+                  fileOrigin: undefined,
                   status: keepLocalEdits ? 'dirty' : 'clean',
-                  remoteContent: remoteDraft.content,
-                  remoteSha: remoteDraft.sha || currentDraft.remoteSha,
                   isDirty: keepLocalEdits,
-                  hasRemoteUpdates: false,
                   hasConflict: false,
                   conflictSnapshot: undefined,
                   conflictResolvedContent: undefined,
@@ -2693,6 +3884,33 @@ export const useGitStore = create<GitStore>()(
               }
             })
 
+            // Commit success should immediately trigger a metadata-only remote snapshot reload
+            // so the worktree baseline reflects the pushed repository state without waiting for
+            // the user to manually refresh.
+            queueMicrotask(() => {
+              void (async () => {
+                set({ isLoadingTree: true, isFetchingRemote: true })
+                try {
+                  const { treeByPath: committedTreeByPath, entriesByPath: committedRemoteSnapshotEntries } =
+                    await loadCompleteRemoteTree(client, runtimeConfig)
+                  const fetchedAt = Date.now()
+                  set((state) => buildLoadedRemoteTreeState(
+                    committedTreeByPath,
+                    committedRemoteSnapshotEntries,
+                    state.remoteContentCache,
+                    fetchedAt
+                  ))
+                } catch (syncError) {
+                  const syncMessage = syncError instanceof Error
+                    ? syncError.message
+                    : 'Failed to refresh repository metadata after commit'
+                  set({ error: syncMessage })
+                } finally {
+                  set({ isLoadingTree: false, isFetchingRemote: false })
+                }
+              })()
+            })
+
           } catch (error) {
             const message = error instanceof Error ? error.message : 'Failed to commit file'
             set({ error: message })
@@ -2726,7 +3944,7 @@ export const useGitStore = create<GitStore>()(
             draftContent: normalizedContent,
             isDirty: false,
             isNew: true,
-            creationSource: 'git',
+            fileOrigin: 'local',
             status: 'clean',
             remoteContent: undefined,
             remoteSha: undefined,
@@ -2750,45 +3968,501 @@ export const useGitStore = create<GitStore>()(
         },
 
         renameFile: async (oldPath, newPath, message) => {
-          const { config, drafts } = get()
-          const runtimeConfig = toRuntimeConfig(config)
-          const client = getGitProviderClient(runtimeConfig)
+          const { config, drafts, treeByPath, remoteSnapshotEntries, pendingStructuralChanges, stagedChanges, pendingAssetChanges } = get()
           const normalizedOld = normalizeGitPath(oldPath)
+          const nextPath = normalizeGitPath(newPath)
+          const oldDocumentId = buildGitDocumentId(config, normalizedOld)
+          const nextDocumentId = buildGitDocumentId(config, nextPath)
+          if (!normalizedOld || !nextPath) {
+            set({ error: 'Source and target path are required for rename' })
+            throw new Error('Source and target path are required for rename')
+          }
+          if (normalizedOld === nextPath) {
+            return
+          }
+
+          const isFolderRename =
+            Object.prototype.hasOwnProperty.call(treeByPath, normalizedOld) ||
+            remoteSnapshotEntries[normalizedOld]?.type === 'dir' ||
+            pendingStructuralChanges.some((item) => (
+              item.kind === 'git-create-folder' &&
+              normalizeGitPath(item.repoPath) === normalizedOld
+            )) ||
+            stagedChanges.some((item) => (
+              item.kind === 'git-create-folder' &&
+              normalizeGitPath(item.repoPath) === normalizedOld
+            ))
+
+          if (isFolderRename) {
+            if (nextPath.startsWith(`${normalizedOld}/`)) {
+              set({ error: 'Cannot rename a folder into one of its own descendants' })
+              throw new Error('Cannot rename a folder into one of its own descendants')
+            }
+
+            const subtreeDrafts = Object.values(drafts).filter((draft) => isGitPathWithinFolder(draft.path, normalizedOld))
+            if (subtreeDrafts.some((draft) => draft.hasConflict)) {
+              set({ error: 'Resolve all conflicted files inside the folder before renaming it' })
+              throw new Error('Resolve all conflicted files inside the folder before renaming it')
+            }
+
+            const nestedDeleteIntents = [...stagedChanges, ...pendingStructuralChanges].filter((item) => (
+              (item.kind === 'git-delete-file' || item.kind === 'git-delete-folder') &&
+              isGitPathWithinFolder(item.repoPath, normalizedOld)
+            ))
+
+            const hasRootDeleteIntent = nestedDeleteIntents.some((item) => (
+              normalizeGitPath(item.repoPath) === normalizedOld
+            ))
+            if (hasRootDeleteIntent) {
+              set({ error: 'Folder rename is not supported while the folder itself is pending deletion' })
+              throw new Error('Folder rename is not supported while the folder itself is pending deletion')
+            }
+
+            const nestedDeleteFilePaths = new Set(
+              nestedDeleteIntents
+                .filter((item) => item.kind === 'git-delete-file')
+                .map((item) => normalizeGitPath(item.repoPath))
+            )
+            const nestedDeleteFolderPaths = nestedDeleteIntents
+              .filter((item) => item.kind === 'git-delete-folder')
+              .map((item) => normalizeGitPath(item.repoPath))
+            const shouldSkipFolderMovePath = (candidatePath: string) => {
+              const normalizedCandidatePath = normalizeGitPath(candidatePath)
+              if (nestedDeleteFilePaths.has(normalizedCandidatePath)) {
+                return true
+              }
+
+              return nestedDeleteFolderPaths.some((folderPath) => (
+                isGitPathWithinFolder(normalizedCandidatePath, folderPath)
+              ))
+            }
+
+            const runtimeConfig = toRuntimeConfig(config)
+            const client = getGitProviderClient(runtimeConfig)
+            const remoteFolderExists =
+              Object.prototype.hasOwnProperty.call(treeByPath, normalizedOld) ||
+              remoteSnapshotEntries[normalizedOld]?.type === 'dir'
+            const remoteSubtree = remoteFolderExists
+              ? await loadRemoteFolderSubtree(client, runtimeConfig, normalizedOld)
+              : { dirPaths: [normalizedOld], fileItems: [] as GitTreeItem[] }
+            const movedSubtreeDrafts = subtreeDrafts.filter((draft) => !shouldSkipFolderMovePath(draft.path))
+            const localOnlyDrafts = movedSubtreeDrafts.filter((draft) => (
+              draft.isNew && !remoteSubtree.fileItems.some((item) => normalizeGitPath(item.path) === normalizeGitPath(draft.path))
+            ))
+            const movedRemoteDirPaths = remoteSubtree.dirPaths.filter((path) => !shouldSkipFolderMovePath(path))
+            const movedRemoteFileItems = remoteSubtree.fileItems.filter((item) => !shouldSkipFolderMovePath(item.path))
+
+            const targetPathsToValidate = new Set<string>([
+              nextPath,
+              ...movedRemoteDirPaths.map((path) => replaceGitPathPrefix(path, normalizedOld, nextPath)),
+              ...movedRemoteFileItems.map((item) => replaceGitPathPrefix(item.path, normalizedOld, nextPath)),
+              ...localOnlyDrafts.map((draft) => replaceGitPathPrefix(draft.path, normalizedOld, nextPath)),
+              ...pendingAssetChanges
+                .filter((item) => (
+                  isGitPathWithinFolder(item.repoPath, normalizedOld) &&
+                  !shouldSkipFolderMovePath(item.repoPath)
+                ))
+                .map((item) => replaceGitPathPrefix(item.repoPath, normalizedOld, nextPath)),
+            ])
+
+            for (const candidatePath of targetPathsToValidate) {
+              if (isFolderRenamePathTaken(
+                candidatePath,
+                normalizedOld,
+                drafts,
+                remoteSnapshotEntries,
+                stagedChanges,
+                pendingAssetChanges,
+                pendingStructuralChanges
+              )) {
+                set({ error: `Target path '${candidatePath}' already exists` })
+                throw new Error(`Target path '${candidatePath}' already exists`)
+              }
+            }
+
+            const fileDraftEntries = await Promise.all(movedRemoteFileItems.map(async (item) => {
+              const existingDraft = movedSubtreeDrafts.find((draft) => normalizeGitPath(draft.path) === normalizeGitPath(item.path))
+              if (existingDraft) {
+                return { sourceDraft: existingDraft, sourcePath: normalizeGitPath(item.path) }
+              }
+
+              const remoteFile = await client.getFile(runtimeConfig, normalizeGitPath(item.path))
+              return {
+                sourceDraft: createGitDraftFromRemoteSource(config, normalizeGitPath(item.path), remoteFile),
+                sourcePath: normalizeGitPath(item.path),
+              }
+            }))
+
+            const renameTimestamp = Date.now()
+            const nextDraftEntries = new Map<string, GitDraftFile>()
+            const nextDocumentIdByOldDocumentId = new Map<string, string>()
+            const oldRemotePaths = new Set<string>()
+
+            for (const { sourceDraft, sourcePath } of fileDraftEntries) {
+              const movedDraft = buildRenamedGitDraft(
+                config,
+                sourceDraft,
+                replaceGitPathPrefix(sourcePath, normalizedOld, nextPath)
+              )
+              nextDraftEntries.set(movedDraft.documentId, movedDraft)
+              nextDocumentIdByOldDocumentId.set(sourceDraft.documentId, movedDraft.documentId)
+              oldRemotePaths.add(sourcePath)
+            }
+
+            for (const draft of localOnlyDrafts) {
+              const movedDraft = buildRenamedGitDraft(
+                config,
+                draft,
+                replaceGitPathPrefix(draft.path, normalizedOld, nextPath)
+              )
+              nextDraftEntries.set(movedDraft.documentId, movedDraft)
+              nextDocumentIdByOldDocumentId.set(draft.documentId, movedDraft.documentId)
+            }
+
+            const oldLocalDocumentIds = new Set(movedSubtreeDrafts.map((draft) => draft.documentId))
+            const oldPathsToDelete = fileDraftEntries
+              .filter(({ sourceDraft }) => !sourceDraft.isNew)
+              .map(({ sourceDraft, sourcePath }) => ({
+                documentId: sourceDraft.documentId,
+                path: sourcePath,
+                name: sourceDraft.name,
+                originalContent: sourceDraft.originalContent,
+                originalSha: sourceDraft.sha,
+              }))
+
+            set((state) => {
+              const nextDrafts = { ...state.drafts }
+              oldLocalDocumentIds.forEach((documentId) => {
+                delete nextDrafts[documentId]
+              })
+              nextDraftEntries.forEach((draft, documentId) => {
+                nextDrafts[documentId] = draft
+              })
+
+              const filteredPendingStructuralChanges = state.pendingStructuralChanges.filter((item) => !(
+                item.kind === 'git-create-folder' &&
+                isGitPathWithinFolder(item.repoPath, normalizedOld)
+              ))
+
+              const renamedCreateFolders = [
+                ...state.pendingStructuralChanges,
+                ...state.stagedChanges,
+              ]
+                .filter((item) => (
+                  item.kind === 'git-create-folder' &&
+                  isGitPathWithinFolder(item.repoPath, normalizedOld) &&
+                  !shouldSkipFolderMovePath(item.repoPath)
+                ))
+                .map((item) => ({
+                  ...item,
+                  id: `git-create-folder:${replaceGitPathPrefix(item.repoPath, normalizedOld, nextPath)}`,
+                  label: getGitFileName(replaceGitPathPrefix(item.repoPath, normalizedOld, nextPath)),
+                  repoPath: replaceGitPathPrefix(item.repoPath, normalizedOld, nextPath),
+                  updatedAt: renameTimestamp,
+                }))
+
+              const deleteFileEntries = oldPathsToDelete.map((entry) => ({
+                id: `git-delete-file:${entry.path}`,
+                kind: 'git-delete-file' as const,
+                label: entry.name,
+                repoPath: entry.path,
+                documentId: entry.documentId,
+                originalContent: entry.originalContent,
+                originalSha: entry.originalSha,
+                updatedAt: renameTimestamp,
+              }))
+              const renamedStagedDrafts: StagedGitChange[] = state.stagedChanges
+                .filter((item) => item.kind === 'git-draft' && oldLocalDocumentIds.has(item.documentId || ''))
+                .flatMap((item) => {
+                  const nextDocumentId = nextDocumentIdByOldDocumentId.get(item.documentId || '')
+                  const nextDraft = nextDocumentId ? nextDraftEntries.get(nextDocumentId) : undefined
+                  if (!nextDocumentId || !nextDraft) {
+                    return []
+                  }
+
+                  return [{
+                    ...item,
+                    id: `git-draft:${nextDocumentId}`,
+                    documentId: nextDocumentId,
+                    repoPath: nextDraft.path,
+                    label: nextDraft.name,
+                    renamedFromPath: nextDraft.renamedFromPath,
+                    renamedFromSha: nextDraft.renamedFromSha,
+                    updatedAt: renameTimestamp,
+                  }]
+                })
+              const renamedStagedAssets: StagedGitChange[] = state.stagedChanges
+                .filter((item) => (
+                  item.kind === 'git-asset' &&
+                  isGitPathWithinFolder(item.repoPath, normalizedOld) &&
+                  !shouldSkipFolderMovePath(item.repoPath)
+                ))
+                .map((item) => {
+                  const nextRepoPath = replaceGitPathPrefix(item.repoPath, normalizedOld, nextPath)
+                  const nextDocumentId = nextDocumentIdByOldDocumentId.get(item.documentId || '') || item.documentId
+
+                  return {
+                    ...item,
+                    id: `git-asset:${nextDocumentId}:${nextRepoPath}`,
+                    repoPath: nextRepoPath,
+                    documentId: nextDocumentId,
+                    updatedAt: renameTimestamp,
+                  }
+                })
+              const renamedStagedFolders: StagedGitChange[] = state.stagedChanges
+                .filter((item) => item.kind === 'git-create-folder' && isGitPathWithinFolder(item.repoPath, normalizedOld))
+                .map((item) => ({
+                  ...item,
+                  id: `git-create-folder:${replaceGitPathPrefix(item.repoPath, normalizedOld, nextPath)}`,
+                  label: getGitFileName(replaceGitPathPrefix(item.repoPath, normalizedOld, nextPath)),
+                  repoPath: replaceGitPathPrefix(item.repoPath, normalizedOld, nextPath),
+                  updatedAt: renameTimestamp,
+                }))
+
+              return {
+                drafts: nextDrafts,
+                stagedChanges: state.stagedChanges
+                  .filter((item) => !(
+                    oldLocalDocumentIds.has(item.documentId || '') ||
+                    (
+                      isGitPathWithinFolder(item.repoPath, normalizedOld) &&
+                      (item.kind === 'git-draft' || item.kind === 'git-asset' || item.kind === 'git-create-folder') &&
+                      !shouldSkipFolderMovePath(item.repoPath)
+                    )
+                  ))
+                  .concat(renamedStagedDrafts)
+                  .concat(renamedStagedAssets)
+                  .concat(renamedStagedFolders),
+                pendingAssetChanges: state.pendingAssetChanges.map((item) => {
+                  if (!isGitPathWithinFolder(item.repoPath, normalizedOld)) {
+                    return oldLocalDocumentIds.has(item.documentId || '')
+                      ? {
+                          ...item,
+                          documentId: nextDocumentIdByOldDocumentId.get(item.documentId || '') || item.documentId,
+                          updatedAt: renameTimestamp,
+                        }
+                      : item
+                  }
+
+                  if (shouldSkipFolderMovePath(item.repoPath)) {
+                    return item
+                  }
+
+                  return {
+                    ...item,
+                    id: `git-asset:${nextDocumentIdByOldDocumentId.get(item.documentId || '') || item.documentId}:${replaceGitPathPrefix(item.repoPath, normalizedOld, nextPath)}`,
+                    repoPath: replaceGitPathPrefix(item.repoPath, normalizedOld, nextPath),
+                    documentId: nextDocumentIdByOldDocumentId.get(item.documentId || '') || item.documentId,
+                    updatedAt: renameTimestamp,
+                  }
+                }),
+                pendingStructuralChanges: [
+                  ...filteredPendingStructuralChanges,
+                  ...renamedCreateFolders,
+                  ...deleteFileEntries,
+                ],
+                expandedPaths: state.expandedPaths
+                  .filter((path) => !isGitPathWithinFolder(path, normalizedOld))
+                  .concat(
+                    state.expandedPaths
+                      .filter((path) => isGitPathWithinFolder(path, normalizedOld))
+                      .map((path) => replaceGitPathPrefix(path, normalizedOld, nextPath))
+                  ),
+                currentDocumentId: state.currentDocumentId
+                  ? nextDocumentIdByOldDocumentId.get(state.currentDocumentId) || state.currentDocumentId
+                  : state.currentDocumentId,
+              }
+            })
+
+            for (const draft of movedSubtreeDrafts) {
+              const existingTab = useTabsStore.getState().findTabByFileId(draft.documentId)
+              const nextDocumentId = nextDocumentIdByOldDocumentId.get(draft.documentId)
+              const nextDraft = nextDocumentId ? nextDraftEntries.get(nextDocumentId) : undefined
+              if (!existingTab || !nextDocumentId || !nextDraft) {
+                continue
+              }
+
+              const updatedTabId = useTabsStore.getState().openGitFileInTab({
+                ...buildGitTabDraftState(nextDraft),
+                fileId: draft.documentId,
+                content: nextDraft.draftContent,
+                savedContent: existingTab.savedContent ?? nextDraft.draftContent,
+                isModified: nextDraft.isDirty || existingTab.isModified,
+                isNew: nextDraft.isNew,
+              })
+              useTabsStore.getState().updateTabFileId(updatedTabId, nextDocumentId)
+            }
+
+            const nextCurrentDocumentId = get().currentDocumentId
+            if (nextCurrentDocumentId) {
+              const nextCurrentDraft = get().drafts[nextCurrentDocumentId]
+              if (nextCurrentDraft) {
+                useDocumentStore.getState().loadDocument(
+                  nextCurrentDraft.draftContent,
+                  nextCurrentDraft.name,
+                  nextCurrentDraft.documentId
+                )
+              }
+            }
+            return
+          }
+
+          const renameTargetTaken =
+            Object.values(drafts).some((item) => normalizeGitPath(item.path) === nextPath) ||
+            Object.prototype.hasOwnProperty.call(remoteSnapshotEntries, nextPath) ||
+            stagedChanges.some((item) => normalizeGitPath(item.repoPath) === nextPath) ||
+            pendingAssetChanges.some((item) => normalizeGitPath(item.repoPath) === nextPath) ||
+            pendingStructuralChanges.some((item) => normalizeGitPath(item.repoPath) === nextPath)
+
+          if (renameTargetTaken) {
+            set({ error: `Target path '${nextPath}' already exists` })
+            throw new Error(`Target path '${nextPath}' already exists`)
+          }
+
           const draft =
             Object.values(drafts).find((item) => item.path === normalizedOld) ||
             await get().openFile(normalizedOld)
-          await client.renameFile(runtimeConfig, normalizedOld, normalizeGitPath(newPath), message, draft.draftContent, draft.sha)
 
-          const nextPath = normalizeGitPath(newPath)
-          const nextDocumentId = buildGitDocumentId(config, nextPath)
+          if (draft.hasConflict) {
+            set({ error: 'Resolve the file conflict before renaming it' })
+            throw new Error('Resolve the file conflict before renaming it')
+          }
+
+          const nextDraft = buildRenamedGitDraft(config, draft, nextPath)
+          const renameTimestamp = Date.now()
+          const relatedAssetChanges = [
+            ...pendingAssetChanges.filter((item) => item.kind === 'git-asset' && item.documentId === draft.documentId),
+            ...stagedChanges.filter((item) => item.kind === 'git-asset' && item.documentId === draft.documentId),
+          ]
+          const assetMoveTargets = relatedAssetChanges
+            .map((item) => ({
+              sourcePath: normalizeGitPath(item.repoPath),
+              nextPath: rebaseDocumentAssetPathForFileRename(normalizedOld, nextPath, item.repoPath),
+            }))
+            .filter((item, index, list) => (
+              item.nextPath !== item.sourcePath &&
+              list.findIndex((candidate) => candidate.nextPath === item.nextPath) === index
+            ))
+
+          for (const assetTarget of assetMoveTargets) {
+            const assetTargetTaken =
+              Object.values(drafts).some((item) => normalizeGitPath(item.path) === assetTarget.nextPath) ||
+              Object.prototype.hasOwnProperty.call(remoteSnapshotEntries, assetTarget.nextPath) ||
+              stagedChanges.some((item) => (
+                normalizeGitPath(item.repoPath) === assetTarget.nextPath &&
+                !(
+                  item.kind === 'git-asset' &&
+                  item.documentId === draft.documentId &&
+                  normalizeGitPath(item.repoPath) === assetTarget.sourcePath
+                )
+              )) ||
+              pendingAssetChanges.some((item) => (
+                normalizeGitPath(item.repoPath) === assetTarget.nextPath &&
+                !(
+                  item.kind === 'git-asset' &&
+                  item.documentId === draft.documentId &&
+                  normalizeGitPath(item.repoPath) === assetTarget.sourcePath
+                )
+              )) ||
+              pendingStructuralChanges.some((item) => normalizeGitPath(item.repoPath) === assetTarget.nextPath)
+
+            if (assetTargetTaken) {
+              set({ error: `Target path '${assetTarget.nextPath}' already exists` })
+              throw new Error(`Target path '${assetTarget.nextPath}' already exists`)
+            }
+          }
 
           set((state) => {
             const nextDrafts = { ...state.drafts }
             delete nextDrafts[draft.documentId]
-            nextDrafts[nextDocumentId] = {
-              ...draft,
-              documentId: nextDocumentId,
-              path: nextPath,
-              name: getGitFileName(nextPath),
-            }
-            return {
-              drafts: nextDrafts,
-              stagedChanges: state.stagedChanges.map((item) =>
-                item.kind === 'git-draft' && item.documentId === draft.documentId
+            nextDrafts[nextDocumentId] = nextDraft
+            const renamedStagedChanges = state.stagedChanges
+              .filter((item) => item.documentId === draft.documentId)
+              .map((item) => (
+                item.kind === 'git-draft'
                   ? {
                       ...item,
                       id: `git-draft:${nextDocumentId}`,
                       documentId: nextDocumentId,
-                      repoPath: nextPath,
-                      label: getGitFileName(nextPath),
-                      updatedAt: Date.now(),
+                      repoPath: nextDraft.path,
+                      label: nextDraft.name,
+                      renamedFromPath: nextDraft.renamedFromPath,
+                      renamedFromSha: nextDraft.renamedFromSha,
+                      updatedAt: renameTimestamp,
+                    }
+                  : item.kind === 'git-asset'
+                    ? {
+                        ...item,
+                        id: `git-asset:${nextDocumentId}:${rebaseDocumentAssetPathForFileRename(normalizedOld, nextPath, item.repoPath)}`,
+                        documentId: nextDocumentId,
+                        repoPath: rebaseDocumentAssetPathForFileRename(normalizedOld, nextPath, item.repoPath),
+                        updatedAt: renameTimestamp,
+                      }
+                  : {
+                      ...item,
+                      documentId: nextDocumentId,
+                      updatedAt: renameTimestamp,
+                    }
+              ))
+
+            const nextPendingStructuralChanges = state.pendingStructuralChanges.filter((item) => !(
+              (item.kind === 'git-delete-file' && normalizeGitPath(item.repoPath) === normalizedOld) ||
+              normalizeGitPath(item.repoPath) === nextPath
+            ))
+
+            if (!draft.isNew) {
+              nextPendingStructuralChanges.push({
+                id: `git-delete-file:${normalizedOld}`,
+                kind: 'git-delete-file',
+                label: draft.name,
+                repoPath: normalizedOld,
+                documentId: oldDocumentId,
+                originalContent: draft.originalContent,
+                originalSha: draft.sha,
+                updatedAt: renameTimestamp,
+              })
+            }
+
+            return {
+              drafts: nextDrafts,
+              stagedChanges: state.stagedChanges
+                .filter((item) => !(
+                  item.documentId === draft.documentId ||
+                  normalizeGitPath(item.repoPath) === nextPath
+                ))
+                .concat(renamedStagedChanges),
+              pendingAssetChanges: state.pendingAssetChanges.map((item) => (
+                item.kind === 'git-asset' && item.documentId === draft.documentId
+                  ? {
+                      ...item,
+                      id: `git-asset:${nextDocumentId}:${rebaseDocumentAssetPathForFileRename(normalizedOld, nextPath, item.repoPath)}`,
+                      documentId: nextDocumentId,
+                      repoPath: rebaseDocumentAssetPathForFileRename(normalizedOld, nextPath, item.repoPath),
+                      updatedAt: renameTimestamp,
                     }
                   : item
-              ),
+              )),
+              pendingStructuralChanges: nextPendingStructuralChanges,
               currentDocumentId: state.currentDocumentId === draft.documentId ? nextDocumentId : state.currentDocumentId,
             }
           })
-          await get().loadTree('')
+
+          const existingTab = useTabsStore.getState().findTabByFileId(draft.documentId)
+          if (existingTab) {
+            const updatedTabId = useTabsStore.getState().openGitFileInTab({
+              ...buildGitTabDraftState(nextDraft),
+              fileId: draft.documentId,
+              content: nextDraft.draftContent,
+              savedContent: existingTab.savedContent ?? nextDraft.draftContent,
+              isModified: nextDraft.isDirty || existingTab.isModified,
+              isNew: nextDraft.isNew,
+            })
+            useTabsStore.getState().updateTabFileId(updatedTabId, nextDocumentId)
+          }
+
+          if (get().currentDocumentId === nextDocumentId) {
+            useDocumentStore.getState().loadDocument(nextDraft.draftContent, nextDraft.name, nextDraft.documentId)
+          }
         },
 
         deleteFile: async (path) => {
@@ -2822,7 +4496,7 @@ export const useGitStore = create<GitStore>()(
       }),
       {
         name: 'git-store-v1',
-        version: 4,
+        version: 7,
         storage: createIndexedDbPersistStorage<Partial<GitStorePersistedState>>({
           dbName: 'visualmd-cache',
           storeName: 'zustand-persist',
@@ -2840,6 +4514,9 @@ export const useGitStore = create<GitStore>()(
             pendingStructuralChanges: currentWorkspaceState.pendingStructuralChanges,
             currentDocumentId: currentWorkspaceState.currentDocumentId,
             expandedPaths: currentWorkspaceState.expandedPaths,
+            remoteSnapshotEntries: currentWorkspaceState.remoteSnapshotEntries,
+            remoteSnapshotFetchedAt: currentWorkspaceState.remoteSnapshotFetchedAt,
+            remoteContentCache: currentWorkspaceState.remoteContentCache,
             workspaceStateByKey: upsertWorkspaceStateForConfig(
               state.workspaceStateByKey,
               state.config,
@@ -2850,7 +4527,7 @@ export const useGitStore = create<GitStore>()(
         onRehydrateStorage: () => (state) => {
           if (!state) return
 
-          const migratedState = migrateGitStorePersistedState(state, 4)
+          const migratedState = migrateGitStorePersistedState(state, 7)
           const normalizedConfig: GitProviderConfig = {
             ...DEFAULT_CONFIG,
             ...(migratedState.config || {}),
@@ -2865,6 +4542,10 @@ export const useGitStore = create<GitStore>()(
             pendingStructuralChanges: migratedState.pendingStructuralChanges,
             currentDocumentId: migratedState.currentDocumentId,
             expandedPaths: migratedState.expandedPaths,
+            remoteSnapshotEntries: migratedState.remoteSnapshotEntries,
+            remoteSnapshotFetchedAt: migratedState.remoteSnapshotFetchedAt,
+            baseTreeMap: migratedState.baseTreeMap,
+            remoteContentCache: migratedState.remoteContentCache,
           })
           const restoredWorkspaceState = buildGitWorkspaceKey(normalizedConfig)
             ? getWorkspaceStateForConfig(restoredWorkspaceStateByKey, normalizedConfig)
@@ -2895,6 +4576,9 @@ export const useGitStore = create<GitStore>()(
             pendingStructuralChanges: restoredWorkspaceState.pendingStructuralChanges,
             currentDocumentId: restoredWorkspaceState.currentDocumentId,
             expandedPaths: restoredWorkspaceState.expandedPaths,
+            remoteSnapshotEntries: restoredWorkspaceState.remoteSnapshotEntries,
+            remoteSnapshotFetchedAt: restoredWorkspaceState.remoteSnapshotFetchedAt,
+            remoteContentCache: restoredWorkspaceState.remoteContentCache,
           }))
 
           if (!shouldRestoreConnection) return

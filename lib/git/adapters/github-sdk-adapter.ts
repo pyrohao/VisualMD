@@ -34,7 +34,7 @@ function createOctokitClient(config: GitProviderConfig, baseUrl: string) {
     auth: config.token,
     baseUrl: getRequestBaseUrl(baseUrl),
     request: {
-      fetch: (url, options = {}) => fetch(url, {
+      fetch: (url: Parameters<typeof fetch>[0], options: Parameters<typeof fetch>[1] = {}) => fetch(url, {
         ...options,
         cache: 'no-store',
       }),
@@ -52,7 +52,7 @@ async function readGitHubContent(
     owner: config.ownerOrNamespace,
     repo: config.repo,
     ref: config.branch || undefined,
-    ...(normalizedPath ? { path: normalizedPath } : {}),
+    path: normalizedPath,
   })
   return response.data as GitHubContent | GitHubContent[]
 }
@@ -126,18 +126,30 @@ async function readGitHubBinaryContent(
   octokit: Octokit,
   config: GitProviderConfig,
   path: string
-): Promise<{ contentBase64: string; mimeType?: string }> {
+): Promise<{ path: string; name: string; sha?: string; contentBase64: string; mimeType?: string }> {
   const result = await readGitHubContent(octokit, config, path)
   if (Array.isArray(result)) {
     throw new Error('Target path is a directory')
   }
 
+  const resolvedPath = normalizeGitPath(result.path || path)
+  const resolvedName = result.name || getGitFileName(result.path || path)
+
   if (result.content && result.encoding === 'base64') {
-    return { contentBase64: result.content.replace(/\n/g, '') }
+    return {
+      path: resolvedPath,
+      name: resolvedName,
+      sha: result.sha,
+      contentBase64: result.content.replace(/\n/g, ''),
+    }
   }
 
   if (!result.sha) {
-    return { contentBase64: '' }
+    return {
+      path: resolvedPath,
+      name: resolvedName,
+      contentBase64: '',
+    }
   }
 
   const blob = await octokit.rest.git.getBlob({
@@ -147,10 +159,20 @@ async function readGitHubBinaryContent(
   })
   const blobContent = typeof blob.data.content === 'string' ? blob.data.content.replace(/\n/g, '') : ''
   if (blob.data.encoding === 'base64') {
-    return { contentBase64: blobContent }
+    return {
+      path: resolvedPath,
+      name: resolvedName,
+      sha: result.sha,
+      contentBase64: blobContent,
+    }
   }
 
-  return { contentBase64: blobContent ? encodeBase64(blobContent) : '' }
+  return {
+    path: resolvedPath,
+    name: resolvedName,
+    sha: result.sha,
+    contentBase64: blobContent ? encodeBase64(blobContent) : '',
+  }
 }
 
 async function createOrUpdateGitHubFile(

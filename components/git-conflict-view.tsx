@@ -38,6 +38,9 @@ export function GitConflictView({
   const baseContent = snapshot.baseContent || ''
   const localContent = snapshot.localContent || ''
   const remoteContent = snapshot.remoteContent || ''
+  const conflictKind = snapshot.kind || 'content'
+  const isPathConflict = conflictKind === 'path'
+  const isDeleteLikeConflict = conflictKind === 'modify-delete' || conflictKind === 'rename'
   const mergeResult = useMemo(
     () => mergeGitText(baseContent, localContent, remoteContent),
     [baseContent, localContent, remoteContent]
@@ -96,8 +99,25 @@ export function GitConflictView({
     })
   }, [getPaneRef])
 
-  const hasRemoteVersion = remoteContent.length > 0 || draft.remoteSha !== undefined
+  const hasRemoteVersion = !isPathConflict && (remoteContent.length > 0 || draft.remoteSha !== undefined)
   const mergedConflictCount = mergeResult.conflictBlocks.length
+  const requiresManualReview =
+    isPathConflict ||
+    isDeleteLikeConflict ||
+    mergeResult.hasConflicts
+  const conflictHint = isPathConflict
+    ? `${t('git.mergePathConflictHint')}${snapshot.pathHint ? ` (${snapshot.pathHint})` : ''}`
+    : isDeleteLikeConflict
+      ? t('git.mergeModifyDeleteHint')
+      : mergeResult.hasConflicts
+        ? t('git.mergeConflictHint')
+        : t('git.mergeAutoResolvedHint')
+  const conflictPathRows = [
+    { label: t('git.conflictCurrentPath'), value: draft.path },
+    isPathConflict && snapshot.pathHint
+      ? { label: t('git.conflictRemoteTarget'), value: snapshot.pathHint }
+      : null,
+  ].filter((row): row is { label: string; value: string } => !!row && !!row.value)
 
   const paneClassName =
     'h-full min-h-0 w-full resize-none rounded-none border-0 bg-transparent px-4 py-4 font-mono text-[13px] leading-6 shadow-none focus-visible:ring-0'
@@ -173,11 +193,11 @@ export function GitConflictView({
             <span
               className="rounded-full px-2 py-0.5 text-xs"
               style={{
-                color: mergeResult.hasConflicts ? themeConfig.danger : themeConfig.success,
-                backgroundColor: `${mergeResult.hasConflicts ? themeConfig.danger : themeConfig.success}15`,
+                color: requiresManualReview ? themeConfig.danger : themeConfig.success,
+                backgroundColor: `${requiresManualReview ? themeConfig.danger : themeConfig.success}15`,
               }}
             >
-              {mergeResult.hasConflicts ? t('git.mergeNeedsReview') : t('git.mergeAutoResolved')}
+              {requiresManualReview ? t('git.mergeNeedsReview') : t('git.mergeAutoResolved')}
             </span>
           </div>
           <div className="mt-1 truncate text-sm" style={{ color: themeConfig.text }}>
@@ -186,10 +206,26 @@ export function GitConflictView({
           <div className="mt-1 text-xs" style={{ color: themeConfig.muted }}>
             {pendingConflictCount > 1
               ? `${pendingConflictCount} ${t('git.mergeNeedsReview')}`
-              : mergeResult.hasConflicts
-              ? t('git.mergeConflictHint')
-              : t('git.mergeAutoResolvedHint')}
+              : conflictHint}
           </div>
+          {conflictPathRows.length > 0 ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {conflictPathRows.map((row) => (
+                <div
+                  key={`${row.label}:${row.value}`}
+                  className="flex items-center gap-2 rounded-md border px-2.5 py-1 text-[11px]"
+                  style={{
+                    borderColor: themeConfig.border,
+                    backgroundColor: themeConfig.background,
+                    color: themeConfig.text,
+                  }}
+                >
+                  <span style={{ color: themeConfig.muted }}>{row.label}</span>
+                  <span className="font-mono">{row.value}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
@@ -243,10 +279,10 @@ export function GitConflictView({
         <div className="flex items-center gap-2">
           <AlertTriangle
             className="h-3.5 w-3.5"
-            style={{ color: mergeResult.hasConflicts ? themeConfig.danger : themeConfig.success }}
+            style={{ color: requiresManualReview ? themeConfig.danger : themeConfig.success }}
           />
           <span>
-            {mergeResult.hasConflicts ? t('git.mergeStrategyConflict') : t('git.mergeStrategyClean')}
+            {requiresManualReview ? t('git.mergeStrategyConflict') : t('git.mergeStrategyClean')}
           </span>
         </div>
       </div>

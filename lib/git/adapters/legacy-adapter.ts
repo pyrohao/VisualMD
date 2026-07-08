@@ -71,13 +71,16 @@ async function githubLikeListTree(config: GitProviderConfig, baseUrl: string, pa
   const url = `${baseUrl}/repos/${encodeURIComponent(config.ownerOrNamespace)}/${encodeURIComponent(config.repo)}/contents${pathSuffix}?ref=${encodeURIComponent(config.branch)}`
   const result = await safeJson<any>(await gitFetch(url, { headers }))
   const items = Array.isArray(result) ? result : [result]
-  return items.map((item) => ({
-    path: item.path,
-    name: item.name,
-    type: item.type === 'dir' ? 'dir' : 'file',
-    sha: item.sha,
-    size: item.size,
-  }))
+  return items.map((item) => {
+    const itemPath = normalizeGitPath(item.path || '')
+    return {
+      path: itemPath,
+      name: item.name || getGitFileName(itemPath),
+      type: item.type === 'dir' ? 'dir' : 'file',
+      sha: item.sha,
+      size: item.size,
+    }
+  })
 }
 
 async function githubLikeGetFile(config: GitProviderConfig, baseUrl: string, path: string): Promise<Pick<GitFileRef, 'path' | 'name' | 'sha' | 'content'>> {
@@ -85,9 +88,10 @@ async function githubLikeGetFile(config: GitProviderConfig, baseUrl: string, pat
   const normalizedPath = normalizeGitPath(path)
   const url = `${baseUrl}/repos/${encodeURIComponent(config.ownerOrNamespace)}/${encodeURIComponent(config.repo)}/contents/${normalizedPath}?ref=${encodeURIComponent(config.branch)}`
   const result = await safeJson<any>(await gitFetch(url, { headers }))
+  const resultPath = normalizeGitPath(result.path || normalizedPath)
   return {
-    path: result.path,
-    name: result.name,
+    path: resultPath,
+    name: result.name || getGitFileName(resultPath),
     sha: result.sha,
     content: decodeBase64((result.content || '').replace(/\n/g, '')),
   }
@@ -98,7 +102,11 @@ async function githubLikeGetBinaryFile(config: GitProviderConfig, baseUrl: strin
   const normalizedPath = normalizeGitPath(path)
   const url = `${baseUrl}/repos/${encodeURIComponent(config.ownerOrNamespace)}/${encodeURIComponent(config.repo)}/contents/${normalizedPath}?ref=${encodeURIComponent(config.branch)}`
   const result = await safeJson<any>(await gitFetch(url, { headers }))
+  const resultPath = normalizeGitPath(result.path || normalizedPath)
   return {
+    path: resultPath,
+    name: result.name || getGitFileName(resultPath),
+    sha: result.sha,
     contentBase64: String(result.content || '').replace(/\n/g, ''),
     mimeType: result.type === 'file' ? undefined : undefined,
   }
@@ -298,12 +306,15 @@ async function gitlabListTree(config: GitProviderConfig, baseUrl: string, path =
   if (normalizedPath) query.set('path', normalizedPath)
   const url = `${baseUrl}/projects/${getEncodedProject(config)}/repository/tree?${query.toString()}`
   const items = await safeJson<any[]>(await gitFetch(url, { headers }))
-  return items.map((item) => ({
-    path: item.path,
-    name: item.name,
-    type: item.type === 'tree' ? 'dir' : 'file',
-    sha: item.id,
-  }))
+  return items.map((item) => {
+    const itemPath = normalizeGitPath(item.path || '')
+    return {
+      path: itemPath,
+      name: item.name || getGitFileName(itemPath),
+      type: item.type === 'tree' ? 'dir' : 'file',
+      sha: item.id,
+    }
+  })
 }
 
 async function gitlabGetFile(config: GitProviderConfig, baseUrl: string, path: string): Promise<Pick<GitFileRef, 'path' | 'name' | 'sha' | 'content'>> {
@@ -311,9 +322,10 @@ async function gitlabGetFile(config: GitProviderConfig, baseUrl: string, path: s
   const normalizedPath = normalizeGitPath(path)
   const url = `${baseUrl}/projects/${getEncodedProject(config)}/repository/files/${encodeURIComponent(normalizedPath)}?ref=${encodeURIComponent(config.branch)}`
   const result = await safeJson<any>(await gitFetch(url, { headers }))
+  const resultPath = normalizeGitPath(result.file_path || normalizedPath)
   return {
-    path: result.file_path,
-    name: getGitFileName(result.file_path),
+    path: resultPath,
+    name: getGitFileName(resultPath),
     sha: result.last_commit_id,
     content: decodeBase64(result.content),
   }
@@ -324,7 +336,11 @@ async function gitlabGetBinaryFile(config: GitProviderConfig, baseUrl: string, p
   const normalizedPath = normalizeGitPath(path)
   const url = `${baseUrl}/projects/${getEncodedProject(config)}/repository/files/${encodeURIComponent(normalizedPath)}?ref=${encodeURIComponent(config.branch)}`
   const result = await safeJson<any>(await gitFetch(url, { headers }))
+  const resultPath = normalizeGitPath(result.file_path || normalizedPath)
   return {
+    path: resultPath,
+    name: getGitFileName(resultPath),
+    sha: result.last_commit_id,
     contentBase64: String(result.content || ''),
     mimeType: undefined,
   }

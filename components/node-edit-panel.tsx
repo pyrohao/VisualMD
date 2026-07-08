@@ -72,6 +72,7 @@ export function NodeEditPanel() {
   const [title, setTitle] = useState('')
   const [content, setContent] = useState('')
   const [draftSourceSignature, setDraftSourceSignature] = useState<string | null>(null)
+  const [loadedDraftNodeId, setLoadedDraftNodeId] = useState<string | null>(null)
 
   // ========== Refs ==========
   const virtualRootEditorRef = useRef<VirtualRootEditorRef>(null)
@@ -123,6 +124,7 @@ export function NodeEditPanel() {
         setTitle(selectedNode.title)
         setContent(selectedNode.content || '')
         setDraftSourceSignature(selectedNodeDraftSignature)
+        setLoadedDraftNodeId(selectedNode.id)
       }
       return
     }
@@ -131,12 +133,26 @@ export function NodeEditPanel() {
     setTitle('')
     setContent('')
     setDraftSourceSignature(null)
+    setLoadedDraftNodeId(null)
   }, [selectedNode?.id, selectedNodeDraftSignature, selectedNode])
+
+  useEffect(() => {
+    if (!selectedNode || isVirtualRoot) {
+      return
+    }
+
+    if (draftSourceSignature === null && selectedNodeDraftSignature !== null) {
+      setDraftSourceSignature(selectedNodeDraftSignature)
+      setLoadedDraftNodeId(selectedNode.id)
+    }
+  }, [draftSourceSignature, isVirtualRoot, selectedNode, selectedNodeDraftSignature])
 
   const hasPendingNodeChanges = Boolean(
     selectedNode &&
+      loadedDraftNodeId === selectedNode.id &&
       !isVirtualRoot &&
       draftSourceSignature !== null &&
+      localDraftSignature !== null &&
       localDraftSignature !== draftSourceSignature
   )
 
@@ -478,15 +494,15 @@ export function NodeEditPanel() {
     }
   }, [title, content, selectedNodeId, hasPendingNodeChanges, doAutoSave])
 
-  // ========== 组件卸载时保存 ==========
-    useEffect(() => {
-      return () => {
-        if (autoSaveTimeoutRef.current) {
-          clearTimeout(autoSaveTimeoutRef.current)
-        }
-        doSaveAndReparse()
+  // ========== 组件卸载时清理 ==========
+  useEffect(() => {
+    return () => {
+      if (autoSaveTimeoutRef.current) {
+        clearTimeout(autoSaveTimeoutRef.current)
+        autoSaveTimeoutRef.current = null
       }
-    }, [doSaveAndReparse])
+    }
+  }, [])
 
   // ========== 事件处理 ==========
   const handleSave = useCallback(() => {

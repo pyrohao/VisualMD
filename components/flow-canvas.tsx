@@ -322,7 +322,11 @@ export function FlowCanvas() {
   const { mode: layoutMode } = useCanvasLayoutStore()
   const hideVirtualRoot = document ? shouldHideVirtualRoot(document.root) : false
   const nodeCallbacks = useMemo(
-    () => createNodeCallbacks(updateNode, toggleNode, selectNode),
+    () =>
+      createNodeCallbacks(updateNode, toggleNode, (nodeId) => {
+        selectNode(nodeId)
+        setSelectedEdgeId(null)
+      }),
     [selectNode, toggleNode, updateNode]
   )
 
@@ -1003,13 +1007,6 @@ export function FlowCanvas() {
     setContextMenuEdge(null)
   }, [selectNode])
 
-  // 处理节点点击
-
-  const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
-    selectNode(node.id)
-    setSelectedEdgeId(null)
-  }, [selectNode])
-
   useEffect(() => {
     const timer = setTimeout(() => {
       fitView({ padding: 0.2, duration: 600 })
@@ -1062,10 +1059,8 @@ export function FlowCanvas() {
         onConnectEnd={onConnectEnd}
         onEdgeClick={onEdgeClick}
         onEdgeContextMenu={onEdgeContextMenu}
-        onNodeClick={onNodeClick}
         onPaneClick={onPaneClick}
         nodeTypes={nodeTypes}
-        fitView
         fitViewOptions={{
           padding: 0.2,
           minZoom: 0.1,

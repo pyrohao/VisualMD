@@ -7,22 +7,22 @@ import {
 } from '@/lib/git/sync'
 
 describe('git sync comparison helpers', () => {
-  it('normalizes whitespace and newlines for comparison', () => {
-    expect(normalizeGitComparableContent('a \n\t b  c')).toBe('abc')
+  it('preserves original content for strict snapshot comparison', () => {
+    expect(normalizeGitComparableContent('a \n\t b  c')).toBe('a \n\t b  c')
   })
 
-  it('treats whitespace-only local changes as clean', () => {
-    expect(hasMeaningfulLocalGitChange('# Title\n\nHello world', '# Title \n Hello   world')).toBe(false)
+  it('treats whitespace-only local changes as modified', () => {
+    expect(hasMeaningfulLocalGitChange('# Title\n\nHello world', '# Title \n Hello   world')).toBe(true)
   })
 
   it('detects meaningful local text changes', () => {
     expect(hasMeaningfulLocalGitChange('# Title\n\nHello world', '# Title\n\nHello VisualMD')).toBe(true)
   })
 
-  it('treats whitespace-only remote changes as unchanged even when sha differs', () => {
+  it('treats whitespace-only remote changes as changed when sha differs', () => {
     expect(
       hasMeaningfulRemoteGitChange('# Title \n Hello   world', '# Title\n\nHello world', 'remote-sha', 'base-sha')
-    ).toBe(false)
+    ).toBe(true)
   })
 
   it('uses matching sha as a fast path for remote equality', () => {

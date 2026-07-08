@@ -542,9 +542,6 @@ export const useFileSystemStore = create<FileSystemStore>()(
             files: newFiles,
             currentFileId: currentFileId === id ? null : currentFileId,
           })
-          useGitStore.setState((state) => ({
-            stagedChanges: state.stagedChanges.filter((item) => !(item.kind === 'local-file' && item.localFileId === id)),
-          }))
         },
         
         moveFileToFolder: (fileId: string, folderId: string | null) => {

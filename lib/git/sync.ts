@@ -1,5 +1,5 @@
 export function normalizeGitComparableContent(content: string) {
-  return content.replace(/\s+/g, '')
+  return content
 }
 
 export function hasMeaningfulGitContentChange(left: string, right: string) {

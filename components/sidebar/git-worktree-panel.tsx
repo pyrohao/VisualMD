@@ -28,7 +28,8 @@ import { useDocumentStore } from '@/stores/documentStore'
 import { useTabsStore } from '@/stores/tabsStore'
 import { inferGitFileKind, inferGitFileMimeType, isGitBinaryFileKind } from '@/lib/git/file-kind'
 import { buildGitTabDraftState } from '@/lib/git/tab-state'
-import { buildGitWorktreeView, type GitWorktreeStatus } from '@/lib/git/worktree'
+import { getGitWorktreeStatusBadge, getGitWorktreeStatusTitle } from '@/lib/git/worktree-status-display'
+import { buildGitWorktreeView, hasGitRemoteSnapshotPath, type GitWorktreeStatus } from '@/lib/git/worktree'
 import { buildGitDocumentId, getGitFileName, joinGitPath, normalizeGitPath } from '@/lib/git/utils'
 import { createDefaultMarkdownDocumentContent, ensureMarkdownExtension, generateUniqueItemName } from '@/lib/workspace-item-utils'
 import { PromptDialog } from '@/components/ui/prompt-dialog'
@@ -70,27 +71,99 @@ function renderGitFileIcon(itemPath: string, themeConfig: typeof themeConfigs.li
 }
 
 function getStatusColor(status: GitWorktreeStatus | undefined, themeConfig: typeof themeConfigs.light) {
-  if (status === 'untracked') return themeConfig.primary
-  if (status === 'added') return themeConfig.primary
-  if (status === 'modified') return themeConfig.text
-  if (status === 'deleted') return themeConfig.danger
+  if (status?.worktree === 'deleted' || status?.index === 'deleted') return themeConfig.danger
+  if (status?.worktree === 'untracked' || status?.index === 'added') return themeConfig.primary
+  if (status?.worktree === 'modified' || status?.index === 'modified') return themeConfig.text
   return themeConfig.text
 }
 
 function getStatusBadge(status: GitWorktreeStatus | undefined) {
-  if (status === 'untracked') return 'U'
-  if (status === 'added') return 'A'
-  if (status === 'modified') return 'M'
-  if (status === 'deleted') return 'D'
-  return null
+  return getGitWorktreeStatusBadge(status)
 }
 
-function hasRemoteTreeEntry(treeByPath: Record<string, GitTreeItem[]>, targetPath: string) {
-  const normalizedTargetPath = normalizeGitPath(targetPath)
+function hasLocalOverlayStatus(status: GitWorktreeStatus | undefined) {
+  return Boolean(status?.index || status?.worktree)
+}
 
-  return Object.values(treeByPath).some((items) => (
-    items.some((item) => normalizeGitPath(item.path) === normalizedTargetPath)
-  ))
+function hasEditableDraftStatus(status: GitWorktreeStatus | undefined) {
+  return Boolean(
+    status?.worktree === 'untracked' ||
+    status?.worktree === 'modified' ||
+    status?.index === 'added' ||
+    status?.index === 'modified'
+  )
+}
+
+function isDeletedStatus(status: GitWorktreeStatus | undefined) {
+  return status?.index === 'deleted' || status?.worktree === 'deleted'
+}
+
+function isModifiedStatus(status: GitWorktreeStatus | undefined) {
+  return status?.worktree === 'modified' || status?.index === 'modified'
+}
+
+function isUntrackedStatus(status: GitWorktreeStatus | undefined) {
+  return status?.worktree === 'untracked'
+}
+
+function isAddedStatus(status: GitWorktreeStatus | undefined) {
+  return status?.index === 'added'
+}
+
+function getStatusTitle(status: GitWorktreeStatus | undefined) {
+  return getGitWorktreeStatusTitle(status)
+}
+
+function getStatusTextDecoration(status: GitWorktreeStatus | undefined) {
+  return isDeletedStatus(status) ? 'line-through' : 'none'
+}
+
+function getStatusFontStyle(status: GitWorktreeStatus | undefined) {
+  return isDeletedStatus(status) ? 'italic' : 'normal'
+}
+
+function isStagedDirectoryOnly(status: GitWorktreeStatus | undefined) {
+  return status?.index === 'added' && !status?.worktree
+}
+
+function isRemoteMissingLocalPath(status: GitWorktreeStatus | undefined) {
+  return status?.index === 'added' || status?.worktree === 'untracked'
+}
+
+function shouldAutoExpandLocalDirectory(status: GitWorktreeStatus | undefined) {
+  return isStagedDirectoryOnly(status) || isUntrackedStatus(status)
+}
+
+function isLocalDraftPreferred(status: GitWorktreeStatus | undefined) {
+  return hasEditableDraftStatus(status)
+}
+
+function shouldUseLocalWhenRemoteMissing(status: GitWorktreeStatus | undefined) {
+  return isRemoteMissingLocalPath(status)
+}
+
+function shouldColorAsModified(status: GitWorktreeStatus | undefined) {
+  return isModifiedStatus(status)
+}
+
+function shouldColorAsAdded(status: GitWorktreeStatus | undefined) {
+  return isAddedStatus(status) || isUntrackedStatus(status)
+}
+
+function hasAnyDisplayedStatus(status: GitWorktreeStatus | undefined) {
+  return hasLocalOverlayStatus(status)
+}
+
+function getStatusLabel(status: GitWorktreeStatus | undefined) {
+  const badge = getStatusBadge(status)
+  return badge
+}
+
+function getNodeColor(status: GitWorktreeStatus | undefined, themeConfig: typeof themeConfigs.light) {
+  if (shouldColorAsAdded(status)) return themeConfig.primary
+  if (shouldColorAsModified(status)) return themeConfig.text
+  if (isDeletedStatus(status)) return themeConfig.danger
+  return null
 }
 
 function GitWorktreeNode({
@@ -136,8 +209,8 @@ function GitWorktreeNode({
         const isExpanded = expandedPaths.includes(normalizedPath)
         const isActive = currentPath === normalizedPath
         const status = statusByPath[normalizedPath]
-        const statusBadge = getStatusBadge(status)
-        const itemColor = getStatusColor(status, themeConfig)
+        const statusBadge = getStatusLabel(status)
+        const itemColor = getNodeColor(status, themeConfig) || getStatusColor(status, themeConfig)
 
         return (
           <div key={normalizedPath} className="space-y-1">
@@ -174,8 +247,8 @@ function GitWorktreeNode({
                   className="min-w-0 truncate text-sm"
                   style={{
                     color: itemColor,
-                    textDecoration: status === 'deleted' ? 'line-through' : 'none',
-                    fontStyle: status === 'deleted' ? 'italic' : 'normal',
+                    textDecoration: getStatusTextDecoration(status),
+                    fontStyle: getStatusFontStyle(status),
                   }}
                 >
                   {item.name}
@@ -183,10 +256,13 @@ function GitWorktreeNode({
               </button>
 
               <div className="ml-auto flex shrink-0 items-center justify-end gap-2">
-                {statusBadge ? (
+                {hasAnyDisplayedStatus(status) && statusBadge ? (
                   <span
-                    className="w-4 shrink-0 text-right text-xs font-medium leading-none"
+                    className="w-6 shrink-0 whitespace-pre text-right font-mono text-[11px] font-medium leading-none"
                     style={{ color: itemColor }}
+                    title={getStatusTitle(status) || undefined}
+                    aria-label={getStatusTitle(status) || undefined}
+                    aria-live="polite"
                   >
                     {statusBadge}
                   </span>
@@ -297,6 +373,7 @@ export function GitWorktreePanel() {
   const {
     config,
     treeByPath,
+    remoteSnapshotEntries,
     expandedPaths,
     drafts,
     stagedChanges,
@@ -306,6 +383,8 @@ export function GitWorktreePanel() {
     connected,
     isConnecting,
     isLoadingTree,
+    error,
+    clearError,
     openFile,
     refreshRepositoryFromRemote,
     toggleExpandedPath,
@@ -322,15 +401,27 @@ export function GitWorktreePanel() {
   const currentPath = currentDraft?.path || activeTab?.gitMeta?.path || null
   const worktreeView = useMemo(() => buildGitWorktreeView({
     treeByPath,
+    remoteSnapshotEntries,
     drafts,
     pendingAssetChanges,
     pendingStructuralChanges,
     stagedChanges,
-  }), [drafts, pendingAssetChanges, pendingStructuralChanges, stagedChanges, treeByPath])
+  }), [drafts, pendingAssetChanges, pendingStructuralChanges, remoteSnapshotEntries, stagedChanges, treeByPath])
 
   useEffect(() => {
     setMounted(true)
   }, [])
+
+  useEffect(() => {
+    if (!error) return
+
+    toast({
+      title: t('common.error'),
+      description: error,
+      variant: 'destructive',
+    })
+    clearError()
+  }, [clearError, error, t])
 
   const openDraftInTab = (documentId: string, content?: string) => {
     const draft = useGitStore.getState().drafts[documentId]
@@ -355,7 +446,7 @@ export function GitWorktreePanel() {
         normalizeGitPath(draft.path) === normalizedPath
       ))
       const worktreeStatus = worktreeView.statusByPath[normalizedPath]
-      const existsRemotely = hasRemoteTreeEntry(treeByPath, normalizedPath)
+      const existsRemotely = hasGitRemoteSnapshotPath(remoteSnapshotEntries, normalizedPath, 'file')
 
       if (isGitBinaryFileKind(fileKind)) {
         openGitFileInTab({
@@ -383,15 +474,13 @@ export function GitWorktreePanel() {
       if (localDraft && (
         localDraft.isNew ||
         localDraft.isDirty ||
-        worktreeStatus === 'untracked' ||
-        worktreeStatus === 'added' ||
-        worktreeStatus === 'modified'
+        isLocalDraftPreferred(worktreeStatus)
       )) {
         openDraftInTab(localDraft.documentId)
         return
       }
 
-      if (!existsRemotely && (worktreeStatus === 'untracked' || worktreeStatus === 'added')) {
+      if (!existsRemotely && shouldUseLocalWhenRemoteMissing(worktreeStatus)) {
         if (localDraft) {
           openDraftInTab(localDraft.documentId)
           return
@@ -411,8 +500,12 @@ export function GitWorktreePanel() {
   }
 
   const handleRefreshTree = async () => {
-    await refreshRepositoryFromRemote()
-    toast({ title: t('git.refreshTree') })
+    try {
+      await refreshRepositoryFromRemote()
+      toast({ title: t('git.refreshTree') })
+    } catch {
+      // handled by store error state + toast effect
+    }
   }
 
   const handleTogglePath = async (path: string) => {
@@ -426,11 +519,11 @@ export function GitWorktreePanel() {
       return
     }
 
-    const hasRemoteTreeNode = Object.prototype.hasOwnProperty.call(treeByPath, normalizedPath)
+    const hasRemoteTreeNode = hasGitRemoteSnapshotPath(remoteSnapshotEntries, normalizedPath, 'dir')
     const hasWorktreeNode = Object.prototype.hasOwnProperty.call(worktreeView.treeByPath, normalizedPath)
     const worktreeStatus = worktreeView.statusByPath[normalizedPath]
 
-    if (!hasRemoteTreeNode && hasWorktreeNode && worktreeStatus === 'added') {
+    if (!hasRemoteTreeNode && hasWorktreeNode && shouldAutoExpandLocalDirectory(worktreeStatus)) {
       useGitStore.setState((state) => ({
         expandedPaths: [...state.expandedPaths, normalizedPath],
       }))

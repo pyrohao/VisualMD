@@ -1,11 +1,31 @@
-import type { GitDraftFile, GitTreeItem, StagedGitChange } from '@/lib/git/types'
+import type { GitDraftFile, GitRemoteSnapshotEntry, GitTreeItem, StagedGitChange } from '@/lib/git/types'
 import { getGitFileName, joinGitPath, normalizeGitPath } from '@/lib/git/utils'
 
-export type GitWorktreeStatus = 'clean' | 'untracked' | 'added' | 'modified' | 'deleted'
+export type GitIndexStatus = 'added' | 'modified' | 'deleted'
+export type GitWorkingTreeStatus = 'untracked' | 'modified' | 'deleted'
+
+export type GitWorktreeStatus = {
+  index?: GitIndexStatus
+  worktree?: GitWorkingTreeStatus
+}
 
 export type GitWorktreeView = {
   treeByPath: Record<string, GitTreeItem[]>
   statusByPath: Record<string, GitWorktreeStatus>
+}
+
+export function hasGitRemoteSnapshotPath(
+  remoteSnapshotEntries: Record<string, GitRemoteSnapshotEntry>,
+  targetPath: string,
+  expectedType?: GitTreeItem['type']
+) {
+  const normalizedPath = normalizeGitPath(targetPath)
+  const entry = remoteSnapshotEntries[normalizedPath]
+  if (!entry) {
+    return false
+  }
+
+  return expectedType ? entry.type === expectedType : true
 }
 
 function getParentPath(path: string) {
@@ -123,17 +143,31 @@ function removeTreeEntry(treeByPath: Record<string, GitTreeItem[]>, targetPath: 
   }
 }
 
-function applyStatus(statusByPath: Record<string, GitWorktreeStatus>, targetPath: string, status: GitWorktreeStatus) {
+function applyIndexStatus(statusByPath: Record<string, GitWorktreeStatus>, targetPath: string, status: GitIndexStatus) {
   const normalizedPath = normalizeGitPath(targetPath)
-  statusByPath[normalizedPath] = status
+  statusByPath[normalizedPath] = {
+    ...statusByPath[normalizedPath],
+    index: status,
+  }
+}
+
+function applyWorktreeStatus(statusByPath: Record<string, GitWorktreeStatus>, targetPath: string, status: GitWorkingTreeStatus) {
+  const normalizedPath = normalizeGitPath(targetPath)
+  statusByPath[normalizedPath] = {
+    ...statusByPath[normalizedPath],
+    worktree: status,
+  }
 }
 
 function markAncestorDirectories(statusByPath: Record<string, GitWorktreeStatus>, targetPath: string) {
+  const sourceStatus = statusByPath[normalizeGitPath(targetPath)]
   let currentPath = getParentPath(targetPath)
 
   while (currentPath) {
-    if (!statusByPath[currentPath] || statusByPath[currentPath] === 'clean') {
-      statusByPath[currentPath] = 'modified'
+    const currentStatus = statusByPath[currentPath] || {}
+    statusByPath[currentPath] = {
+      index: sourceStatus?.index ? (currentStatus.index || 'modified') : currentStatus.index,
+      worktree: sourceStatus?.worktree ? (currentStatus.worktree || 'modified') : currentStatus.worktree,
     }
     currentPath = getParentPath(currentPath)
   }
@@ -141,6 +175,7 @@ function markAncestorDirectories(statusByPath: Record<string, GitWorktreeStatus>
 
 type WorktreeOverlayState = {
   treeByPath: Record<string, GitTreeItem[]>
+  remoteSnapshotEntries: Record<string, GitRemoteSnapshotEntry>
   drafts: Record<string, GitDraftFile>
   pendingAssetChanges: StagedGitChange[]
   pendingStructuralChanges: StagedGitChange[]
@@ -164,6 +199,11 @@ export function buildGitWorktreeView(state: WorktreeOverlayState): GitWorktreeVi
       .filter((item) => item.kind === 'git-draft' && item.documentId)
       .map((item) => item.documentId as string)
   )
+  const stagedDraftByDocumentId = new Map(
+    state.stagedChanges
+      .filter((item) => item.kind === 'git-draft' && item.documentId)
+      .map((item) => [item.documentId as string, item] as const)
+  )
   const stagedAssetPaths = new Set(
     state.stagedChanges
       .filter((item) => item.kind === 'git-asset')
@@ -177,20 +217,44 @@ export function buildGitWorktreeView(state: WorktreeOverlayState): GitWorktreeVi
 
   Object.values(state.drafts).forEach((draft) => {
     const normalizedPath = normalizeGitPath(draft.path)
+    const stagedDraft = stagedDraftByDocumentId.get(draft.documentId)
     if (draft.isNew) {
       upsertTreeEntry(nextTreeByPath, normalizedPath, 'file')
-      applyStatus(statusByPath, normalizedPath, stagedDraftDocumentIds.has(draft.documentId) ? 'added' : 'untracked')
+      if (stagedDraftDocumentIds.has(draft.documentId)) {
+        applyIndexStatus(statusByPath, normalizedPath, 'added')
+        if ((stagedDraft?.content ?? '') !== draft.draftContent) {
+          applyWorktreeStatus(statusByPath, normalizedPath, 'modified')
+        }
+      } else {
+        applyWorktreeStatus(statusByPath, normalizedPath, 'untracked')
+      }
+      return
+    }
+
+    if (stagedDraft) {
+      if ((stagedDraft.content ?? '') !== draft.draftContent) {
+        applyWorktreeStatus(statusByPath, normalizedPath, 'modified')
+      }
       return
     }
 
     if (draft.isDirty) {
-      applyStatus(statusByPath, normalizedPath, 'modified')
+      applyWorktreeStatus(statusByPath, normalizedPath, 'modified')
     }
   })
 
   ;[...state.pendingAssetChanges, ...state.stagedChanges.filter((item) => item.kind === 'git-asset')].forEach((change) => {
-    upsertTreeEntry(nextTreeByPath, change.repoPath, 'file')
-    applyStatus(statusByPath, change.repoPath, stagedAssetPaths.has(normalizeGitPath(change.repoPath)) ? 'added' : 'untracked')
+    const normalizedPath = normalizeGitPath(change.repoPath)
+    const existsRemotely = hasGitRemoteSnapshotPath(state.remoteSnapshotEntries, normalizedPath, 'file')
+    upsertTreeEntry(nextTreeByPath, normalizedPath, 'file')
+    if (stagedAssetPaths.has(normalizedPath)) {
+      if (!existsRemotely) {
+        applyIndexStatus(statusByPath, normalizedPath, 'added')
+      }
+      return
+    }
+
+    applyWorktreeStatus(statusByPath, normalizedPath, existsRemotely ? 'modified' : 'untracked')
   })
 
   ;[...state.pendingStructuralChanges, ...state.stagedChanges.filter((item) => (
@@ -198,19 +262,28 @@ export function buildGitWorktreeView(state: WorktreeOverlayState): GitWorktreeVi
   ))].forEach((change) => {
     if (change.kind === 'git-create-folder') {
       upsertTreeEntry(nextTreeByPath, change.repoPath, 'dir')
-      applyStatus(statusByPath, change.repoPath, stagedCreatedFolderPaths.has(normalizeGitPath(change.repoPath)) ? 'added' : 'untracked')
+      if (stagedCreatedFolderPaths.has(normalizeGitPath(change.repoPath))) {
+        applyIndexStatus(statusByPath, change.repoPath, 'added')
+        return
+      }
+
+      applyWorktreeStatus(statusByPath, change.repoPath, 'untracked')
       return
     }
 
     if (change.kind === 'git-delete-file') {
       removeTreeEntry(nextTreeByPath, change.repoPath, 'file')
-      applyStatus(statusByPath, change.repoPath, 'deleted')
+      if (!state.stagedChanges.some((item) => item.id === change.id)) {
+        applyWorktreeStatus(statusByPath, change.repoPath, 'deleted')
+      }
       return
     }
 
     if (change.kind === 'git-delete-folder') {
       removeTreeEntry(nextTreeByPath, change.repoPath, 'dir')
-      applyStatus(statusByPath, change.repoPath, 'deleted')
+      if (!state.stagedChanges.some((item) => item.id === change.id)) {
+        applyWorktreeStatus(statusByPath, change.repoPath, 'deleted')
+      }
     }
   })
 

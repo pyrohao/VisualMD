@@ -68,6 +68,77 @@ describe('migrateGitStorePersistedState', () => {
     expect(migrated.expandedPaths).toEqual(['docs'])
   })
 
+  it('upgrades legacy local-file staged entries into git-draft staged snapshots when a matching draft exists', () => {
+    const migrated = migrateGitStorePersistedState({
+      config: {
+        provider: 'github',
+        token: 'plain-token-local-file',
+        ownerOrNamespace: 'owner',
+        repo: 'repo',
+        branch: 'main',
+      },
+      connected: true,
+      drafts: {
+        'git:github:owner/repo:main:docs/note.md': {
+          documentId: 'git:github:owner/repo:main:docs/note.md',
+          path: 'docs/note.md',
+          name: 'note.md',
+          sha: undefined,
+          content: '# note',
+          originalContent: '',
+          draftContent: '# note',
+          isDirty: true,
+          isNew: true,
+          provider: 'github',
+          repo: 'repo',
+          ownerOrNamespace: 'owner',
+          branch: 'main',
+        },
+      },
+      stagedChanges: [{
+        id: 'local-file:local-1',
+        kind: 'local-file',
+        label: 'note.md',
+        repoPath: 'docs/note.md',
+        localFileId: 'local-1',
+        localFileName: 'note.md',
+        updatedAt: 123,
+      }],
+    }, 6)
+
+    expect(migrated.stagedChanges).toEqual([
+      expect.objectContaining({
+        kind: 'git-draft',
+        repoPath: 'docs/note.md',
+        label: 'note.md',
+        content: '# note',
+      }),
+    ])
+  })
+
+  it('drops malformed persisted staged entries', () => {
+    const migrated = migrateGitStorePersistedState({
+      config: {
+        provider: 'github',
+        token: 'plain-token-bad-stage',
+        ownerOrNamespace: 'owner',
+        repo: 'repo',
+        branch: 'main',
+      },
+      connected: true,
+      stagedChanges: [
+        {
+          id: 'broken-stage',
+          kind: 'git-draft',
+          label: 'broken.md',
+          updatedAt: 1,
+        },
+      ],
+    }, 6)
+
+    expect(migrated.stagedChanges).toEqual([])
+  })
+
   it('restores pending structural changes in v4 workspace state', () => {
     const migrated = migrateGitStorePersistedState({
       config: {
@@ -107,5 +178,85 @@ describe('migrateGitStorePersistedState', () => {
     expect(migrated.pendingStructuralChanges).toHaveLength(1)
     expect(migrated.pendingStructuralChanges?.[0]?.kind).toBe('git-delete-file')
     expect(Object.keys(migrated.workspaceStateByKey || {})).toContain('github:owner:repo:main')
+  })
+
+  it('hydrates remote snapshot entries from legacy baseTreeMap when explicit snapshot entries are missing', () => {
+    const migrated = migrateGitStorePersistedState({
+      config: {
+        provider: 'github',
+        token: 'plain-token-4',
+        ownerOrNamespace: 'owner',
+        repo: 'repo',
+        branch: 'main',
+      },
+      connected: true,
+      baseTreeMap: {
+        'README.md': 'sha-readme',
+        'docs/guide.md': 'sha-guide',
+      },
+    }, 5)
+
+    expect(migrated.remoteSnapshotEntries?.['README.md']).toMatchObject({
+      path: 'README.md',
+      name: 'README.md',
+      type: 'file',
+      sha: 'sha-readme',
+    })
+    expect(migrated.remoteSnapshotEntries?.['docs/guide.md']).toMatchObject({
+      path: 'docs/guide.md',
+      name: 'guide.md',
+      type: 'file',
+      sha: 'sha-guide',
+    })
+  })
+
+  it('migrates legacy draft creationSource into fileOrigin', () => {
+    const migrated = migrateGitStorePersistedState({
+      config: {
+        provider: 'github',
+        token: 'plain-token-5',
+        ownerOrNamespace: 'owner',
+        repo: 'repo',
+        branch: 'main',
+      },
+      connected: true,
+      drafts: {
+        'doc-local': {
+          documentId: 'doc-local',
+          path: 'draft.md',
+          name: 'draft.md',
+          sha: undefined,
+          content: '',
+          originalContent: '',
+          draftContent: '',
+          isDirty: false,
+          isNew: true,
+          creationSource: 'local',
+          provider: 'github',
+          repo: 'repo',
+          ownerOrNamespace: 'owner',
+          branch: 'main',
+        },
+        'doc-remote': {
+          documentId: 'doc-remote',
+          path: 'README.md',
+          name: 'README.md',
+          sha: 'sha-readme',
+          content: '# title',
+          originalContent: '# title',
+          draftContent: '# title',
+          isDirty: false,
+          isNew: false,
+          creationSource: 'git',
+          provider: 'github',
+          repo: 'repo',
+          ownerOrNamespace: 'owner',
+          branch: 'main',
+        },
+      },
+    }, 7)
+
+    expect(migrated.drafts?.['doc-local']?.fileOrigin).toBe('local')
+    expect(migrated.drafts?.['doc-remote']?.fileOrigin).toBe('remote')
   })
 })

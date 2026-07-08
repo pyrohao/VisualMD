@@ -1,42 +1,51 @@
 import { describe, expect, it } from 'vitest'
-import { GitProviderError, normalizeGitProviderError } from '@/lib/git/provider-errors'
+import { getGitProviderErrorContext, normalizeGitProviderError } from '@/lib/git/provider-errors'
 
-describe('normalizeGitProviderError', () => {
-  it('maps 401 errors to auth_failed', () => {
+describe('provider error normalization', () => {
+  it('maps auth failures into the shared provider error contract', () => {
     const error = normalizeGitProviderError('github', {
       status: 401,
       message: 'Bad credentials',
     })
 
-    expect(error).toBeInstanceOf(GitProviderError)
+    expect(error.name).toBe('GitProviderError')
     expect(error.code).toBe('auth_failed')
-    expect(error.message).toContain('Authentication failed')
+    expect(error.message).toBe('Authentication failed. Please check your access token.')
+    expect(error.status).toBe(401)
   })
 
-  it('maps rate limit errors to rate_limited', () => {
-    const error = normalizeGitProviderError('github', {
-      status: 403,
-      message: 'API rate limit exceeded',
+  it('maps 404 branch problems separately from generic not found errors', () => {
+    const branchError = normalizeGitProviderError('gitee', {
+      status: 404,
+      message: 'Branch main does not exist',
+    })
+    const pathError = normalizeGitProviderError('gitee', {
+      status: 404,
+      message: 'Not Found',
     })
 
-    expect(error.code).toBe('rate_limited')
-    expect(error.message).toContain('rate limit')
+    expect(branchError.code).toBe('branch_not_found')
+    expect(pathError.code).toBe('not_found')
   })
 
-  it('maps conflict-like messages to conflict', () => {
-    const error = normalizeGitProviderError('gitee', {
+  it('maps sha/outdated failures into conflict and exposes normalized context', () => {
+    const error = normalizeGitProviderError('gitlab', {
       status: 422,
-      message: 'sha does not match current revision',
+      message: 'sha does not match the current version',
     })
 
     expect(error.code).toBe('conflict')
-    expect(error.message).toContain('Remote conflict')
+    expect(getGitProviderErrorContext(error)).toEqual({
+      code: 'conflict',
+      status: 422,
+      message: 'Remote conflict detected. Please refresh and resolve local changes first.',
+    })
   })
 
-  it('maps plain thrown errors to network_error when status is missing', () => {
-    const error = normalizeGitProviderError('gitlab', new Error('socket hang up'))
+  it('maps missing status failures into network_error with fallback message', () => {
+    const error = normalizeGitProviderError('custom', new Error('socket hang up'))
 
     expect(error.code).toBe('network_error')
-    expect(error.message).toContain('socket hang up')
+    expect(error.message).toBe('socket hang up')
   })
 })
