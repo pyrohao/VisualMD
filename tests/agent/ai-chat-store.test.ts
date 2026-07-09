@@ -790,6 +790,7 @@ describe('ai chat store hook adapter', () => {
       previousMarkdown: '# Doc\n\nSelected text.',
       appliedToolCallIds: [],
       appliedTools: [],
+      generatedFiles: [],
       stoppedBecause: 'assistant-text',
     })
 
@@ -837,6 +838,7 @@ describe('ai chat store hook adapter', () => {
         previousMarkdown: '# Doc\n\nSelected text.',
         appliedToolCallIds: [],
         appliedTools: [],
+        generatedFiles: [],
         stoppedBecause: 'assistant-text',
       }
     })
@@ -892,6 +894,7 @@ describe('ai chat store hook adapter', () => {
           previousMarkdown: '# Doc\n\nSelected text.',
           appliedToolCallIds: [],
           appliedTools: [],
+          generatedFiles: [],
           stoppedBecause: 'assistant-text',
         }
       })
@@ -920,6 +923,7 @@ describe('ai chat store hook adapter', () => {
           previousMarkdown: '# Doc\n\nSelected text.',
           appliedToolCallIds: [],
           appliedTools: [],
+          generatedFiles: [],
           stoppedBecause: 'assistant-text',
         }
       })
@@ -940,7 +944,10 @@ describe('ai chat store hook adapter', () => {
     expect(storage.saveFileContent).toHaveBeenCalledWith('generated-file-1', '# New')
     expect(storage.saveFileContent).not.toHaveBeenCalledWith('generated-file-1', '# Old')
 
-    await releaseFirstRun?.()
+    const resumeFirstRun: (() => Promise<void>) | null = releaseFirstRun
+    if (resumeFirstRun) {
+      await (resumeFirstRun as () => Promise<void>)()
+    }
     await firstRunPromise
 
     expect(storage.importFile).toHaveBeenCalledTimes(1)
@@ -976,6 +983,7 @@ describe('ai chat store hook adapter', () => {
         previousMarkdown: '# Doc\n\nSelected text.',
         appliedToolCallIds: [],
         appliedTools: [],
+        generatedFiles: [],
         stoppedBecause: 'assistant-text',
       }
     })

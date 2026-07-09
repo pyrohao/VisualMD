@@ -274,3 +274,38 @@ export function findGitUnstagedChanges({
 
   return blockers
 }
+
+export function findGitRemoteDraftsWithUnstagedContent({
+  drafts,
+  stagedChanges,
+}: Pick<UnstagedChangeInput, 'drafts' | 'stagedChanges'>) {
+  const { stagedDraftByDocumentId } = buildStagedIndex(stagedChanges)
+  const paths: string[] = []
+  const seenPaths = new Set<string>()
+
+  for (const draft of Object.values(drafts)) {
+    const isRemoteTrackedDraft = !draft.isNew && draft.fileOrigin !== 'local'
+    if (!isRemoteTrackedDraft || draft.hasConflict) {
+      continue
+    }
+
+    const stagedDraft = stagedDraftByDocumentId.get(draft.documentId)
+    const hasUnstagedContent = stagedDraft
+      ? draft.draftContent !== (stagedDraft.content ?? '')
+      : hasMeaningfulLocalGitChange(draft.draftContent, draft.originalContent)
+
+    if (!hasUnstagedContent) {
+      continue
+    }
+
+    const normalizedPath = normalizeGitPath(draft.path)
+    if (seenPaths.has(normalizedPath)) {
+      continue
+    }
+
+    seenPaths.add(normalizedPath)
+    paths.push(normalizedPath)
+  }
+
+  return paths
+}

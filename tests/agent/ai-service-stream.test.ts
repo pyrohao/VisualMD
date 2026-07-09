@@ -50,7 +50,9 @@ describe('AIService streaming chat', () => {
 
     expect(result).toBe('Hello')
     expect(deltas).toEqual(['Hel', 'Hello'])
-    expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string).stream).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [, firstRequest] = fetchMock.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit | undefined]
+    expect(JSON.parse(firstRequest?.body as string).stream).toBe(true)
   })
 
   it('combines reasoning and answer in OpenAI-compatible SSE streams', async () => {
@@ -133,12 +135,14 @@ describe('AIService streaming chat', () => {
     })
 
     expect(result).toBe('Hello from Claude')
-    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://example.test/v1/messages')
-    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [anthropicUrl, anthropicRequest] = fetchMock.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit | undefined]
+    expect(anthropicUrl).toBe('https://example.test/v1/messages')
+    expect(anthropicRequest?.headers).toMatchObject({
       'x-api-key': 'test',
       'anthropic-version': '2023-06-01',
     })
-    const body = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)
+    const body = JSON.parse(anthropicRequest?.body as string)
     expect(body.system).toBe('system prompt')
     expect(body.messages).toEqual([
       { role: 'user', content: 'hello' },
@@ -175,8 +179,10 @@ describe('AIService streaming chat', () => {
     })
 
     expect(result).toBe('Response API text')
-    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://example.test/v1/responses')
-    const body = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [responsesUrl, responsesRequest] = fetchMock.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit | undefined]
+    expect(responsesUrl).toBe('https://example.test/v1/responses')
+    const body = JSON.parse(responsesRequest?.body as string)
     expect(body.max_output_tokens).toBe(20)
     expect(body.input).toEqual([{ role: 'user', content: 'hello' }])
   })
@@ -195,8 +201,11 @@ describe('AIService streaming chat', () => {
     })
 
     expect(result).toBe('Fallback OK')
-    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://example.test/v1/chat/completions')
-    expect(fetchMock.mock.calls[1]?.[0]).toBe('https://example.test/v1/responses')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const [firstUrl] = fetchMock.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit | undefined]
+    const [secondUrl] = fetchMock.mock.calls[1] as unknown as [RequestInfo | URL, RequestInit | undefined]
+    expect(firstUrl).toBe('https://example.test/v1/chat/completions')
+    expect(secondUrl).toBe('https://example.test/v1/responses')
   })
 
   it('detects responses endpoint during connection testing', async () => {

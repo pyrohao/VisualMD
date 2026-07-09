@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { findGitDirectoryPathConflicts, findGitPullBlockers, findGitStagedAssetConflicts, findGitUnstagedChanges } from '@/lib/git/pull-guards'
+import { findGitDirectoryPathConflicts, findGitPullBlockers, findGitRemoteDraftsWithUnstagedContent, findGitStagedAssetConflicts, findGitUnstagedChanges } from '@/lib/git/pull-guards'
 import type { GitDraftFile, StagedGitChange } from '@/lib/git/types'
 
 function createDraft(overrides: Partial<GitDraftFile>): GitDraftFile {
@@ -251,6 +251,69 @@ describe('git pull guards', () => {
     })
 
     expect(blockers).toEqual([{ kind: 'unstaged-overwrite', path: 'README.md' }])
+  })
+
+  it('finds remote drafts with unstaged content before a repository refresh', () => {
+    const paths = findGitRemoteDraftsWithUnstagedContent({
+      drafts: {
+        staged: createDraft({
+          documentId: 'staged',
+          path: 'README.md',
+          draftContent: '# Edited after stage',
+          isDirty: true,
+        }),
+        tracked: createDraft({
+          documentId: 'tracked',
+          path: 'docs/guide.md',
+          name: 'guide.md',
+          originalContent: '# Base',
+          draftContent: '# Changed',
+          isDirty: true,
+        }),
+        local: createDraft({
+          documentId: 'local',
+          path: 'docs/local.md',
+          name: 'local.md',
+          fileOrigin: 'local',
+          isNew: true,
+          sha: undefined,
+          originalContent: '',
+          draftContent: 'new local file',
+        }),
+      },
+      stagedChanges: [
+        createChange({
+          documentId: 'staged',
+          repoPath: 'README.md',
+          content: '# Staged content',
+          originalContent: '# Title',
+          baseSha: 'base-sha',
+          blobSha: 'blob-sha',
+        }),
+      ],
+    })
+
+    expect(paths).toEqual(['README.md', 'docs/guide.md'])
+  })
+
+  it('treats legacy tracked drafts without fileOrigin as remote when checking refresh blockers', () => {
+    const paths = findGitRemoteDraftsWithUnstagedContent({
+      drafts: {
+        legacy: createDraft({
+          documentId: 'legacy',
+          path: 'docs/legacy.md',
+          name: 'legacy.md',
+          fileOrigin: undefined,
+          isNew: false,
+          originalContent: '# Base',
+          draftContent: '# Changed',
+          isDirty: true,
+        }),
+      },
+      stagedChanges: [],
+    })
+
+    expect(paths).toEqual(['docs/legacy.md'])
   })
 
   it('detects staged asset conflicts when the same remote path changed after staging', () => {

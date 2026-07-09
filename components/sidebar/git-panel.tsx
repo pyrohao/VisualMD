@@ -34,6 +34,24 @@ import { ThemedDeleteDialog } from '@/components/ui/themed-delete-dialog'
 import { toast } from '@/hooks/use-toast'
 import type { StagedGitChange } from '@/lib/git/types'
 
+function formatRefreshSuccessDescription(
+  t: (key: string) => string,
+  result: { addedPaths: string[]; deletedPaths: string[]; updatedPaths: string[] }
+) {
+  const added = result.addedPaths.length
+  const updated = result.updatedPaths.length
+  const deleted = result.deletedPaths.length
+
+  if (!added && !updated && !deleted) {
+    return t('git.refreshSuccessNoChanges')
+  }
+
+  return t('git.refreshSuccessChanged')
+    .replace('{added}', String(added))
+    .replace('{updated}', String(updated))
+    .replace('{deleted}', String(deleted))
+}
+
 function renderGitFileIcon(itemPath: string, themeConfig: typeof themeConfigs.light) {
   const fileKind = inferGitFileKind(itemPath)
 
@@ -606,11 +624,11 @@ export function GitPanel() {
       }
 
       toast({
-        title: t('git.refreshTree'),
-        description:
+        title:
           result.addedPaths.length || result.deletedPaths.length || result.updatedPaths.length
-            ? t('git.reposLoaded')
-            : t('git.noStagedChanges'),
+            ? t('git.remoteUpdated')
+            : t('git.remoteUpToDate'),
+        description: formatRefreshSuccessDescription(t, result),
       })
     } catch {
       // handled by store

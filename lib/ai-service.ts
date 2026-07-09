@@ -201,7 +201,7 @@ function extractAnthropicContent(data: any) {
   if (typeof data.content === 'string') return data.content
   if (Array.isArray(data.content)) {
     return data.content
-      .map((item) => typeof item?.text === 'string' ? item.text : '')
+      .map((item: { text?: unknown } | null | undefined) => typeof item?.text === 'string' ? item.text : '')
       .join('')
   }
   return ''

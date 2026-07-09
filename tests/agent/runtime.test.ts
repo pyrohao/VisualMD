@@ -437,7 +437,9 @@ describe('agent runtime', () => {
       tools: createDefaultAgentTools(),
       markdown: '',
       maxTurns: 5,
-      onGeneratedDocumentEvent: (event) => events.push(event),
+      onGeneratedDocumentEvent: (event) => {
+        events.push(event)
+      },
     })
 
     expect(result.generatedFiles).toEqual([

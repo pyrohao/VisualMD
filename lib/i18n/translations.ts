@@ -340,6 +340,16 @@ export interface Translations {
     targetDirectory: string
     targetDirectoryRoot: string
     refreshTree: string
+    refreshCheckResultTitle: string
+    refreshConflictResult: string
+    refreshUnstagedResult: string
+    refreshConflictAction: string
+    refreshUnstagedAction: string
+    refreshBlockedMatchedFilesLabel: string
+    refreshBlockedRemainingCount: string
+    refreshSuccessChanged: string
+    refreshSuccessNoChanges: string
+    openSourceControl: string
     stageChanges: string
     noStagedChanges: string
     stagedCount: string
@@ -725,6 +735,16 @@ export const translations: Record<Language, Translations> = {
       targetDirectory: '目标目录',
       targetDirectoryRoot: '目标目录：仓库根目录',
       refreshTree: '刷新仓库文件',
+      refreshCheckResultTitle: '刷新仓库文件校验结果',
+      refreshConflictResult: '本次刷新未执行。检测到 {count} 个未解决的冲突文件。',
+      refreshUnstagedResult: '本次刷新未执行。检测到 {count} 个 remote 文件存在未暂存的本地内容变更。',
+      refreshConflictAction: '请先到源代码管理面板处理这些冲突，再重新刷新仓库文件。',
+      refreshUnstagedAction: '请先手动将这些变更加入暂存区，再重新刷新仓库文件。',
+      refreshBlockedMatchedFilesLabel: '命中的文件：',
+      refreshBlockedRemainingCount: '另有 {count} 个文件',
+      refreshSuccessChanged: '刷新完成：新增 {added}、更新 {updated}、删除 {deleted}',
+      refreshSuccessNoChanges: '刷新完成：远端没有变化',
+      openSourceControl: '前往源代码管理',
       stageChanges: '暂存变更',
       noStagedChanges: '没有暂存变更',
       stagedCount: '{count} 项已暂存',
@@ -1106,6 +1126,16 @@ export const translations: Record<Language, Translations> = {
       targetDirectory: 'Target directory',
       targetDirectoryRoot: 'Target directory: repository root',
       refreshTree: 'Refresh repository tree',
+      refreshCheckResultTitle: 'Repository Refresh Check Result',
+      refreshConflictResult: 'Refresh did not run. Detected {count} unresolved conflicted file(s).',
+      refreshUnstagedResult: 'Refresh did not run. Detected {count} remote-tracked file(s) with unstaged local content changes.',
+      refreshConflictAction: 'Resolve these conflicts in Source Control before refreshing the repository tree again.',
+      refreshUnstagedAction: 'Stage these changes manually before refreshing the repository tree again.',
+      refreshBlockedMatchedFilesLabel: 'Affected files:',
+      refreshBlockedRemainingCount: '{count} more file(s)',
+      refreshSuccessChanged: 'Refresh completed: {added} added, {updated} updated, {deleted} deleted',
+      refreshSuccessNoChanges: 'Refresh completed: no remote changes detected',
+      openSourceControl: 'Open Source Control',
       stageChanges: 'Stage Changes',
       noStagedChanges: 'No staged changes',
       stagedCount: '{count} staged',

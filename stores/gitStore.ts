@@ -738,7 +738,7 @@ function createGitDraftFromRemoteSource(
     draftContent: file.content,
     isDirty: false,
     isNew: false,
-    fileOrigin: undefined,
+    fileOrigin: 'remote',
     status: 'clean',
     hasConflict: false,
     lastCheckedAt: loadedAt,
@@ -1087,7 +1087,10 @@ function getDocumentAssetDirectory(draftPath: string) {
   return GIT_ASSET_ROOT_DIRECTORY
 }
 
-function normalizePersistedDraftFileOrigin(draft: Record<string, unknown>) {
+function normalizePersistedDraftFileOrigin(draft: {
+  fileOrigin?: GitDraftFile['fileOrigin']
+  creationSource?: 'git' | 'local'
+}) {
   if (draft.fileOrigin === 'local' || draft.fileOrigin === 'remote') {
     return draft.fileOrigin
   }
@@ -2892,7 +2895,7 @@ export const useGitStore = create<GitStore>()(
                   draftContent: snapshot.remoteContent,
                   isDirty: false,
                   isNew: false,
-                  fileOrigin: undefined,
+                  fileOrigin: 'remote',
                   status: 'clean',
                   hasConflict: false,
                   conflictResolvedContent: undefined,
@@ -3316,7 +3319,7 @@ export const useGitStore = create<GitStore>()(
                       draftContent: remoteFile.content,
                       isDirty: false,
                       isNew: false,
-                      fileOrigin: undefined,
+                      fileOrigin: 'remote',
                       status: 'clean',
                       hasConflict: false,
                       conflictSnapshot: undefined,
@@ -3811,7 +3814,7 @@ export const useGitStore = create<GitStore>()(
                   isNew: false,
                   renamedFromPath: undefined,
                   renamedFromSha: undefined,
-                  fileOrigin: undefined,
+                  fileOrigin: 'remote',
                   status: keepLocalEdits ? 'dirty' : 'clean',
                   isDirty: keepLocalEdits,
                   hasConflict: false,

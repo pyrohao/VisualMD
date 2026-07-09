@@ -11,7 +11,7 @@
  */
 
 import { create } from 'zustand'
-import { devtools, persist } from 'zustand/middleware'
+import { devtools, persist, type PersistStorage } from 'zustand/middleware'
 import { nanoid } from 'nanoid'
 import type { Folder, MarkdownFile, Workspace, DropPosition, WorkspaceAsset } from '@/types/file-system'
 import { useDocumentStore } from './documentStore'
@@ -661,7 +661,7 @@ export const useFileSystemStore = create<FileSystemStore>()(
           dbName: 'visualmd-workspace',
           storeName: 'zustand-persist',
           legacyStorageKey: 'markdown-workspace',
-        }),
+        }) as PersistStorage<unknown>,
         migrate: (persistedState) => migrateFileSystemPersistedState(persistedState),
         partialize: (state) => ({
           folders: state.folders,

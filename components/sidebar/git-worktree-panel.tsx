@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import {
+  AlertTriangle,
   ChevronDown,
   ChevronRight,
   File,
@@ -27,11 +28,22 @@ import { requestNavigationWithUnsavedGuard } from '@/stores/unsavedChangesStore'
 import { useDocumentStore } from '@/stores/documentStore'
 import { useTabsStore } from '@/stores/tabsStore'
 import { inferGitFileKind, inferGitFileMimeType, isGitBinaryFileKind } from '@/lib/git/file-kind'
+import { findGitRemoteDraftsWithUnstagedContent } from '@/lib/git/pull-guards'
 import { buildGitTabDraftState } from '@/lib/git/tab-state'
 import { getGitWorktreeStatusBadge, getGitWorktreeStatusTitle } from '@/lib/git/worktree-status-display'
 import { buildGitWorktreeView, hasGitRemoteSnapshotPath, type GitWorktreeStatus } from '@/lib/git/worktree'
 import { buildGitDocumentId, getGitFileName, joinGitPath, normalizeGitPath } from '@/lib/git/utils'
 import { createDefaultMarkdownDocumentContent, ensureMarkdownExtension, generateUniqueItemName } from '@/lib/workspace-item-utils'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { PromptDialog } from '@/components/ui/prompt-dialog'
 import { ThemedDeleteDialog } from '@/components/ui/themed-delete-dialog'
 import { toast } from '@/hooks/use-toast'
@@ -46,6 +58,11 @@ type DialogState =
 type DeleteDialogState =
   | { type: 'delete-file'; path: string }
   | { type: 'delete-folder'; path: string }
+  | null
+
+type RefreshGuardDialogState =
+  | { kind: 'conflict'; paths: string[] }
+  | { kind: 'unstaged-remote'; paths: string[] }
   | null
 
 function renderGitFileIcon(itemPath: string, themeConfig: typeof themeConfigs.light) {
@@ -164,6 +181,24 @@ function getNodeColor(status: GitWorktreeStatus | undefined, themeConfig: typeof
   if (shouldColorAsModified(status)) return themeConfig.text
   if (isDeletedStatus(status)) return themeConfig.danger
   return null
+}
+
+function formatRefreshSuccessDescription(
+  t: (key: string) => string,
+  result: { addedPaths: string[]; deletedPaths: string[]; updatedPaths: string[] }
+) {
+  const added = result.addedPaths.length
+  const updated = result.updatedPaths.length
+  const deleted = result.deletedPaths.length
+
+  if (!added && !updated && !deleted) {
+    return t('git.refreshSuccessNoChanges')
+  }
+
+  return t('git.refreshSuccessChanged')
+    .replace('{added}', String(added))
+    .replace('{updated}', String(updated))
+    .replace('{deleted}', String(deleted))
 }
 
 function GitWorktreeNode({
@@ -365,6 +400,8 @@ export function GitWorktreePanel() {
   const [mounted, setMounted] = useState(false)
   const [dialogState, setDialogState] = useState<DialogState>(null)
   const [deleteDialogState, setDeleteDialogState] = useState<DeleteDialogState>(null)
+  const [refreshGuardDialogState, setRefreshGuardDialogState] = useState<RefreshGuardDialogState>(null)
+  const [isRefreshingRepository, setIsRefreshingRepository] = useState(false)
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
 
   const { setActivePanel } = useSidebarStore()
@@ -383,6 +420,7 @@ export function GitWorktreePanel() {
     connected,
     isConnecting,
     isLoadingTree,
+    isFetchingRemote,
     error,
     clearError,
     openFile,
@@ -500,11 +538,43 @@ export function GitWorktreePanel() {
   }
 
   const handleRefreshTree = async () => {
+    if (isRefreshingRepository || isLoadingTree || isFetchingRemote) {
+      return
+    }
+
+    const conflictedDraftPaths = Object.values(drafts)
+      .filter((draft) => draft.hasConflict)
+      .map((draft) => normalizeGitPath(draft.path))
+
+    if (conflictedDraftPaths.length > 0) {
+      setRefreshGuardDialogState({ kind: 'conflict', paths: conflictedDraftPaths })
+      return
+    }
+
+    const remoteDraftPathsWithUnstagedContent = findGitRemoteDraftsWithUnstagedContent({
+      drafts,
+      stagedChanges,
+    })
+    if (remoteDraftPathsWithUnstagedContent.length > 0) {
+      setRefreshGuardDialogState({
+        kind: 'unstaged-remote',
+        paths: remoteDraftPathsWithUnstagedContent,
+      })
+      return
+    }
+
     try {
-      await refreshRepositoryFromRemote()
-      toast({ title: t('git.refreshTree') })
+      setIsRefreshingRepository(true)
+      const result = await refreshRepositoryFromRemote()
+      const hasChanges = result.addedPaths.length > 0 || result.updatedPaths.length > 0 || result.deletedPaths.length > 0
+      toast({
+        title: hasChanges ? t('git.remoteUpdated') : t('git.remoteUpToDate'),
+        description: formatRefreshSuccessDescription(t, result),
+      })
     } catch {
       // handled by store error state + toast effect
+    } finally {
+      setIsRefreshingRepository(false)
     }
   }
 
@@ -621,6 +691,16 @@ export function GitWorktreePanel() {
     }
   }
 
+  const visibleBlockedPaths = refreshGuardDialogState?.kind === 'unstaged-remote'
+    ? refreshGuardDialogState.paths.slice(0, 3)
+    : refreshGuardDialogState?.kind === 'conflict'
+      ? refreshGuardDialogState.paths.slice(0, 3)
+    : []
+  const blockedPathCount = refreshGuardDialogState?.paths.length || 0
+  const hiddenBlockedPathCount = refreshGuardDialogState?.paths
+    ? Math.max(0, refreshGuardDialogState.paths.length - visibleBlockedPaths.length)
+    : 0
+
   return (
     <div className="flex h-full flex-col" style={{ backgroundColor: themeConfig.sidebar }}>
       <div className="flex h-14 items-center justify-between border-b px-4" style={{ borderColor: themeConfig.border }}>
@@ -692,9 +772,11 @@ export function GitWorktreePanel() {
                 style={{ borderColor: themeConfig.border, color: themeConfig.text, backgroundColor: themeConfig.background }}
                 onClick={() => void handleRefreshTree()}
                 title={t('git.refreshTree')}
-                disabled={!connected || isConnecting || isLoadingTree}
+                disabled={!connected || isConnecting || isLoadingTree || isFetchingRemote || isRefreshingRepository}
               >
-                {isLoadingTree ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                {isLoadingTree || isFetchingRemote || isRefreshingRepository
+                  ? <Loader2 className="h-4 w-4 animate-spin" />
+                  : <RefreshCw className="h-4 w-4" />}
               </button>
             </div>
           </div>
@@ -765,6 +847,93 @@ export function GitWorktreePanel() {
         confirmText={t('common.delete')}
         cancelText={t('common.cancel')}
       />
+
+      <AlertDialog
+        open={!!refreshGuardDialogState}
+        onOpenChange={(open) => {
+          if (!open) {
+            setRefreshGuardDialogState(null)
+          }
+        }}
+      >
+        <AlertDialogContent
+          className="sm:max-w-[520px]"
+          style={{
+            backgroundColor: themeConfig.card,
+            borderColor: `${themeConfig.danger}55`,
+            color: themeConfig.text,
+          }}
+        >
+          <AlertDialogHeader>
+            <div className="flex items-start gap-3">
+              <div
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full"
+                style={{ backgroundColor: `${themeConfig.danger}18`, color: themeConfig.danger }}
+              >
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div className="space-y-2">
+                <AlertDialogTitle style={{ color: themeConfig.heading }}>
+                  {t('git.refreshCheckResultTitle')}
+                </AlertDialogTitle>
+                <AlertDialogDescription style={{ color: themeConfig.muted }}>
+                  {refreshGuardDialogState?.kind === 'conflict'
+                    ? t('git.refreshConflictResult').replace('{count}', String(blockedPathCount))
+                    : t('git.refreshUnstagedResult').replace('{count}', String(blockedPathCount))}
+                </AlertDialogDescription>
+                <div className="text-sm" style={{ color: themeConfig.muted }}>
+                  {refreshGuardDialogState?.kind === 'conflict'
+                    ? t('git.refreshConflictAction')
+                    : t('git.refreshUnstagedAction')}
+                </div>
+                {refreshGuardDialogState?.paths?.length ? (
+                  <div className="space-y-2 text-sm" style={{ color: themeConfig.text }}>
+                    <div style={{ color: themeConfig.muted }}>
+                      {t('git.refreshBlockedMatchedFilesLabel')}
+                    </div>
+                    <div className="space-y-1 rounded-md border px-3 py-2" style={{ borderColor: themeConfig.border }}>
+                      {visibleBlockedPaths.map((path) => (
+                        <div key={path} className="truncate font-mono text-xs">
+                          {path}
+                        </div>
+                      ))}
+                      {hiddenBlockedPathCount > 0 ? (
+                        <div className="text-xs" style={{ color: themeConfig.muted }}>
+                          {t('git.refreshBlockedRemainingCount').replace('{count}', String(hiddenBlockedPathCount))}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel
+              onClick={() => setRefreshGuardDialogState(null)}
+              style={{
+                backgroundColor: themeConfig.background,
+                borderColor: themeConfig.border,
+                color: themeConfig.text,
+              }}
+            >
+              {t('common.close')}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setRefreshGuardDialogState(null)
+                setActivePanel('git')
+              }}
+              style={{
+                backgroundColor: themeConfig.primary,
+                color: themeConfig.buttonText || '#fff',
+              }}
+            >
+              {t('git.openSourceControl')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

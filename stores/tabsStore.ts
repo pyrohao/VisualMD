@@ -382,8 +382,8 @@ export const useTabsStore = create<TabsStore>()(
           if (!state) return
 
           state.tabs = state.tabs.map((tab) => ({
-            content: '',
             ...tab,
+            content: tab.content ?? '',
           }))
         },
       }

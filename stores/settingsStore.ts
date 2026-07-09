@@ -295,7 +295,12 @@ interface SettingsStore {
   applyPresetProvider: (providerId: string, templateId?: string) => void
   getActiveProviderConfig: () => ProviderConfig
   setIsGenerating: (value: boolean, prompt?: string) => void
-  _rehydrate: (persistedState: Partial<SettingsStore> & Record<string, unknown>) => void
+  _rehydrate: (persistedState: SettingsStoreHydratedState) => void
+}
+
+type SettingsStoreHydratedState = Partial<Pick<SettingsStore, 'activeProviderId' | 'providers'>> & {
+  activeProvider?: string
+  providerConfigs?: unknown
 }
 
 export const useSettingsStore = create<SettingsStore>()(

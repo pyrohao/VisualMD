@@ -956,36 +956,6 @@ export const useDocumentStore = create<DocumentStore>()(
               }).catch((error) => {
                 console.error('Failed to hydrate editor state:', error)
               })
-              const savedState = null
-              
-              if (savedState) {
-                // 恢复断开节点
-                document.detachedNodes = savedState.detachedNodes || []
-                
-                // 恢复展开状态
-                if (savedState.expandedNodeIds && savedState.expandedNodeIds.length > 0) {
-                  const expandedNodeIds = resolveExpandedNodeIdsForDocument(
-                    document.root,
-                    document.detachedNodes || [],
-                    savedState.expandedNodeIds
-                  )
-                  const syncedDocument = {
-                    ...document,
-                    root: syncCollapseStateInTree(document.root, expandedNodeIds),
-                    detachedNodes: syncCollapseStateInDetached(document.detachedNodes || [], expandedNodeIds),
-                  }
-                  set({ 
-                    document: syncedDocument, 
-                    expandedNodeIds,
-                    selectedNodeId: null,
-                    error: null,
-                    lastMutation: nextMutation('load-document', 'full'),
-                  })
-                  // 清空历史记录
-                  useHistoryStore.getState().clear()
-                  return
-                }
-              }
             }
             
             // 默认展开所有节点

@@ -1492,9 +1492,10 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
 
       conversationId = conversationId || (await get().createConversation())
       if (!conversationId) return
+      const activeConversationId = conversationId
 
       const selectedReferenceId = get().selectedReferenceIds.at(-1)
-      const references = (get().referencesByConversation[conversationId] || []).filter((reference) =>
+      const references = (get().referencesByConversation[activeConversationId] || []).filter((reference) =>
         reference.id === selectedReferenceId
       )
       const activeIdentity = getCurrentDocumentIdentity()
@@ -1512,34 +1513,35 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       const targetFileName = resolveFileNameForIdentity(targetIdentity)
 
       if (hasDocumentIdentity(referenceIdentity)) {
-        await persistExecutionTarget(conversationId, referenceIdentity)
+        await persistExecutionTarget(activeConversationId, referenceIdentity)
       }
 
       if (hasDocumentIdentity(targetIdentity) && !documentIdentityExists(targetIdentity)) {
         throw new Error('当前对话绑定的目标文档已不存在，可能已被删除。请重新打开文档或重新选择内容后再试。')
       }
 
-      const runContext = beginConversationRun(conversationId)
-      runId = runContext.runId
-      const isCurrentRun = () => isConversationRunActive(conversationId as string, runId as string)
+      const runContext = beginConversationRun(activeConversationId)
+      const currentRunId = runContext.runId
+      runId = currentRunId
+      const isCurrentRun = () => isConversationRunActive(activeConversationId, currentRunId)
 
-      await removeGeneratedDocumentSession(conversationId)
+      await removeGeneratedDocumentSession(activeConversationId)
       set((state) => {
         const nextSessions = { ...state.generatedDocumentSessionsByConversation }
-        delete nextSessions[conversationId]
+        delete nextSessions[activeConversationId]
         return {
           generatedDocumentSessionsByConversation: nextSessions,
         }
       })
 
       const userMessage = buildUserAgentMessage({
-        conversationId,
+        conversationId: activeConversationId,
         taskType: get().taskType,
         input,
         references,
       })
 
-      const existingMessages = get().messagesByConversation[conversationId] || []
+      const existingMessages = get().messagesByConversation[activeConversationId] || []
       const userMessageIds = existingMessages
         .filter((message) => message.role === 'user')
         .slice(-Math.max(0, get().chatHistoryRounds - 1))
@@ -1548,7 +1550,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       const historyMessages = firstKeptUserIndex >= 0 ? existingMessages.slice(firstKeptUserIndex) : existingMessages
       const pendingAssistantMessage: VisibleAgentMessage = {
         id: nanoid(),
-        conversationId,
+        conversationId: activeConversationId,
         role: 'assistant',
         message: '',
         displayMessage: '',
@@ -1559,34 +1561,34 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       messages = [...existingMessages, userMessage]
       const displayMessages = [...messages, pendingAssistantMessage]
 
-      const currentReferences = get().referencesByConversation[conversationId] || []
+      const currentReferences = get().referencesByConversation[activeConversationId] || []
 
       await saveAgentMessage(userMessage)
       await Promise.all(currentReferences.map((reference) => deleteAgentReference(reference.id)))
-      await saveAgentDraft(buildDraftRecord(conversationId, get().taskType, '', []))
+      await saveAgentDraft(buildDraftRecord(activeConversationId, get().taskType, '', []))
 
       set((state) => ({
         draftInput: '',
         selectedReferenceIds: [],
         selectionCandidate: null,
         isSending: true,
-        sendingConversationIds: state.sendingConversationIds.includes(conversationId)
+        sendingConversationIds: state.sendingConversationIds.includes(activeConversationId)
           ? state.sendingConversationIds
-          : [...state.sendingConversationIds, conversationId],
-        sendingConversationId: conversationId,
+          : [...state.sendingConversationIds, activeConversationId],
+        sendingConversationId: activeConversationId,
         sendingStatus: '正在连接 AI...',
         error: null,
         referencesByConversation: {
           ...state.referencesByConversation,
-          [conversationId]: [],
+          [activeConversationId]: [],
         },
         messagesByConversation: {
           ...state.messagesByConversation,
-          [conversationId]: messages,
+          [activeConversationId]: messages,
         },
         visibleMessagesByConversation: {
           ...state.visibleMessagesByConversation,
-          [conversationId]: getVisibleMessages(displayMessages),
+          [activeConversationId]: getVisibleMessages(displayMessages),
         },
       }))
 
@@ -1600,12 +1602,11 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
           sendingStatus: 'AI 姝ｅ湪鍥炲...',
           visibleMessagesByConversation: {
             ...state.visibleMessagesByConversation,
-            [conversationId]: getVisibleMessages([
-              ...(state.messagesByConversation[conversationId] || messages),
+            [activeConversationId]: getVisibleMessages([
+              ...(state.messagesByConversation[activeConversationId] || messages),
               {
                 ...pendingAssistantMessage,
                 message: nextText,
-                displayMessage: nextText,
               },
             ]),
           },
@@ -1639,7 +1640,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
 
           if (event.type === 'start') {
             const startedSession: GeneratedDocumentSession = {
-              conversationId,
+              conversationId: activeConversationId,
               toolCallId: event.toolCallId,
               fileName: normalizeGeneratedFileName(event.fileName),
               content: '',
@@ -1664,7 +1665,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
           if (event.type === 'delta') {
             const didCreateTempDocument = !session.tempFileId || !session.tempTabId
             const nextSession = await syncGeneratedDocumentToTempFile({
-              conversationId,
+              conversationId: activeConversationId,
               toolCallId: event.toolCallId,
               fileName: session.fileName,
               content: event.content,
@@ -1717,8 +1718,8 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
             if (!isCurrentRun()) return
             set((state) => {
               const nextSessions = { ...state.generatedDocumentSessionsByConversation }
-              delete nextSessions[conversationId]
-              const nextSendingConversationIds = state.sendingConversationIds.filter((id) => id !== conversationId)
+              delete nextSessions[activeConversationId]
+              const nextSendingConversationIds = state.sendingConversationIds.filter((id) => id !== activeConversationId)
               return {
                 isSending: nextSendingConversationIds.length > 0,
                 sendingConversationIds: nextSendingConversationIds,
@@ -1732,7 +1733,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
 
           const didCreateTempDocument = !session.tempFileId || !session.tempTabId
           const finalSession = await syncGeneratedDocumentToTempFile({
-            conversationId,
+            conversationId: activeConversationId,
             toolCallId: event.toolCallId,
             fileName: session.fileName,
             content: event.content,
@@ -1768,16 +1769,16 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
               sendingStatus: null,
               generatedDocumentSessionsByConversation: {
                 ...get().generatedDocumentSessionsByConversation,
-                [conversationId]: nextSession,
+                [activeConversationId]: nextSession,
               },
             })
             return
           }
 
-          await removeGeneratedDocumentSession(conversationId)
+          await removeGeneratedDocumentSession(activeConversationId)
           set((state) => {
             const nextSessions = { ...state.generatedDocumentSessionsByConversation }
-            delete nextSessions[conversationId]
+            delete nextSessions[activeConversationId]
             return {
               sendingStatus: null,
               generatedDocumentSessionsByConversation: nextSessions,
@@ -1826,14 +1827,19 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         if (!hasDocumentIdentity(targetIdentity)) {
           throw new Error('AI 工具写回失败：当前没有激活文档。无选区编辑或追加内容时，请先打开目标文档。')
         }
-        const committedMarkdown = await applyMarkdownTransaction(result.appliedMarkdown, targetIdentity, targetFileName, { markSaved: true })
+        const committedMarkdown = await applyMarkdownTransaction(
+          result.appliedMarkdown,
+          targetIdentity,
+          targetFileName ?? undefined,
+          { markSaved: true }
+        )
         const appliedToolCallId = result.appliedTools.at(-1)?.toolCallId || result.appliedToolCallIds.at(-1)
         const previousMarkdown = result.appliedTools[0]?.previousMarkdown || result.previousMarkdown
 
         if (appliedToolCallId && previousMarkdown !== committedMarkdown) {
           toolUndoRecords = [
             createToolUndoRecord({
-              conversationId,
+              conversationId: activeConversationId,
               toolCallId: appliedToolCallId,
               identity: targetIdentity,
               fileName: targetFileName,
@@ -1847,7 +1853,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
       // Generated documents are handled through the streamed session state above.
 
       const now = Date.now()
-      const conversation = get().conversations.find((item) => item.id === conversationId)
+      const conversation = get().conversations.find((item) => item.id === activeConversationId)
       if (conversation) {
         const nextConversation: AgentConversation = {
           id: conversation.id,
@@ -1858,27 +1864,27 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
         }
         await saveAgentConversation(nextConversation)
         set((state) => ({
-          conversations: [toUiConversation(nextConversation), ...state.conversations.filter((item) => item.id !== conversationId)],
+          conversations: [toUiConversation(nextConversation), ...state.conversations.filter((item) => item.id !== activeConversationId)],
         }))
       }
 
       set((state) => ({
-        isSending: state.sendingConversationIds.filter((id) => id !== conversationId).length > 0,
-        sendingConversationIds: state.sendingConversationIds.filter((id) => id !== conversationId),
-        sendingConversationId: state.sendingConversationIds.filter((id) => id !== conversationId).at(-1) || null,
+        isSending: state.sendingConversationIds.filter((id) => id !== activeConversationId).length > 0,
+        sendingConversationIds: state.sendingConversationIds.filter((id) => id !== activeConversationId),
+        sendingConversationId: state.sendingConversationIds.filter((id) => id !== activeConversationId).at(-1) || null,
         sendingStatus: null,
         messagesByConversation: {
           ...state.messagesByConversation,
-          [conversationId]: nextMessages,
+          [activeConversationId]: nextMessages,
         },
         visibleMessagesByConversation: {
           ...state.visibleMessagesByConversation,
-          [conversationId]: getVisibleMessages(nextMessages),
+          [activeConversationId]: getVisibleMessages(nextMessages),
         },
         toolUndoStackByConversation: {
           ...state.toolUndoStackByConversation,
-          [conversationId]: [
-            ...(state.toolUndoStackByConversation[conversationId] || []),
+          [activeConversationId]: [
+            ...(state.toolUndoStackByConversation[activeConversationId] || []),
             ...toolUndoRecords,
           ],
         },
@@ -1969,7 +1975,7 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
     await applyMarkdownTransaction(
       target.previousMarkdown,
       normalizeDocumentIdentity(target),
-      target.fileName,
+      target.fileName ?? undefined,
       { markSaved: true }
     )
 

@@ -65,7 +65,9 @@ describe('agent tools', () => {
       {
         markdown: '',
         toolCallId: 'tool-call-1',
-        onGeneratedDocumentEvent: (event) => events.push(event),
+        onGeneratedDocumentEvent: (event) => {
+          events.push(event)
+        },
         providerConfig: {
           id: 'custom',
           name: 'Custom',

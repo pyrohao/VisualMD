@@ -102,7 +102,6 @@ describe('agent model', () => {
           },
           required: ['fileName', 'prompt'],
         },
-        execute: async () => ({ ok: true, message: 'ok' }),
       },
     ])
 
