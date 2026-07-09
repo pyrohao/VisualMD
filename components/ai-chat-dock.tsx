@@ -17,12 +17,6 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { unified } from 'unified'
-import remarkParse from 'remark-parse'
-import remarkGfm from 'remark-gfm'
-import remarkRehype from 'remark-rehype'
-import rehypeSanitize from 'rehype-sanitize'
-import rehypeStringify from 'rehype-stringify'
 import { useThemeStore } from '@/stores/themeStore'
 import { useTranslation } from '@/stores/languageStore'
 import { useAiChatStore } from '@/stores/aiChatStore'
@@ -55,7 +49,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { toast } from '@/hooks/use-toast'
-import { sanitizeRenderedHtml } from '@/lib/safe-html'
+import { renderMarkdownToSanitizedHtml } from '@/lib/render-markdown-html'
 
 type DockView = 'history' | 'conversation'
 
@@ -216,16 +210,9 @@ function ChatMarkdownMessage({
         return
       }
 
-      const result = await unified()
-        .use(remarkParse)
-        .use(remarkGfm)
-        .use(remarkRehype)
-        .use(rehypeSanitize)
-        .use(rehypeStringify)
-        .process(content)
-
+      const nextHtml = await renderMarkdownToSanitizedHtml(content)
       if (!cancelled) {
-        setHtml(sanitizeRenderedHtml(String(result)))
+        setHtml(nextHtml)
       }
     }
 

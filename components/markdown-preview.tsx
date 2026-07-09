@@ -24,13 +24,8 @@ import { inferGitFileKind, inferGitFileMimeType, isGitBinaryFileKind } from '@/l
 import { applyMarkdownToDocument, persistMarkdownToActiveSource } from '@/lib/editor-persistence'
 import { resolveTabCurrentContent, resolveTabSavedContent } from '@/lib/tab-content'
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
-import { unified } from 'unified'
-import remarkParse from 'remark-parse'
-import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
-import remarkRehype from 'remark-rehype'
 import rehypeKatex from 'rehype-katex'
-import rehypeStringify from 'rehype-stringify'
 import { BookOpen, Columns2, Pencil, Plus, Rows2, SplitSquareHorizontal, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getMarkdownImagePasteResult, hasClipboardImage } from '@/lib/clipboard-image'
@@ -52,7 +47,7 @@ import {
   prepareLocalHtmlImageSources,
   resolveLocalHtmlImageSources,
 } from '@/lib/local-image-resolution'
-import { sanitizeRenderedHtml } from '@/lib/safe-html'
+import { renderMarkdownToSanitizedHtml } from '@/lib/render-markdown-html'
 import { toast } from '@/hooks/use-toast'
 import { Button } from '@/components/ui/button'
 
@@ -893,23 +888,16 @@ export function MarkdownPreview() {
         renderMarkdown,
         activeReferences
       )
-      const processor = unified()
-        .use(remarkParse)
-        .use(remarkGfm)
-        .use(remarkMath)
+      const remarkPlugins = [remarkMath]
 
       if (referenceHighlightRanges.length > 0) {
-        processor.use(createMarkdownReferenceHighlightPlugin(referenceHighlightRanges))
+        remarkPlugins.push(createMarkdownReferenceHighlightPlugin(referenceHighlightRanges))
       }
-      
-      const result = await processor
-        .use(remarkRehype, { allowDangerousHtml: true })
-        .use(rehypeKatex)
-        .use(rehypeStringify, { allowDangerousHtml: true })
-        .process(content)
-      
-      const rawHtml = String(result)
-      const sanitizedHtml = sanitizeRenderedHtml(rawHtml)
+
+      const sanitizedHtml = await renderMarkdownToSanitizedHtml(content, {
+        remarkPlugins,
+        rehypePlugins: [rehypeKatex],
+      })
       const immediateHtml = activeGitMeta?.path
         ? prepareGitHtmlImageSources(sanitizedHtml, activeGitMeta.path, gitAssets)
         : activeLocalMarkdownPath

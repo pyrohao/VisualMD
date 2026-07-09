@@ -129,7 +129,7 @@ function renderInlineSegments(
       />
     ) : segment.code ? (
       <code
-        className="rounded-md border px-1.5 py-0.5 text-[0.9em]"
+        className="max-w-full break-all rounded-md border px-1.5 py-0.5 text-[0.9em]"
         key={index}
       >
         {segment.text}
@@ -512,10 +512,10 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
                     {row.cells.map((cell, cellIndex) => (
                       <td
                         key={`${block.id}-row-${rowIndex}-cell-${cellIndex}`}
-                        className="border-b px-4 py-3 align-top"
-                        style={{ borderColor: themeConfig.border, color: themeConfig.text }}
-                      >
-                        {renderInlineSegments(parseInlineSegments(cell), resolvePrototypeImageSrc, themeConfig)}
+                      className="min-w-0 border-b px-4 py-3 align-top break-words"
+                      style={{ borderColor: themeConfig.border, color: themeConfig.text }}
+                    >
+                      {renderInlineSegments(parseInlineSegments(cell), resolvePrototypeImageSrc, themeConfig)}
                       </td>
                     ))}
                   </tr>
@@ -526,7 +526,7 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
         )
       case 'code':
         return (
-          <div key={block.id} className="overflow-hidden rounded-xl border" style={{ borderColor: themeConfig.border }}>
+          <div key={block.id} className="min-w-0 overflow-hidden rounded-xl border" style={{ borderColor: themeConfig.border }}>
             {block.language && (
               <div
                 className="border-b px-4 py-2 text-xs uppercase tracking-[0.2em]"
@@ -540,7 +540,7 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
               </div>
             )}
             <pre
-              className="overflow-x-auto px-4 py-4 text-sm leading-6"
+              className="max-w-full overflow-x-auto whitespace-pre-wrap break-all px-4 py-4 text-sm leading-6"
               style={{
                 backgroundColor: themeConfig.input,
                 color: themeConfig.text,
@@ -559,7 +559,7 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
     return (
       <pre
         key={key}
-        className="overflow-x-auto whitespace-pre-wrap rounded-xl border px-4 py-4 text-sm leading-7"
+        className="max-w-full overflow-x-auto whitespace-pre-wrap break-all rounded-xl border px-4 py-4 text-sm leading-7"
         style={{
           backgroundColor: themeConfig.input,
           borderColor: themeConfig.border,
@@ -775,32 +775,32 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
     const hasChildren = section.children.length > 0
     const hasRenderableBlocks = section.blocks.length > 0
     return (
-      <div className="space-y-4">
+      <div className="min-w-0 space-y-4">
         {hasRenderableBlocks
           ? section.blocks.map(renderBlock)
           : section.rawContent
             ? renderRawContentFallback(section.rawContent, `${section.id}-raw`)
             : null}
         {hasChildren && (
-          <Accordion type="multiple" className="rounded-xl border px-4" style={{ borderColor: themeConfig.border }}>
+          <Accordion type="multiple" className="min-w-0 w-full rounded-xl border px-4" style={{ borderColor: themeConfig.border }}>
             {section.children.map((child) => (
               <AccordionItem key={child.id} value={child.id} style={{ borderColor: themeConfig.border }}>
                 <AccordionTrigger
-                  className="py-3 no-underline hover:no-underline"
+                  className="min-w-0 py-3 no-underline hover:no-underline"
                   onClick={() => setLastAction(child.title)}
                   style={{ color: themeConfig.heading }}
                 >
-                  <div className="flex items-center gap-2">
+                  <div className="flex min-w-0 flex-1 items-center gap-2">
                     <ChevronRight className="h-4 w-4 opacity-0" />
-                    <div className="flex flex-col items-start">
-                      <span>{child.title}</span>
-                      <span className="text-xs font-normal" style={{ color: themeConfig.muted }}>
+                    <div className="min-w-0 flex-1">
+                      <span className="block break-words text-left">{child.title}</span>
+                      <span className="mt-1 block break-words text-left text-xs font-normal" style={{ color: themeConfig.muted }}>
                         {child.children.length} {copy.childNodes}
                       </span>
                     </div>
                   </div>
                 </AccordionTrigger>
-                <AccordionContent className="pb-4">
+                <AccordionContent className="min-w-0 pb-4">
                   {renderSectionBody(child)}
                 </AccordionContent>
               </AccordionItem>
@@ -813,13 +813,13 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
 
   const renderSectionTree = (section: PrototypeSection) => {
     return (
-      <div className="space-y-4">
-        <div className="rounded-2xl border px-4 py-4" style={{ backgroundColor: themeConfig.card, borderColor: themeConfig.border }}>
+      <div className="min-w-0 space-y-4">
+        <div className="min-w-0 w-full rounded-2xl border px-4 py-4" style={{ backgroundColor: themeConfig.card, borderColor: themeConfig.border }}>
           <div className="mb-4">
             <p className="text-xs uppercase tracking-[0.18em]" style={{ color: themeConfig.muted }}>
               H{section.level}
             </p>
-            <h3 className="mt-1 text-lg font-semibold" style={{ color: themeConfig.heading }}>
+            <h3 className="mt-1 break-words text-lg font-semibold" style={{ color: themeConfig.heading }}>
               {section.title}
             </h3>
           </div>
@@ -857,29 +857,33 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
       style={{
         backgroundColor: themeConfig.background,
         backgroundImage: `radial-gradient(circle at top left, ${themeConfig.primary}14, transparent 28%), linear-gradient(135deg, ${themeConfig.card} 0%, ${themeConfig.background} 100%)`,
+        contain: compact ? 'layout size paint' : undefined,
       }}
     >
-      <div className="h-full overflow-y-auto px-4 py-5 md:px-6">
-        <div className={`mx-auto flex w-full flex-col gap-5 ${compact ? 'max-w-3xl' : 'max-w-5xl'}`}>
+      <div className={`h-full overflow-x-hidden overflow-y-auto ${compact ? 'px-3 py-3' : 'px-4 py-5 md:px-6'}`}>
+        <div
+          className={`mx-auto flex w-full min-w-0 flex-col gap-5 ${compact ? 'max-w-none' : 'max-w-5xl'}`}
+          style={compact ? { minHeight: '100%' } : undefined}
+        >
           <div
-            className="rounded-[28px] border p-5 shadow-xl"
+            className="min-w-0 w-full overflow-hidden rounded-[28px] border p-5 shadow-xl"
             style={{
               backgroundColor: `${themeConfig.card}f2`,
               borderColor: themeConfig.border,
             }}
           >
-            <div className="flex flex-col gap-4">
+            <div className="flex min-w-0 flex-col gap-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
+                <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 text-xs uppercase tracking-[0.22em]" style={{ color: themeConfig.muted }}>
                     <Sparkles className="h-4 w-4" />
                     <span>{copy.live}</span>
                   </div>
-                  <h1 className="mt-3 text-3xl font-semibold" style={{ color: themeConfig.heading }}>
+                  <h1 className="mt-3 break-words text-3xl font-semibold" style={{ color: themeConfig.heading }}>
                     {prototype.title}
                   </h1>
                   {prototype.description && (
-                    <p className="mt-2 max-w-2xl text-sm leading-7" style={{ color: themeConfig.muted }}>
+                    <p className="mt-2 max-w-2xl break-words text-sm leading-7" style={{ color: themeConfig.muted }}>
                       {prototype.description}
                     </p>
                   )}
@@ -896,14 +900,14 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
                 </div>
               </div>
 
-              {prototype.rootBlocks.length > 0 && <div className="space-y-4">{prototype.rootBlocks.map(renderBlock)}</div>}
+              {prototype.rootBlocks.length > 0 && <div className="min-w-0 space-y-4">{prototype.rootBlocks.map(renderBlock)}</div>}
 
               {prototype.sections.length > 1 && (
-                <div className="space-y-2">
+                <div className="min-w-0 space-y-2">
                   <p className="text-xs uppercase tracking-[0.22em]" style={{ color: themeConfig.muted }}>
                     {copy.sectionLabel}
                   </p>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex min-w-0 flex-wrap gap-2">
                     {prototype.sections.map((section) => (
                       <button
                         key={section.id}
@@ -912,7 +916,7 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
                           setActiveSectionId(section.id)
                           setLastAction(section.title)
                         }}
-                        className="rounded-full border px-4 py-2 text-sm transition-colors"
+                        className="max-w-full break-words rounded-full border px-4 py-2 text-left text-sm transition-colors"
                         style={{
                           backgroundColor:
                             activeSection?.id === section.id ? `${themeConfig.primary}14` : themeConfig.card,
@@ -932,7 +936,7 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
 
           {activeSection && (
             <Card
-              className="gap-5 py-5"
+              className="min-w-0 w-full gap-5 overflow-hidden py-5"
               style={{
                 backgroundColor: themeConfig.card,
                 borderColor: themeConfig.border,
@@ -941,12 +945,12 @@ export function PrototypeCanvas({ document, compact = false }: PrototypeCanvasPr
               <CardHeader className="px-5">
                 <CardTitle style={{ color: themeConfig.heading }}>{copy.hierarchyLabel}</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-5 px-5">{renderSectionTree(activeSection)}</CardContent>
+              <CardContent className="min-w-0 space-y-5 overflow-x-hidden px-5">{renderSectionTree(activeSection)}</CardContent>
             </Card>
           )}
 
           <div
-            className="flex items-center gap-3 rounded-2xl border px-4 py-3"
+            className="min-w-0 w-full flex items-center gap-3 rounded-2xl border px-4 py-3"
             style={{
               backgroundColor: themeConfig.card,
               borderColor: themeConfig.border,

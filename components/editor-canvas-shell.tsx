@@ -42,11 +42,17 @@ export function EditorCanvasShell({ document }: EditorCanvasShellProps) {
       {mode === 'prototype' && <PrototypeCanvas document={document} />}
 
       {mode === 'split' && (
-        <div className="grid h-full w-full grid-cols-1 lg:grid-cols-[1.1fr_0.9fr]">
-          <div className="min-h-0 border-r pt-0" style={{ borderColor: themeConfig.border }}>
+        <div className="flex h-full w-full flex-col lg:flex-row">
+          <div className="min-h-0 min-w-0 flex-1 border-r pt-0" style={{ borderColor: themeConfig.border }}>
             <FlowCanvasContainer />
           </div>
-          <div className="min-h-0 pt-0">
+          <div
+            className="min-h-0 min-w-0 pt-0 lg:h-full lg:w-[25vw] lg:min-w-[25vw] lg:max-w-[25vw]"
+            style={{
+              backgroundColor: themeConfig.background,
+              contain: 'layout size paint',
+            }}
+          >
             <PrototypeCanvas document={document} compact />
           </div>
         </div>

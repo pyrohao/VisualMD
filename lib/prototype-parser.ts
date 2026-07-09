@@ -78,9 +78,27 @@ function parseAttributes(input: string): Record<string, string> {
   return attributes
 }
 
+function parseHtmlImageToken(token: string): PrototypeInlineSegment | null {
+  const imgTagMatch = token.match(/^<img\b([^>]*)\/?>$/i)
+  if (!imgTagMatch) {
+    return null
+  }
+
+  const attributes = parseAttributes(imgTagMatch[1] || '')
+  const src = attributes.src?.trim()
+  if (!src) {
+    return null
+  }
+
+  return {
+    text: attributes.alt?.trim() || '',
+    imageSrc: src,
+  }
+}
+
 export function parseInlineSegments(text: string): PrototypeInlineSegment[] {
   const segments: PrototypeInlineSegment[] = []
-  const tokenPattern = /(`[^`]+`|!\[[^\]]*\]\([^)]+\)|\[[^\]]+\]\([^)]+\)|\*\*[^*]+\*\*|\*[^*]+\*)/g
+  const tokenPattern = /(`[^`]+`|!\[[^\]]*\]\([^)]+\)|\[[^\]]+\]\([^)]+\)|\*\*[^*]+\*\*|\*[^*]+\*|<img\b[^>]*\/?>)/gi
   let lastIndex = 0
 
   for (const match of text.matchAll(tokenPattern)) {
@@ -93,9 +111,12 @@ export function parseInlineSegments(text: string): PrototypeInlineSegment[] {
 
     const imageMatch = token.match(/^!\[([^\]]*)\]\(([^)]+)\)$/)
     const linkMatch = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/)
+    const htmlImageSegment = parseHtmlImageToken(token)
 
     if (imageMatch) {
       segments.push({ text: imageMatch[1], imageSrc: imageMatch[2].trim() })
+    } else if (htmlImageSegment) {
+      segments.push(htmlImageSegment)
     } else if (linkMatch) {
       segments.push({ text: linkMatch[1], linkHref: linkMatch[2].trim() })
     } else if (token.startsWith('**') && token.endsWith('**')) {
