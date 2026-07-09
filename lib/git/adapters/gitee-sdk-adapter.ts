@@ -39,11 +39,6 @@ type GiteeCommitActionPayload = {
   last_commit_id?: string
 }
 
-const runtimeImport = new Function(
-  'specifier',
-  'return import(specifier);'
-) as (specifier: string) => Promise<unknown>
-
 let giteeSdkPromise: Promise<GiteeSdkModule | null> | null = null
 
 function gitFetch(url: string, init?: RequestInit) {
@@ -66,14 +61,10 @@ function unwrap<T>(response: SdkResponse<T>): T {
 }
 
 async function loadGiteeSdkModule(): Promise<GiteeSdkModule | null> {
-  if (!giteeSdkPromise) {
-    // Upstream SDK has incompatible static exports for current toolchain.
-    // Use runtime import so Turbopack does not statically evaluate the module.
-    giteeSdkPromise = runtimeImport('@gitee/typescript-sdk-v5')
-      .then((module) => module as GiteeSdkModule)
-      .catch(() => null)
-  }
-  return giteeSdkPromise
+  // CSP blocks runtime string evaluation, and the upstream Gitee SDK currently
+  // requires a dynamic import workaround that relies on `new Function(...)`.
+  // To keep browser Git flows CSP-compatible, fall back to the legacy client.
+  return null
 }
 
 async function withSdkModule<T>(
