@@ -16,6 +16,8 @@ const FORBID_TAGS = [
 ]
 
 const FORBID_ATTR = ['style']
+const SVG_FORBID_TAGS = ['script']
+const SVG_PLACEHOLDER_ATTR = 'data-visualmd-foreign-object'
 
 const URL_ATTRS = ['href', 'src', 'action', 'formaction', 'xlink:href'] as const
 
@@ -79,7 +81,8 @@ function sanitizeUrlAttribute(tagName: string, attrName: string, attrValue: stri
 }
 
 function normalizeSanitizedDocument(doc: Document) {
-  const elements = Array.from(doc.body.querySelectorAll('*'))
+  const root = doc.body ?? doc.documentElement
+  const elements = Array.from(root.querySelectorAll('*'))
 
   for (const element of elements) {
     for (const attr of Array.from(element.attributes)) {
@@ -114,14 +117,14 @@ function normalizeSanitizedDocument(doc: Document) {
     }
   }
 
-  return doc.body.innerHTML
+  return doc.body ? doc.body.innerHTML : doc.documentElement.outerHTML
 }
 
-export function sanitizeRenderedHtml(html: string) {
+function sanitizeHtmlFragment(html: string, options?: { forbidAttrs?: string[] }) {
   const purified = DOMPurify.sanitize(html, {
-    USE_PROFILES: { html: true, svg: true },
+    USE_PROFILES: { html: true, svg: false },
     FORBID_TAGS,
-    FORBID_ATTR,
+    FORBID_ATTR: options?.forbidAttrs,
     ALLOW_DATA_ATTR: true,
     ADD_ATTR: ['target', 'rel'],
   })
@@ -129,6 +132,101 @@ export function sanitizeRenderedHtml(html: string) {
   const parser = new DOMParser()
   const doc = parser.parseFromString(purified, 'text/html')
   return normalizeSanitizedDocument(doc)
+}
+
+function sanitizeForeignObjectFragment(html: string) {
+  const purified = DOMPurify.sanitize(html, {
+    USE_PROFILES: { html: true, svg: false },
+    FORBID_TAGS,
+    ALLOW_DATA_ATTR: true,
+    ADD_ATTR: ['target', 'rel', 'xmlns', 'style', 'class'],
+  })
+
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(purified, 'text/html')
+  return normalizeSanitizedDocument(doc)
+}
+
+function convertHtmlFragmentToXhtml(html: string) {
+  return html.replace(/<(br|hr|img|input|meta|link)([^>]*)>/gi, (_match, tagName: string, attrs: string) => {
+    const trimmedAttrs = attrs.trimEnd()
+    if (trimmedAttrs.endsWith('/')) {
+      return `<${tagName}${trimmedAttrs}>`
+    }
+    return `<${tagName}${attrs} />`
+  })
+}
+
+function sanitizeMarkup(
+  html: string,
+  options: {
+    useHtmlProfile: boolean
+    useSvgProfile: boolean
+    forbidTags: string[]
+    forbidAttrs?: string[]
+    addAttrs?: string[]
+    addTags?: string[]
+    parserMediaType?: DOMParserSupportedType
+    serialize?: (doc: Document) => string
+  }
+) {
+  const purified = DOMPurify.sanitize(html, {
+    USE_PROFILES: { html: options.useHtmlProfile, svg: options.useSvgProfile },
+    FORBID_TAGS: options.forbidTags,
+    FORBID_ATTR: options.forbidAttrs,
+    ALLOW_DATA_ATTR: true,
+    ADD_ATTR: options.addAttrs,
+    ADD_TAGS: options.addTags,
+  })
+
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(purified, options.parserMediaType || 'text/html')
+  if (options.serialize) {
+    normalizeSanitizedDocument(doc)
+    return options.serialize(doc)
+  }
+  return normalizeSanitizedDocument(doc)
+}
+
+export function sanitizeRenderedHtml(html: string) {
+  return sanitizeMarkup(html, {
+    useHtmlProfile: true,
+    useSvgProfile: true,
+    forbidTags: FORBID_TAGS,
+    forbidAttrs: FORBID_ATTR,
+    addAttrs: ['target', 'rel'],
+    parserMediaType: 'text/html',
+  })
+}
+
+export function sanitizeRenderedSvg(svg: string) {
+  const preservedForeignObjects: string[] = []
+  const svgWithPlaceholders = svg.replace(/<foreignObject\b([^>]*)>[\s\S]*?<\/foreignObject>/gi, (match, attrs: string) => {
+    const innerMatch = match.match(/^<foreignObject\b[^>]*>([\s\S]*?)<\/foreignObject>$/i)
+    preservedForeignObjects.push(innerMatch?.[1] || '')
+    const placeholderIndex = preservedForeignObjects.length - 1
+    return `<foreignObject${attrs} ${SVG_PLACEHOLDER_ATTR}="${placeholderIndex}"></foreignObject>`
+  })
+
+  const purified = sanitizeMarkup(svgWithPlaceholders, {
+    useHtmlProfile: true,
+    useSvgProfile: true,
+    forbidTags: SVG_FORBID_TAGS,
+    addTags: ['foreignObject'],
+    addAttrs: [SVG_PLACEHOLDER_ATTR],
+    parserMediaType: 'image/svg+xml',
+    serialize: (doc) => doc.documentElement.outerHTML,
+  })
+
+  return purified.replace(
+    new RegExp(`<foreignObject([^>]*) ${SVG_PLACEHOLDER_ATTR}="(\\d+)"([^>]*)(?:><\\/foreignObject>|\\s*\\/>)`, 'gi'),
+    (_match, beforeAttrs: string, indexText: string, afterAttrs: string) => {
+      const foreignObjectIndex = Number.parseInt(indexText, 10)
+      const originalInner = preservedForeignObjects[foreignObjectIndex] || ''
+      const sanitizedInner = convertHtmlFragmentToXhtml(sanitizeForeignObjectFragment(originalInner))
+      return `<foreignObject${beforeAttrs}${afterAttrs}>${sanitizedInner}</foreignObject>`
+    }
+  )
 }
 
 export default sanitizeRenderedHtml

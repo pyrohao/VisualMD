@@ -48,6 +48,7 @@ import {
   resolveLocalHtmlImageSources,
 } from '@/lib/local-image-resolution'
 import { renderMarkdownToSanitizedHtml } from '@/lib/render-markdown-html'
+import { useMermaidEnhancement } from '@/hooks/use-mermaid-enhancement'
 import { toast } from '@/hooks/use-toast'
 import { Button } from '@/components/ui/button'
 
@@ -242,6 +243,27 @@ function getThemeStyles(theme: ThemeMode): string {
       border-radius: 0.5rem;
       margin: 1.5rem 0;
       box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+    }
+    .markdown-body .mermaid-diagram {
+      margin: 1.5rem 0;
+      overflow-x: auto;
+      border: 1px solid ${config.border};
+      border-radius: 0.75rem;
+      background-color: ${config.card};
+      padding: 1rem;
+    }
+    .markdown-body .mermaid-diagram svg {
+      display: block;
+      max-width: 100%;
+      height: auto;
+      margin: 0 auto;
+    }
+    .markdown-body .mermaid-error {
+      margin: 1rem 0 0.5rem;
+      border-left: 3px solid ${config.warning};
+      padding-left: 0.75rem;
+      color: ${config.warning};
+      font-size: 0.875rem;
     }
     .markdown-body table {
       width: 100%;
@@ -496,6 +518,12 @@ export function MarkdownPreview() {
   const persistedEditContentRef = useRef(persistedEditContent)
   const themeConfig = mounted ? getThemeConfig() : themeConfigs.light
   const { t, currentLanguage } = useTranslation()
+  const mermaidErrorMessage = currentLanguage === 'zh'
+    ? 'Mermaid 图表渲染失败，已回退为原始代码块。'
+    : 'Mermaid rendering failed. Falling back to the code block.'
+
+  useMermaidEnhancement(previewArticleRef, mode === 'preview' ? html : '', theme, mermaidErrorMessage)
+  useMermaidEnhancement(livePreviewArticleRef, mode === 'live' ? html : '', theme, mermaidErrorMessage)
 
   useEffect(() => {
     setMounted(true)

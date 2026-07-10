@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it } from 'vitest'
-import { sanitizeRenderedHtml } from '@/lib/safe-html'
+import { sanitizeRenderedHtml, sanitizeRenderedSvg } from '@/lib/safe-html'
 
 describe('sanitizeRenderedHtml', () => {
   it('removes script tags entirely', () => {
@@ -95,5 +95,79 @@ describe('sanitizeRenderedHtml', () => {
 
     expect(sanitized).toContain('<a>payload</a>')
     expect(sanitized).toContain('<img src="data:image/svg+xml;base64,PHN2Zy8+" alt="vector">')
+  })
+
+  it('sanitizes rendered svg while preserving safe styling markup', () => {
+    const svg = [
+      '<svg onload="alert(1)">',
+      '<style>.node{fill:#fff;}</style>',
+      '<foreignObject><div xmlns="http://www.w3.org/1999/xhtml" onclick="alert(1)">safe<br/>label</div></foreignObject>',
+      '<g style="fill:#000"><text>Hello</text></g>',
+      '</svg>',
+    ].join('')
+
+    const sanitized = sanitizeRenderedSvg(svg)
+
+    expect(sanitized).toContain('<svg>')
+    expect(sanitized).toContain('<style>.node{fill:#fff;}</style>')
+    expect(sanitized).toContain('<foreignObject><div xmlns="http://www.w3.org/1999/xhtml">safe<br />label</div></foreignObject>')
+    expect(sanitized).toContain('<g style="fill:#000"><text>Hello</text></g>')
+    expect(sanitized).not.toContain('onload')
+    expect(sanitized).not.toContain('onclick')
+  })
+
+  it('preserves multi-node flowchart labels inside multiple foreignObject blocks', () => {
+    const svg = [
+      '<svg xmlns="http://www.w3.org/2000/svg">',
+      '<g class="nodes">',
+      '<foreignObject width="120" height="40"><div xmlns="http://www.w3.org/1999/xhtml"><span class="nodeLabel"><p>📄 .ts 文件<br/>TypeScript源码</p></span></div></foreignObject>',
+      '<foreignObject width="120" height="24"><div xmlns="http://www.w3.org/1999/xhtml"><span class="nodeLabel"><p>⚙️ tsc 编译器</p></span></div></foreignObject>',
+      '<foreignObject width="140" height="40"><div xmlns="http://www.w3.org/1999/xhtml"><span class="nodeLabel"><p>🔍 类型检查<br/>(编译时)</p></span></div></foreignObject>',
+      '</g>',
+      '</svg>',
+    ].join('')
+
+    const sanitized = sanitizeRenderedSvg(svg)
+
+    expect(sanitized).toContain('📄 .ts 文件')
+    expect(sanitized).toContain('TypeScript源码')
+    expect(sanitized).toContain('⚙️ tsc 编译器')
+    expect(sanitized).toContain('🔍 类型检查')
+    expect(sanitized).toContain('(编译时)')
+    expect((sanitized.match(/<foreignObject/g) || []).length).toBe(3)
+  })
+
+  it('preserves sequence diagram text nodes and strips inline event handlers', () => {
+    const svg = [
+      '<svg xmlns="http://www.w3.org/2000/svg">',
+      '<g class="actors"><text onclick="alert(1)"><tspan>Alice</tspan></text><text><tspan>Bob</tspan></text></g>',
+      '<g class="messages"><text><tspan>Hello Bob</tspan></text><text><tspan>Hi Alice</tspan></text></g>',
+      '</svg>',
+    ].join('')
+
+    const sanitized = sanitizeRenderedSvg(svg)
+
+    expect(sanitized).toContain('<tspan>Alice</tspan>')
+    expect(sanitized).toContain('<tspan>Bob</tspan>')
+    expect(sanitized).toContain('<tspan>Hello Bob</tspan>')
+    expect(sanitized).toContain('<tspan>Hi Alice</tspan>')
+    expect(sanitized).not.toContain('onclick')
+  })
+
+  it('preserves ER diagram entity labels and relationship text', () => {
+    const svg = [
+      '<svg xmlns="http://www.w3.org/2000/svg">',
+      '<g class="er entityBox"><text><tspan>User</tspan></text><text><tspan>id PK</tspan></text><text><tspan>name</tspan></text></g>',
+      '<g class="er relationshipLabel"><text><tspan>places</tspan></text></g>',
+      '<g class="er entityBox"><text><tspan>Order</tspan></text><text><tspan>id PK</tspan></text><text><tspan>user_id FK</tspan></text></g>',
+      '</svg>',
+    ].join('')
+
+    const sanitized = sanitizeRenderedSvg(svg)
+
+    expect(sanitized).toContain('<tspan>User</tspan>')
+    expect(sanitized).toContain('<tspan>Order</tspan>')
+    expect(sanitized).toContain('<tspan>places</tspan>')
+    expect(sanitized).toContain('<tspan>user_id FK</tspan>')
   })
 })

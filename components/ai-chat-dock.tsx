@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowUp,
   Check,
@@ -50,6 +50,7 @@ import {
 } from '@/components/ui/select'
 import { toast } from '@/hooks/use-toast'
 import { renderMarkdownToSanitizedHtml } from '@/lib/render-markdown-html'
+import { useMermaidEnhancement } from '@/hooks/use-mermaid-enhancement'
 
 type DockView = 'history' | 'conversation'
 
@@ -187,6 +188,27 @@ function getChatMarkdownStyles(
       background-color: ${themeConfig.code};
       color: ${themeConfig.heading};
     }
+    .ai-chat-markdown .mermaid-diagram {
+      margin: 0.5rem 0;
+      overflow-x: auto;
+      border: 1px solid ${themeConfig.border};
+      border-radius: 0.85rem;
+      background-color: ${themeConfig.background};
+      padding: 0.75rem;
+    }
+    .ai-chat-markdown .mermaid-diagram svg {
+      display: block;
+      max-width: 100%;
+      height: auto;
+      margin: 0 auto;
+    }
+    .ai-chat-markdown .mermaid-error {
+      margin: 0.4rem 0;
+      border-left: 3px solid ${themeConfig.warning};
+      padding-left: 0.7rem;
+      color: ${themeConfig.warning};
+      font-size: 0.82rem;
+    }
   `
 }
 
@@ -197,9 +219,16 @@ function ChatMarkdownMessage({
   content: string
   className?: string
 }) {
-  const { getThemeConfig } = useThemeStore()
+  const { getThemeConfig, theme } = useThemeStore()
+  const { currentLanguage } = useTranslation()
   const themeConfig = getThemeConfig()
   const [html, setHtml] = useState('')
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const mermaidErrorMessage = currentLanguage === 'zh'
+    ? 'Mermaid 图表渲染失败，已回退为原始代码块。'
+    : 'Mermaid rendering failed. Falling back to the code block.'
+
+  useMermaidEnhancement(containerRef, html, theme, mermaidErrorMessage)
 
   useEffect(() => {
     let cancelled = false
@@ -226,7 +255,11 @@ function ChatMarkdownMessage({
   return (
     <>
       <style>{getChatMarkdownStyles(themeConfig)}</style>
-      <div className={`ai-chat-markdown min-w-0 ${className || ''}`} dangerouslySetInnerHTML={{ __html: html }} />
+      <div
+        ref={containerRef}
+        className={`ai-chat-markdown min-w-0 ${className || ''}`}
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
     </>
   )
 }
