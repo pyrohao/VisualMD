@@ -176,6 +176,22 @@ function getStatusLabel(status: GitWorktreeStatus | undefined) {
   return badge
 }
 
+function getDirectoryStatusLabel(status: GitWorktreeStatus | undefined) {
+  if (!hasAnyDisplayedStatus(status)) {
+    return null
+  }
+
+  return '•'
+}
+
+function getDirectoryStatusTitle(t: (key: string) => string, status: GitWorktreeStatus | undefined) {
+  if (!hasAnyDisplayedStatus(status)) {
+    return null
+  }
+
+  return t('git.folderHasUncommittedChanges')
+}
+
 function getNodeColor(status: GitWorktreeStatus | undefined, themeConfig: typeof themeConfigs.light) {
   if (shouldColorAsAdded(status)) return themeConfig.primary
   if (shouldColorAsModified(status)) return themeConfig.text
@@ -244,7 +260,8 @@ function GitWorktreeNode({
         const isExpanded = expandedPaths.includes(normalizedPath)
         const isActive = currentPath === normalizedPath
         const status = statusByPath[normalizedPath]
-        const statusBadge = getStatusLabel(status)
+        const statusBadge = isDir ? getDirectoryStatusLabel(status) : getStatusLabel(status)
+        const statusTitle = isDir ? getDirectoryStatusTitle(t, status) : getStatusTitle(status)
         const itemColor = getNodeColor(status, themeConfig) || getStatusColor(status, themeConfig)
 
         return (
@@ -295,8 +312,8 @@ function GitWorktreeNode({
                   <span
                     className="w-6 shrink-0 whitespace-pre text-right font-mono text-[11px] font-medium leading-none"
                     style={{ color: itemColor }}
-                    title={getStatusTitle(status) || undefined}
-                    aria-label={getStatusTitle(status) || undefined}
+                    title={statusTitle || undefined}
+                    aria-label={statusTitle || undefined}
                     aria-live="polite"
                   >
                     {statusBadge}
@@ -593,7 +610,7 @@ export function GitWorktreePanel() {
     const hasWorktreeNode = Object.prototype.hasOwnProperty.call(worktreeView.treeByPath, normalizedPath)
     const worktreeStatus = worktreeView.statusByPath[normalizedPath]
 
-    if (!hasRemoteTreeNode && hasWorktreeNode && shouldAutoExpandLocalDirectory(worktreeStatus)) {
+    if (!hasRemoteTreeNode && hasWorktreeNode) {
       useGitStore.setState((state) => ({
         expandedPaths: [...state.expandedPaths, normalizedPath],
       }))

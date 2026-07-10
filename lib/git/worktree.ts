@@ -143,6 +143,77 @@ function removeTreeEntry(treeByPath: Record<string, GitTreeItem[]>, targetPath: 
   }
 }
 
+function pathMatchesOrIsNested(candidatePath: string, targetPath: string) {
+  const normalizedCandidatePath = normalizeGitPath(candidatePath)
+  const normalizedTargetPath = normalizeGitPath(targetPath)
+
+  return (
+    normalizedCandidatePath === normalizedTargetPath ||
+    normalizedCandidatePath.startsWith(`${normalizedTargetPath}/`)
+  )
+}
+
+function directoryHasRemainingRemoteDescendants(
+  remoteSnapshotEntries: Record<string, GitRemoteSnapshotEntry>,
+  locallyRemovedPaths: Set<string>,
+  directoryPath: string
+) {
+  const normalizedDirectoryPath = normalizeGitPath(directoryPath)
+
+  return Object.values(remoteSnapshotEntries).some((entry) => {
+    if (entry.type !== 'file') {
+      return false
+    }
+
+    const normalizedPath = normalizeGitPath(entry.path)
+    if (!normalizedPath.startsWith(`${normalizedDirectoryPath}/`)) {
+      return false
+    }
+
+    return !Array.from(locallyRemovedPaths).some((removedPath) => (
+      pathMatchesOrIsNested(normalizedPath, removedPath)
+    ))
+  })
+}
+
+function pruneTransientEmptyDirectories(
+  treeByPath: Record<string, GitTreeItem[]>,
+  remoteSnapshotEntries: Record<string, GitRemoteSnapshotEntry>,
+  preservedEmptyDirectoryPaths: Set<string>,
+  locallyRemovedPaths: Set<string>,
+  path = ''
+) {
+  const items = treeByPath[path] || []
+  const nextItems: GitTreeItem[] = []
+
+  items.forEach((item) => {
+    if (item.type === 'dir') {
+      pruneTransientEmptyDirectories(
+        treeByPath,
+        remoteSnapshotEntries,
+        preservedEmptyDirectoryPaths,
+        locallyRemovedPaths,
+        item.path
+      )
+
+      const normalizedItemPath = normalizeGitPath(item.path)
+      const childItems = treeByPath[normalizedItemPath] || []
+      const keepEmptyDirectory =
+        preservedEmptyDirectoryPaths.has(normalizedItemPath) ||
+        directoryHasRemainingRemoteDescendants(remoteSnapshotEntries, locallyRemovedPaths, normalizedItemPath)
+
+      if (!childItems.length && !keepEmptyDirectory) {
+        delete treeByPath[normalizedItemPath]
+        return
+      }
+    }
+
+    nextItems.push(item)
+  })
+
+  setTreeItems(treeByPath, path, nextItems)
+}
+
 function applyIndexStatus(statusByPath: Record<string, GitWorktreeStatus>, targetPath: string, status: GitIndexStatus) {
   const normalizedPath = normalizeGitPath(targetPath)
   statusByPath[normalizedPath] = {
@@ -209,12 +280,16 @@ export function buildGitWorktreeView(state: WorktreeOverlayState): GitWorktreeVi
       .filter((item) => item.kind === 'git-asset')
       .map((item) => normalizeGitPath(item.repoPath))
   )
-  const stagedCreatedFolderPaths = new Set(
-    state.stagedChanges
+  const preservedEmptyDirectoryPaths = new Set(
+    [...state.pendingStructuralChanges, ...state.stagedChanges]
       .filter((item) => item.kind === 'git-create-folder')
       .map((item) => normalizeGitPath(item.repoPath))
   )
-
+  const locallyRemovedPaths = new Set(
+    [...state.pendingStructuralChanges, ...state.stagedChanges]
+      .filter((item) => item.kind === 'git-delete-file' || item.kind === 'git-delete-folder')
+      .map((item) => normalizeGitPath(item.repoPath))
+  )
   Object.values(state.drafts).forEach((draft) => {
     const normalizedPath = normalizeGitPath(draft.path)
     const stagedDraft = stagedDraftByDocumentId.get(draft.documentId)
@@ -262,12 +337,6 @@ export function buildGitWorktreeView(state: WorktreeOverlayState): GitWorktreeVi
   ))].forEach((change) => {
     if (change.kind === 'git-create-folder') {
       upsertTreeEntry(nextTreeByPath, change.repoPath, 'dir')
-      if (stagedCreatedFolderPaths.has(normalizeGitPath(change.repoPath))) {
-        applyIndexStatus(statusByPath, change.repoPath, 'added')
-        return
-      }
-
-      applyWorktreeStatus(statusByPath, change.repoPath, 'untracked')
       return
     }
 
@@ -290,6 +359,15 @@ export function buildGitWorktreeView(state: WorktreeOverlayState): GitWorktreeVi
   Object.keys(statusByPath).forEach((path) => {
     markAncestorDirectories(statusByPath, path)
   })
+
+  if (locallyRemovedPaths.size > 0) {
+    pruneTransientEmptyDirectories(
+      nextTreeByPath,
+      state.remoteSnapshotEntries,
+      preservedEmptyDirectoryPaths,
+      locallyRemovedPaths
+    )
+  }
 
   return {
     treeByPath: nextTreeByPath,

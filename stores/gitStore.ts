@@ -188,6 +188,22 @@ function getFolderPlaceholderPath(path: string) {
   return joinGitPath(normalizeGitPath(path), '.gitkeep')
 }
 
+function folderHasNestedPaths(folderPath: string, candidatePaths: Iterable<string>) {
+  const normalizedFolderPath = normalizeGitPath(folderPath)
+  for (const candidatePath of candidatePaths) {
+    const normalizedCandidatePath = normalizeGitPath(candidatePath)
+    if (normalizedCandidatePath.startsWith(`${normalizedFolderPath}/`)) {
+      return true
+    }
+  }
+
+  return false
+}
+
+function isGitCommittableStructuralChange(change: StagedGitChange) {
+  return change.kind === 'git-delete-file' || change.kind === 'git-delete-folder'
+}
+
 function isGitPathWithinFolder(candidatePath: string, folderPath: string) {
   const normalizedCandidatePath = normalizeGitPath(candidatePath)
   const normalizedFolderPath = normalizeGitPath(folderPath)
@@ -829,6 +845,7 @@ function buildRenamedGitDraft(
       documentId: nextDocumentId,
       path: normalizedNextPath,
       name: nextName,
+      renamedFromPath: sourceDraft.renamedFromPath ?? sourceDraft.path,
       provider: config.provider,
       repo: config.repo,
       ownerOrNamespace: config.ownerOrNamespace,
@@ -892,6 +909,7 @@ async function loadRemoteFolderSubtree(
   const visited = new Set<string>()
   const dirPaths = new Set<string>([normalizedRootPath])
   const fileItems: GitTreeItem[] = []
+  const placeholderShaByDirPath: Record<string, string> = {}
 
   while (queue.length > 0) {
     const currentPath = normalizeGitPath(queue.shift() || '')
@@ -903,6 +921,9 @@ async function loadRemoteFolderSubtree(
     const items = await client.listTree(config, currentPath)
     for (const item of items) {
       if (item.name === '.gitkeep') {
+        if (item.type === 'file' && typeof item.sha === 'string') {
+          placeholderShaByDirPath[currentPath] = item.sha
+        }
         continue
       }
 
@@ -922,6 +943,46 @@ async function loadRemoteFolderSubtree(
   return {
     dirPaths: Array.from(dirPaths).sort((a, b) => a.localeCompare(b)),
     fileItems,
+    placeholderShaByDirPath,
+  }
+}
+
+function buildRemoteFolderSubtreeFromSnapshot(
+  remoteSnapshotEntries: Record<string, GitRemoteSnapshotEntry>,
+  rootPath: string
+) {
+  const normalizedRootPath = normalizeGitPath(rootPath)
+  const rootEntry = remoteSnapshotEntries[normalizedRootPath]
+  if (!rootEntry || rootEntry.type !== 'dir') {
+    return null
+  }
+
+  const dirPaths = new Set<string>([normalizedRootPath])
+  const fileItems: GitTreeItem[] = []
+
+  Object.values(remoteSnapshotEntries).forEach((entry) => {
+    const normalizedEntryPath = normalizeGitPath(entry.path)
+    if (!normalizedEntryPath.startsWith(`${normalizedRootPath}/`)) {
+      return
+    }
+
+    if (entry.type === 'dir') {
+      dirPaths.add(normalizedEntryPath)
+      return
+    }
+
+    fileItems.push({
+      path: normalizedEntryPath,
+      name: entry.name,
+      type: 'file',
+      sha: entry.sha,
+    })
+  })
+
+  return {
+    dirPaths: Array.from(dirPaths).sort((a, b) => a.localeCompare(b)),
+    fileItems: fileItems.sort((left, right) => left.path.localeCompare(right.path)),
+    placeholderShaByDirPath: {} as Record<string, string>,
   }
 }
 
@@ -1253,12 +1314,22 @@ function sanitizePersistedWorkspaceState(input: unknown): GitWorkspaceState {
     typeof state.currentDocumentId === 'string' && drafts[state.currentDocumentId]
       ? state.currentDocumentId
       : null
+  const stagedChanges = sanitizePersistedStagedChanges(state.stagedChanges, drafts)
+  const pendingStructuralChanges = sanitizePersistedPendingStructuralChanges(state.pendingStructuralChanges)
+  const stagedCreateFolders = stagedChanges.filter((item) => item.kind === 'git-create-folder')
+  const normalizedPendingStructuralChanges = [
+    ...pendingStructuralChanges,
+    ...stagedCreateFolders.filter((item, index, list) => (
+      !pendingStructuralChanges.some((pending) => pending.id === item.id) &&
+      list.findIndex((candidate) => candidate.id === item.id) === index
+    )),
+  ]
 
   return {
     drafts,
-    stagedChanges: sanitizePersistedStagedChanges(state.stagedChanges, drafts),
+    stagedChanges: stagedChanges.filter((item) => item.kind !== 'git-create-folder'),
     pendingAssetChanges: sanitizePersistedPendingAssetChanges(state.pendingAssetChanges),
-    pendingStructuralChanges: sanitizePersistedPendingStructuralChanges(state.pendingStructuralChanges),
+    pendingStructuralChanges: normalizedPendingStructuralChanges,
     currentDocumentId,
     expandedPaths: sanitizePersistedExpandedPaths(state.expandedPaths),
     pendingCommitMessage: typeof state.pendingCommitMessage === 'string' ? state.pendingCommitMessage : null,
@@ -2035,7 +2106,7 @@ export const useGitStore = create<GitStore>()(
 
           const runtimeConfig = toRuntimeConfig(get().config)
           const client = getGitProviderClient(runtimeConfig)
-          const { dirPaths, fileItems } = await loadRemoteFolderSubtree(client, runtimeConfig, normalizedPath)
+          const { dirPaths, fileItems, placeholderShaByDirPath } = await loadRemoteFolderSubtree(client, runtimeConfig, normalizedPath)
           const deleteTimestamp = Date.now()
           const removedPureLocalDrafts = Object.values(get().drafts).filter((draft) => (
             draft.isNew && isGitPathWithinFolder(draft.path, normalizedPath)
@@ -2080,6 +2151,7 @@ export const useGitStore = create<GitStore>()(
                 kind: 'git-delete-folder',
                 label: getGitFileName(dirPath),
                 repoPath: normalizeGitPath(dirPath),
+                originalSha: placeholderShaByDirPath[normalizeGitPath(dirPath)],
                 shelvedDrafts: normalizeGitPath(dirPath) === normalizedPath ? shelvedDrafts : undefined,
                 shelvedStagedChanges: normalizeGitPath(dirPath) === normalizedPath ? shelvedStagedChanges : undefined,
                 shelvedPendingAssetChanges: normalizeGitPath(dirPath) === normalizedPath ? shelvedPendingAssetChanges : undefined,
@@ -2219,7 +2291,7 @@ export const useGitStore = create<GitStore>()(
         stagePendingStructuralChange: (changeId) => {
           set((state) => {
             const change = state.pendingStructuralChanges.find((item) => item.id === changeId)
-            if (!change) {
+            if (!change || change.kind === 'git-create-folder') {
               return state
             }
 
@@ -3594,21 +3666,20 @@ export const useGitStore = create<GitStore>()(
                 }
 
                 if (change.kind === 'git-delete-folder') {
+                  if (!change.originalSha) {
+                    continue
+                  }
+
                   batchActions.push({
                     kind: 'delete',
                     path: getFolderPlaceholderPath(change.repoPath),
+                    previousSha: change.originalSha,
                   })
                   continue
                 }
 
                 if (change.kind === 'git-create-folder') {
-                  batchActions.push({
-                    kind: 'upsert',
-                    path: getFolderPlaceholderPath(change.repoPath),
-                    content: '',
-                    encoding: 'text',
-                    isCreate: true,
-                  })
+                  continue
                 }
               }
 
@@ -3746,7 +3817,7 @@ export const useGitStore = create<GitStore>()(
             for (let attempt = 0; attempt < 2; attempt += 1) {
               const attemptState = buildCommitAttemptState()
               if (!attemptState.batchActions.length) {
-                throw new Error('No staged changes to commit')
+                throw new Error('Empty folders are local-only until they contain tracked files')
               }
 
               const canContinue = await prepareMergedDraftsForCommit(
@@ -3946,6 +4017,23 @@ export const useGitStore = create<GitStore>()(
           const nextPath = normalizeGitPath(newPath)
           const oldDocumentId = buildGitDocumentId(config, normalizedOld)
           const nextDocumentId = buildGitDocumentId(config, nextPath)
+          const hasLocalFolderOverlay =
+            Object.values(drafts).some((draft) => (
+              normalizeGitPath(draft.path) !== normalizedOld &&
+              isGitPathWithinFolder(draft.path, normalizedOld)
+            )) ||
+            pendingAssetChanges.some((item) => (
+              normalizeGitPath(item.repoPath) !== normalizedOld &&
+              isGitPathWithinFolder(item.repoPath, normalizedOld)
+            )) ||
+            pendingStructuralChanges.some((item) => (
+              normalizeGitPath(item.repoPath) !== normalizedOld &&
+              isGitPathWithinFolder(item.repoPath, normalizedOld)
+            )) ||
+            stagedChanges.some((item) => (
+              normalizeGitPath(item.repoPath) !== normalizedOld &&
+              isGitPathWithinFolder(item.repoPath, normalizedOld)
+            ))
           if (!normalizedOld || !nextPath) {
             set({ error: 'Source and target path are required for rename' })
             throw new Error('Source and target path are required for rename')
@@ -3957,6 +4045,7 @@ export const useGitStore = create<GitStore>()(
           const isFolderRename =
             Object.prototype.hasOwnProperty.call(treeByPath, normalizedOld) ||
             remoteSnapshotEntries[normalizedOld]?.type === 'dir' ||
+            hasLocalFolderOverlay ||
             pendingStructuralChanges.some((item) => (
               item.kind === 'git-create-folder' &&
               normalizeGitPath(item.repoPath) === normalizedOld
@@ -3967,12 +4056,13 @@ export const useGitStore = create<GitStore>()(
             ))
 
           if (isFolderRename) {
+            const subtreeDrafts = Object.values(drafts).filter((draft) => isGitPathWithinFolder(draft.path, normalizedOld))
+
             if (nextPath.startsWith(`${normalizedOld}/`)) {
               set({ error: 'Cannot rename a folder into one of its own descendants' })
               throw new Error('Cannot rename a folder into one of its own descendants')
             }
 
-            const subtreeDrafts = Object.values(drafts).filter((draft) => isGitPathWithinFolder(draft.path, normalizedOld))
             if (subtreeDrafts.some((draft) => draft.hasConflict)) {
               set({ error: 'Resolve all conflicted files inside the folder before renaming it' })
               throw new Error('Resolve all conflicted files inside the folder before renaming it')
@@ -4015,8 +4105,11 @@ export const useGitStore = create<GitStore>()(
             const remoteFolderExists =
               Object.prototype.hasOwnProperty.call(treeByPath, normalizedOld) ||
               remoteSnapshotEntries[normalizedOld]?.type === 'dir'
+            const snapshotSubtree = remoteFolderExists
+              ? buildRemoteFolderSubtreeFromSnapshot(remoteSnapshotEntries, normalizedOld)
+              : null
             const remoteSubtree = remoteFolderExists
-              ? await loadRemoteFolderSubtree(client, runtimeConfig, normalizedOld)
+              ? (snapshotSubtree ?? await loadRemoteFolderSubtree(client, runtimeConfig, normalizedOld))
               : { dirPaths: [normalizedOld], fileItems: [] as GitTreeItem[] }
             const movedSubtreeDrafts = subtreeDrafts.filter((draft) => !shouldSkipFolderMovePath(draft.path))
             const localOnlyDrafts = movedSubtreeDrafts.filter((draft) => (
@@ -4133,6 +4226,10 @@ export const useGitStore = create<GitStore>()(
                   repoPath: replaceGitPathPrefix(item.repoPath, normalizedOld, nextPath),
                   updatedAt: renameTimestamp,
                 }))
+                .filter((item) => !folderHasNestedPaths(
+                  item.repoPath,
+                  Array.from(nextDraftEntries.values()).map((draft) => draft.path)
+                ))
 
               const deleteFileEntries = oldPathsToDelete.map((entry) => ({
                 id: `git-delete-file:${entry.path}`,
@@ -4191,6 +4288,10 @@ export const useGitStore = create<GitStore>()(
                   repoPath: replaceGitPathPrefix(item.repoPath, normalizedOld, nextPath),
                   updatedAt: renameTimestamp,
                 }))
+                .filter((item) => !folderHasNestedPaths(
+                  item.repoPath,
+                  Array.from(nextDraftEntries.values()).map((draft) => draft.path)
+                ))
 
               return {
                 drafts: nextDrafts,

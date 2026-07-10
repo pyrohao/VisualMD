@@ -289,6 +289,7 @@ export interface Translations {
     availableBranches: string
     repositoryTree: string
     workingTree: string
+    folderHasUncommittedChanges: string
     sourceControl: string
     notConnected: string
     connectFirst: string
@@ -360,6 +361,9 @@ export interface Translations {
     stageToGitDescription: string
     stageConfirm: string
     discard: string
+    restoreDeleted: string
+    restoreDeletedDescription: string
+    discardDescription: string
     stagedToGit: string
     binaryReadonly: string
     binaryReadonlyHint: string
@@ -684,6 +688,7 @@ export const translations: Record<Language, Translations> = {
       availableBranches: '分支',
       repositoryTree: '仓库文件',
       workingTree: '工作区',
+      folderHasUncommittedChanges: '此文件夹存在未提交变更',
       sourceControl: '源代码管理',
       notConnected: '未连接',
       connectFirst: '请先连接仓库',
@@ -755,6 +760,9 @@ export const translations: Record<Language, Translations> = {
       stageToGitDescription: '输入此文件在仓库中的目标路径',
       stageConfirm: '暂存',
       discard: '丢弃变更',
+      restoreDeleted: '恢复删除',
+      restoreDeletedDescription: '将恢复 {count} 项删除操作，此操作不可撤销。',
+      discardDescription: '将丢弃 {count} 项未提交变更，此操作不可撤销。',
       stagedToGit: '已暂存到 Git',
       binaryReadonly: '该 Git 文件为二进制内容，当前以只读方式打开。',
       binaryReadonlyHint: '请在右侧预览面板查看实际内容。',
@@ -1075,6 +1083,7 @@ export const translations: Record<Language, Translations> = {
       availableBranches: 'Branches',
       repositoryTree: 'Repository Tree',
       workingTree: 'Working Tree',
+      folderHasUncommittedChanges: 'This folder has uncommitted changes',
       sourceControl: 'Source Control',
       notConnected: 'Not connected',
       connectFirst: 'Connect a repository first',
@@ -1146,6 +1155,9 @@ export const translations: Record<Language, Translations> = {
       stageToGitDescription: 'Enter repository path for this file',
       stageConfirm: 'Stage',
       discard: 'Discard Changes',
+      restoreDeleted: 'Restore Deleted',
+      restoreDeletedDescription: 'This will restore {count} deleted change{countPlural} and cannot be undone.',
+      discardDescription: 'This will discard {count} uncommitted change{countPlural} and cannot be undone.',
       stagedToGit: 'Staged to Git',
       binaryReadonly: 'This Git file contains binary content and is opened in read-only mode.',
       binaryReadonlyHint: 'Use the preview panel on the right to inspect the actual content.',

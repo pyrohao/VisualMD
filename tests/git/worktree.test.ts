@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildGitWorktreeView, hasGitRemoteSnapshotPath } from '@/lib/git/worktree'
 import type { GitDraftFile, GitTreeItem, StagedGitChange } from '@/lib/git/types'
+import { buildGitDocumentId } from '@/lib/git/utils'
 
 function createDraft(overrides: Partial<GitDraftFile>): GitDraftFile {
   return {
@@ -167,7 +168,7 @@ describe('buildGitWorktreeView', () => {
     })
   })
 
-  it('shows pending assets and created folders in the worktree', () => {
+  it('shows pending assets and local empty folders in the worktree without assigning git status to the folders', () => {
     const result = buildGitWorktreeView({
       treeByPath: { '': [] },
       remoteSnapshotEntries: {},
@@ -195,7 +196,7 @@ describe('buildGitWorktreeView', () => {
     expect(result.treeByPath[''].map((item) => item.path)).toEqual(['assets', 'docs'])
     expect(result.treeByPath.assets?.map((item) => item.path)).toContain('assets/logo.png')
     expect(result.statusByPath['assets/logo.png']).toEqual({ worktree: 'untracked' })
-    expect(result.statusByPath.docs).toEqual({ worktree: 'untracked' })
+    expect(result.statusByPath.docs).toBeUndefined()
   })
 
   it('treats pending assets as modified when the same remote path already exists', () => {
@@ -327,5 +328,103 @@ describe('buildGitWorktreeView', () => {
 
     expect(result.treeByPath['']).toEqual([])
     expect(result.statusByPath['README.md']).toBeUndefined()
+  })
+
+  it('prunes source folders that become empty after local path rewrites remove their last tracked descendant', () => {
+    const result = buildGitWorktreeView({
+      treeByPath: {
+        '': [
+          { path: 'docs', name: 'docs', type: 'dir' },
+        ],
+        docs: [
+          { path: 'docs/guide.md', name: 'guide.md', type: 'file' },
+        ],
+      },
+      remoteSnapshotEntries: {
+        docs: { path: 'docs', name: 'docs', type: 'dir' },
+        'docs/guide.md': { path: 'docs/guide.md', name: 'guide.md', type: 'file', sha: 'sha-guide' },
+      },
+      drafts: {
+        'doc-1': createDraft({
+          documentId: 'doc-1',
+          path: 'guides/guide.md',
+          name: 'guide.md',
+          sha: undefined,
+          originalContent: '# guide',
+          draftContent: '# guide',
+          content: '# guide',
+          isNew: true,
+          fileOrigin: 'local',
+        }),
+      },
+      pendingAssetChanges: [],
+      pendingStructuralChanges: [
+        createChange({
+          id: 'git-delete-file:docs/guide.md',
+          kind: 'git-delete-file',
+          label: 'guide.md',
+          repoPath: 'docs/guide.md',
+          documentId: buildGitDocumentId({
+            provider: 'github',
+            token: 'token',
+            ownerOrNamespace: 'owner',
+            repo: 'repo',
+            branch: 'main',
+            baseUrl: '',
+            customFlavor: 'gitlab',
+          }, 'docs/guide.md'),
+          contentBase64: undefined,
+          originalSha: 'sha-guide',
+        }),
+      ],
+      stagedChanges: [],
+    })
+
+    expect(result.treeByPath[''].map((item) => item.path)).toEqual(['guides'])
+    expect(result.treeByPath.docs).toBeUndefined()
+  })
+
+  it('prunes multi-level remote directories after deleting the only tracked file under them', () => {
+    const result = buildGitWorktreeView({
+      treeByPath: {
+        '': [{ path: 'docs', name: 'docs', type: 'dir' }],
+        docs: [{ path: 'docs/nested', name: 'nested', type: 'dir' }],
+        'docs/nested': [{ path: 'docs/nested/guide.md', name: 'guide.md', type: 'file' }],
+      },
+      remoteSnapshotEntries: {
+        docs: { path: 'docs', name: 'docs', type: 'dir' },
+        'docs/nested': { path: 'docs/nested', name: 'nested', type: 'dir' },
+        'docs/nested/guide.md': { path: 'docs/nested/guide.md', name: 'guide.md', type: 'file', sha: 'sha-guide' },
+      },
+      drafts: {},
+      pendingAssetChanges: [],
+      pendingStructuralChanges: [
+        createChange({
+          id: 'git-delete-file:docs/nested/guide.md',
+          kind: 'git-delete-file',
+          label: 'guide.md',
+          repoPath: 'docs/nested/guide.md',
+          documentId: buildGitDocumentId({
+            provider: 'github',
+            token: 'token',
+            ownerOrNamespace: 'owner',
+            repo: 'repo',
+            branch: 'main',
+            baseUrl: '',
+            customFlavor: 'gitlab',
+          }, 'docs/nested/guide.md'),
+          contentBase64: undefined,
+          originalSha: 'sha-guide',
+        }),
+      ],
+      stagedChanges: [],
+    })
+
+    expect(result.treeByPath['']).toEqual([])
+    expect(result.treeByPath.docs).toBeUndefined()
+    expect(result.treeByPath['docs/nested']).toBeUndefined()
+    expect(result.statusByPath['docs/nested/guide.md']).toEqual({ worktree: 'deleted' })
+    expect(result.statusByPath['docs/nested']).toEqual({ worktree: 'modified' })
+    expect(result.statusByPath.docs).toEqual({ worktree: 'modified' })
   })
 })

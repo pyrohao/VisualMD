@@ -436,4 +436,113 @@ describe('gitStore commit staging semantics', () => {
     )
   })
 
+  it('commits a non-empty folder delete using nested file deletes without sending a redundant folder placeholder delete', async () => {
+    useGitStore.setState({
+      remoteSnapshotFetchedAt: 1,
+      stagedChanges: [
+        {
+          id: 'git-delete-folder:docs',
+          kind: 'git-delete-folder',
+          label: 'docs',
+          repoPath: 'docs',
+          updatedAt: 1,
+        },
+        {
+          id: 'git-delete-file:docs/readme.md',
+          kind: 'git-delete-file',
+          label: 'readme.md',
+          repoPath: 'docs/readme.md',
+          originalSha: 'sha-readme',
+          updatedAt: 1,
+        },
+        {
+          id: 'git-delete-file:docs/nested/api.md',
+          kind: 'git-delete-file',
+          label: 'api.md',
+          repoPath: 'docs/nested/api.md',
+          originalSha: 'sha-api',
+          updatedAt: 1,
+        },
+      ],
+    })
+
+    mockClient.listTree.mockResolvedValue([])
+    mockClient.commitBatch.mockResolvedValue(undefined)
+
+    await useGitStore.getState().commitCurrentFile('delete docs folder')
+
+    expect(mockClient.commitBatch).toHaveBeenCalledWith(
+      expect.any(Object),
+      'delete docs folder',
+      [
+        {
+          kind: 'delete',
+          path: 'docs/readme.md',
+          previousSha: 'sha-readme',
+        },
+        {
+          kind: 'delete',
+          path: 'docs/nested/api.md',
+          previousSha: 'sha-api',
+        },
+      ]
+    )
+  })
+
+  it('commits a folder delete placeholder when the remote directory is backed by a .gitkeep file', async () => {
+    useGitStore.setState({
+      remoteSnapshotFetchedAt: 1,
+      stagedChanges: [
+        {
+          id: 'git-delete-folder:docs',
+          kind: 'git-delete-folder',
+          label: 'docs',
+          repoPath: 'docs',
+          originalSha: 'sha-gitkeep',
+          updatedAt: 1,
+        },
+      ],
+    })
+
+    mockClient.listTree.mockResolvedValue([])
+    mockClient.commitBatch.mockResolvedValue(undefined)
+
+    await useGitStore.getState().commitCurrentFile('delete empty docs folder')
+
+    expect(mockClient.commitBatch).toHaveBeenCalledWith(
+      expect.any(Object),
+      'delete empty docs folder',
+      [
+        {
+          kind: 'delete',
+          path: 'docs/.gitkeep',
+          previousSha: 'sha-gitkeep',
+        },
+      ]
+    )
+  })
+
+  it('rejects commits that only contain empty-folder placeholders because empty folders are local-only', async () => {
+    useGitStore.setState({
+      remoteSnapshotFetchedAt: 1,
+      stagedChanges: [
+        {
+          id: 'git-create-folder:docs',
+          kind: 'git-create-folder',
+          label: 'docs',
+          repoPath: 'docs',
+          updatedAt: 1,
+        },
+      ],
+    })
+
+    mockClient.listTree.mockResolvedValue([])
+
+    await expect(
+      useGitStore.getState().commitCurrentFile('commit empty folder')
+    ).rejects.toThrow('Empty folders are local-only until they contain tracked files')
+
+    expect(mockClient.commitBatch).not.toHaveBeenCalled()
+  })
+
 })

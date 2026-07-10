@@ -387,7 +387,7 @@ describe('gitStore renameFile', () => {
     ).resolves.toBeUndefined()
   })
 
-  it('renames a local-only folder by remapping its child drafts and folder placeholders', async () => {
+  it('renames a local-only non-empty folder by remapping child drafts without leaving a redundant empty-folder placeholder', async () => {
     const oldDocumentId = buildGitDocumentId(config, 'docs/note.md')
     const nextDocumentId = buildGitDocumentId(config, 'guides/note.md')
 
@@ -459,12 +459,7 @@ describe('gitStore renameFile', () => {
       name: 'note.md',
       isNew: true,
     })
-    expect(nextState.pendingStructuralChanges).toEqual([
-      expect.objectContaining({
-        kind: 'git-create-folder',
-        repoPath: 'guides',
-      }),
-    ])
+    expect(nextState.pendingStructuralChanges).toEqual([])
   })
 
   it('renames a remote folder into local overlay file moves instead of writing remote immediately', async () => {
@@ -514,6 +509,63 @@ describe('gitStore renameFile', () => {
         kind: 'git-delete-file',
         repoPath: 'docs/guide.md',
         originalSha: 'sha-guide',
+      }),
+    ])
+  })
+
+  it('renames a remote folder from the local snapshot without reloading the directory tree', async () => {
+    const nextDocumentId = buildGitDocumentId(config, 'guides/guide.md')
+
+    useGitStore.setState({
+      treeByPath: {
+        '': [{ path: 'docs', name: 'docs', type: 'dir' }],
+        docs: [{ path: 'docs/guide.md', name: 'guide.md', type: 'file', sha: 'sha-guide' }],
+      },
+      remoteSnapshotEntries: {
+        docs: { path: 'docs', name: 'docs', type: 'dir' },
+        'docs/guide.md': { path: 'docs/guide.md', name: 'guide.md', type: 'file', sha: 'sha-guide' },
+      },
+    })
+
+    mockClient.getFile.mockResolvedValue({
+      path: 'docs/guide.md',
+      name: 'guide.md',
+      sha: 'sha-guide',
+      content: '# guide',
+    })
+
+    await useGitStore.getState().renameFile('docs', 'guides', 'rename')
+
+    expect(mockClient.listTree).not.toHaveBeenCalled()
+    expect(useGitStore.getState().drafts[nextDocumentId]).toMatchObject({
+      path: 'guides/guide.md',
+      renamedFromPath: 'docs/guide.md',
+    })
+  })
+
+  it('keeps local-only empty folders out of the staged git change list', async () => {
+    useGitStore.setState({
+      pendingStructuralChanges: [
+        {
+          id: 'git-create-folder:docs/empty',
+          kind: 'git-create-folder',
+          label: 'empty',
+          repoPath: 'docs/empty',
+          updatedAt: 1,
+        },
+      ],
+      stagedChanges: [],
+    })
+
+    useGitStore.getState().stagePendingStructuralChange('git-create-folder:docs/empty')
+    const nextState = useGitStore.getState()
+
+    expect(nextState.stagedChanges).toEqual([])
+    expect(nextState.pendingStructuralChanges).toEqual([
+      expect.objectContaining({
+        id: 'git-create-folder:docs/empty',
+        kind: 'git-create-folder',
+        repoPath: 'docs/empty',
       }),
     ])
   })
@@ -695,5 +747,93 @@ describe('gitStore renameFile', () => {
         documentId: nextDocumentId,
       }),
     ]))
+  })
+
+  it('overwrites intermediate state when a remote folder is renamed twice before commit', async () => {
+    const finalDocumentId = buildGitDocumentId(config, 'manual/guide.md')
+
+    useGitStore.setState({
+      treeByPath: {
+        '': [{ path: 'docs', name: 'docs', type: 'dir' }],
+        docs: [{ path: 'docs/guide.md', name: 'guide.md', type: 'file', sha: 'sha-guide' }],
+      },
+      remoteSnapshotEntries: {
+        docs: { path: 'docs', name: 'docs', type: 'dir' },
+        'docs/guide.md': { path: 'docs/guide.md', name: 'guide.md', type: 'file', sha: 'sha-guide' },
+      },
+    })
+
+    mockClient.getFile.mockResolvedValue({
+      path: 'docs/guide.md',
+      name: 'guide.md',
+      sha: 'sha-guide',
+      content: '# guide',
+    })
+
+    await useGitStore.getState().renameFile('docs', 'guides', 'rename')
+    await useGitStore.getState().renameFile('guides', 'manual', 'rename again')
+
+    const nextState = useGitStore.getState()
+    expect(nextState.drafts[buildGitDocumentId(config, 'guides/guide.md')]).toBeUndefined()
+    expect(nextState.drafts[finalDocumentId]).toMatchObject({
+      path: 'manual/guide.md',
+      renamedFromPath: 'docs/guide.md',
+    })
+    expect(nextState.pendingStructuralChanges.filter((item) => item.kind === 'git-delete-file')).toEqual([
+      expect.objectContaining({
+        repoPath: 'docs/guide.md',
+      }),
+    ])
+  })
+
+  it('overwrites intermediate state when a local-only folder is renamed twice before commit', async () => {
+    const oldDocumentId = buildGitDocumentId(config, 'docs/note.md')
+    const finalDocumentId = buildGitDocumentId(config, 'manual/note.md')
+
+    useGitStore.setState({
+      drafts: {
+        [oldDocumentId]: {
+          documentId: oldDocumentId,
+          path: 'docs/note.md',
+          name: 'note.md',
+          sha: undefined,
+          content: 'draft content',
+          originalContent: 'draft content',
+          draftContent: 'draft content changed',
+          isDirty: true,
+          isNew: true,
+          fileOrigin: 'local',
+          status: 'dirty',
+          remoteContent: undefined,
+          remoteSha: undefined,
+          hasRemoteUpdates: false,
+          hasConflict: false,
+          provider: config.provider,
+          repo: config.repo,
+          ownerOrNamespace: config.ownerOrNamespace,
+          branch: config.branch,
+        },
+      },
+      pendingStructuralChanges: [
+        {
+          id: 'git-create-folder:docs',
+          kind: 'git-create-folder',
+          label: 'docs',
+          repoPath: 'docs',
+          updatedAt: 1,
+        },
+      ],
+    })
+
+    await useGitStore.getState().renameFile('docs', 'guides', 'rename')
+    await useGitStore.getState().renameFile('guides', 'manual', 'rename again')
+
+    const nextState = useGitStore.getState()
+    expect(nextState.drafts[buildGitDocumentId(config, 'guides/note.md')]).toBeUndefined()
+    expect(nextState.drafts[finalDocumentId]).toMatchObject({
+      path: 'manual/note.md',
+      renamedFromPath: 'docs/note.md',
+    })
+    expect(nextState.pendingStructuralChanges).toEqual([])
   })
 })

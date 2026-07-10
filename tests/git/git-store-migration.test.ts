@@ -259,4 +259,36 @@ describe('migrateGitStorePersistedState', () => {
     expect(migrated.drafts?.['doc-local']?.fileOrigin).toBe('local')
     expect(migrated.drafts?.['doc-remote']?.fileOrigin).toBe('remote')
   })
+
+  it('downgrades persisted staged empty-folder placeholders back into local worktree folder state', () => {
+    const migrated = migrateGitStorePersistedState({
+      config: {
+        provider: 'github',
+        token: 'plain-token-6',
+        ownerOrNamespace: 'owner',
+        repo: 'repo',
+        branch: 'main',
+      },
+      connected: true,
+      stagedChanges: [
+        {
+          id: 'git-create-folder:docs',
+          kind: 'git-create-folder',
+          label: 'docs',
+          repoPath: 'docs',
+          updatedAt: 1,
+        },
+      ],
+      pendingStructuralChanges: [],
+    }, 7)
+
+    expect(migrated.stagedChanges).toEqual([])
+    expect(migrated.pendingStructuralChanges).toEqual([
+      expect.objectContaining({
+        id: 'git-create-folder:docs',
+        kind: 'git-create-folder',
+        repoPath: 'docs',
+      }),
+    ])
+  })
 })

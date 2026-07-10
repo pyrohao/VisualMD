@@ -85,6 +85,8 @@ type GitChangeOpenTarget =
   | { kind: 'staged'; value: string }
   | { kind: 'pending-structural'; value: string }
 
+type PendingDiscardDialogMode = 'discard' | 'restore'
+
 type GitChangeEntry = {
   key: string
   path: string
@@ -330,7 +332,7 @@ function GitChangeTree({
 
 export function GitPanel() {
   const { getThemeConfig } = useThemeStore()
-  const { t, currentLanguage } = useTranslation()
+  const { t } = useTranslation()
   const [mounted, setMounted] = useState(false)
   const [commitMessage, setCommitMessage] = useState('')
   const [collapsedPendingPaths, setCollapsedPendingPaths] = useState<string[]>([])
@@ -421,7 +423,10 @@ export function GitPanel() {
     [pendingAssetChanges, stagedChangeIdSet]
   )
   const pendingStructuralStageChanges = useMemo(
-    () => pendingStructuralChanges.filter((item) => !stagedChangeIdSet.has(item.id)),
+    () => pendingStructuralChanges.filter((item) => (
+      item.kind !== 'git-create-folder' &&
+      !stagedChangeIdSet.has(item.id)
+    )),
     [pendingStructuralChanges, stagedChangeIdSet]
   )
   const pendingChangeEntries = useMemo<GitChangeEntry[]>(
@@ -459,7 +464,9 @@ export function GitPanel() {
     [pendingDrafts, pendingGitAssetChanges, pendingStructuralStageChanges]
   )
   const stagedChangeEntries = useMemo<GitChangeEntry[]>(
-    () => stagedChanges.map((change) => ({
+    () => stagedChanges
+      .filter((change) => change.kind !== 'git-create-folder')
+      .map((change) => ({
       key: `staged:${change.id}`,
       path: change.repoPath,
       name: change.label,
@@ -477,7 +484,7 @@ export function GitPanel() {
     pendingDrafts.length > 0 ||
     pendingGitAssetChanges.length > 0 ||
     pendingStructuralStageChanges.length > 0
-  const hasCommitCandidates = stagedChanges.length > 0
+  const hasCommitCandidates = stagedChanges.some((change) => change.kind !== 'git-create-folder')
   const hasUnresolvedConflicts = conflictedDrafts.length > 0
   const pendingSummary = (() => {
     const pendingCount = pendingDrafts.length + pendingGitAssetChanges.length + pendingStructuralStageChanges.length
@@ -790,6 +797,26 @@ export function GitPanel() {
       })
   }
 
+  const pendingDiscardDialogMode = useMemo<PendingDiscardDialogMode>(() => {
+    const targets = pendingDiscardTargets || []
+    if (targets.length === 0) {
+      return 'discard'
+    }
+
+    const dedupedTargets = targets.filter((target, index, list) => (
+      list.findIndex((candidate) => candidate.kind === target.kind && candidate.value === target.value) === index
+    ))
+
+    return dedupedTargets.every((target) => {
+      if (target.kind !== 'pending-structural') {
+        return false
+      }
+
+      const change = pendingStructuralChanges.find((item) => item.id === target.value)
+      return change?.kind === 'git-delete-file' || change?.kind === 'git-delete-folder'
+    }) ? 'restore' : 'discard'
+  }, [pendingDiscardTargets, pendingStructuralChanges])
+
   const pendingDiscardDescription = useMemo(() => {
     const targets = pendingDiscardTargets || []
     if (targets.length === 0) {
@@ -800,10 +827,16 @@ export function GitPanel() {
       list.findIndex((candidate) => candidate.kind === target.kind && candidate.value === target.value) === index
     )).length
 
-    return currentLanguage === 'zh'
-      ? `将丢弃 ${count} 项未提交变更，此操作不可撤销。`
-      : `This will discard ${count} uncommitted change${count > 1 ? 's' : ''} and cannot be undone.`
-  }, [currentLanguage, pendingDiscardTargets])
+    if (pendingDiscardDialogMode === 'restore') {
+      return t('git.restoreDeletedDescription')
+        .replace('{count}', String(count))
+        .replace('{countPlural}', count > 1 ? 's' : '')
+    }
+
+    return t('git.discardDescription')
+      .replace('{count}', String(count))
+      .replace('{countPlural}', count > 1 ? 's' : '')
+  }, [pendingDiscardDialogMode, pendingDiscardTargets, t])
 
   return (
     <div className="flex h-full flex-col" style={{ backgroundColor: themeConfig.sidebar }}>
@@ -979,9 +1012,9 @@ export function GitPanel() {
         isOpen={pendingDiscardTargets !== null}
         onClose={() => setPendingDiscardTargets(null)}
         onConfirm={confirmDiscardPendingTargets}
-        title={t('git.discard')}
+        title={pendingDiscardDialogMode === 'restore' ? t('git.restoreDeleted') : t('git.discard')}
         description={pendingDiscardDescription}
-        confirmText={t('git.discard')}
+        confirmText={pendingDiscardDialogMode === 'restore' ? t('git.restoreDeleted') : t('git.discard')}
         cancelText={t('common.cancel')}
       />
     </div>
