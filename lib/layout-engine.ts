@@ -93,25 +93,8 @@ function splitRootChildren(children: TreeNode[]): {
   }
 }
 
-function inferDirectionFromX(
-  parentX: number,
-  childX: number,
-  fallback: BranchDirection
-): BranchDirection {
-  if (childX < parentX) {
-    return 'left'
-  }
-
-  if (childX > parentX) {
-    return 'right'
-  }
-
-  return fallback
-}
-
 function calculateHorizontalTreeLayoutResult(
   root: TreeNode,
-  detachedNodes: TreeNode[],
   config: LayoutConfig,
   rootMode: 'balanced' | 'left' | 'right'
 ): LayoutResult {
@@ -213,96 +196,6 @@ function calculateHorizontalTreeLayoutResult(
     })
   }
 
-  const preserveDetachedPosition = (
-    node: TreeNode,
-    parentPosition: Position | null,
-    fallbackDirection: BranchDirection
-  ) => {
-    const fallbackX = parentPosition
-      ? parentPosition.x + (fallbackDirection === 'left' ? -config.levelWidth : config.levelWidth)
-      : centerX + config.levelWidth * 1.5
-    const fallbackY = parentPosition ? parentPosition.y : config.startY
-    const position = node.position ?? { x: fallbackX, y: fallbackY }
-    const direction = parentPosition
-      ? inferDirectionFromX(parentPosition.x, position.x, fallbackDirection)
-      : inferDirectionFromX(centerX, position.x, fallbackDirection)
-
-    positions.set(node.id, position)
-    directions.set(node.id, direction)
-
-    node.children.forEach((child, index) => {
-      const childFallbackPosition = child.position ?? {
-        x: position.x + (direction === 'left' ? -config.levelWidth : config.levelWidth),
-        y: position.y + (index + 1) * (config.nodeHeight + config.siblingGap),
-      }
-
-      preserveDetachedPosition(
-        { ...child, position: childFallbackPosition },
-        position,
-        direction
-      )
-    })
-  }
-
-  const layoutDetachedBranch = (
-    node: TreeNode,
-    depth: number,
-    startY: number,
-    startX: number,
-    direction: Exclude<BranchDirection, 'center' | 'down'>
-  ): number => {
-    const x =
-      direction === 'left'
-        ? startX - depth * config.levelWidth
-        : startX + depth * config.levelWidth
-
-    positions.set(node.id, { x, y: startY })
-    directions.set(node.id, direction)
-
-    if (node.children.length === 0 || node.isCollapsed) {
-      return config.nodeHeight + config.siblingGap
-    }
-
-    let currentY = startY
-
-    for (const child of node.children) {
-      const childHeight = calculateSubtreeHeight(child, config)
-      layoutDetachedBranch(child, depth + 1, currentY, startX, direction)
-      currentY += childHeight
-    }
-
-    const occupiedHeight = currentY - startY
-    const totalHeight = Math.max(config.nodeHeight + config.siblingGap, occupiedHeight)
-    const y = startY + Math.max(0, (totalHeight - config.nodeHeight) / 2)
-
-    positions.set(node.id, { x, y })
-    return totalHeight
-  }
-
-  if (detachedNodes.length > 0) {
-    let maxX = centerX
-    let nextDetachedY = config.startY
-
-    for (const position of positions.values()) {
-      maxX = Math.max(maxX, position.x)
-      nextDetachedY = Math.max(nextDetachedY, position.y)
-    }
-
-    const detachedStartX = maxX + config.levelWidth * 1.5
-
-    detachedNodes.forEach((detachedNode) => {
-      if (detachedNode.position) {
-        preserveDetachedPosition(detachedNode, null, 'right')
-        const subtreeBottom = detachedNode.position.y + calculateSubtreeHeight(detachedNode, config)
-        nextDetachedY = Math.max(nextDetachedY, subtreeBottom)
-        return
-      }
-
-      layoutDetachedBranch(detachedNode, 0, nextDetachedY, detachedStartX, 'right')
-      nextDetachedY += calculateSubtreeHeight(detachedNode, config)
-    })
-  }
-
   return { positions, directions }
 }
 
@@ -329,25 +222,24 @@ function rotateToDownLayout(base: LayoutResult, rootId: string): LayoutResult {
  */
 export function calculateTreeLayoutResult(
   root: TreeNode,
-  detachedNodes: TreeNode[] = [],
   config: LayoutConfig = DEFAULT_LAYOUT_CONFIG,
   mode: TreeLayoutMode = 'balanced'
 ): LayoutResult {
   if (mode === 'down') {
     const downConfig = resolveDownLayoutConfig(config)
-    const rightLayout = calculateHorizontalTreeLayoutResult(root, detachedNodes, downConfig, 'right')
+    const rightLayout = calculateHorizontalTreeLayoutResult(root, downConfig, 'right')
     return rotateToDownLayout(rightLayout, root.id)
   }
 
   if (mode === 'left') {
-    return calculateHorizontalTreeLayoutResult(root, detachedNodes, config, 'left')
+    return calculateHorizontalTreeLayoutResult(root, config, 'left')
   }
 
   if (mode === 'right') {
-    return calculateHorizontalTreeLayoutResult(root, detachedNodes, config, 'right')
+    return calculateHorizontalTreeLayoutResult(root, config, 'right')
   }
 
-  return calculateHorizontalTreeLayoutResult(root, detachedNodes, config, 'balanced')
+  return calculateHorizontalTreeLayoutResult(root, config, 'balanced')
 }
 
 /**
@@ -355,11 +247,10 @@ export function calculateTreeLayoutResult(
  */
 export function calculateTreeLayout(
   root: TreeNode,
-  detachedNodes: TreeNode[] = [],
   config: LayoutConfig = DEFAULT_LAYOUT_CONFIG,
   mode: TreeLayoutMode = 'balanced'
 ): Map<string, Position> {
-  return calculateTreeLayoutResult(root, detachedNodes, config, mode).positions
+  return calculateTreeLayoutResult(root, config, mode).positions
 }
 
 /**

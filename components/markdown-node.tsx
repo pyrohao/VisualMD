@@ -32,7 +32,6 @@ function MarkdownNodeComponent({ id, data, selected }: MarkdownNodeProps) {
     level,
     layoutMode = 'balanced',
     onSelect,
-    isDetached,
     isVirtual,
     branchDirection,
     orderIndex,
@@ -96,12 +95,8 @@ function MarkdownNodeComponent({ id, data, selected }: MarkdownNodeProps) {
     }
   }, [isEditingOrder])
 
-  const borderColor = isDetached ? '#9ca3af' : isVirtual ? '#8b5cf6' : getLevelColor(level)
-  const bgColor = isDetached
-    ? themeConfig.card === '#161b22'
-      ? '#21262d'
-      : '#f3f4f6'
-    : isVirtual
+  const borderColor = isVirtual ? '#8b5cf6' : getLevelColor(level)
+  const bgColor = isVirtual
       ? themeConfig.card === '#161b22'
         ? '#2d1f4c'
         : '#f5f3ff'
@@ -323,15 +318,6 @@ function MarkdownNodeComponent({ id, data, selected }: MarkdownNodeProps) {
           </div>
         )}
       </div>
-
-      {isDetached && (
-        <div
-          className="absolute -left-2 -top-2 rounded-full border-2 border-white px-2 py-0.5 text-xs font-medium"
-          style={{ backgroundColor: '#9ca3af', color: '#ffffff' }}
-        >
-          已断开
-        </div>
-      )}
     </div>
   )
 }

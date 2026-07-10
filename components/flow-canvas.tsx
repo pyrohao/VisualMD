@@ -22,20 +22,13 @@ import {
   type NodeTypes,
   type OnConnectStart,
   type OnConnectEnd,
-  type EdgeMouseHandler,
   useReactFlow,
-  Panel,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { Trash2 } from 'lucide-react'
 import { MarkdownNode } from './markdown-node'
 import { CreateNodesDialog } from './create-nodes-dialog'
 import {
   FLOW_HANDLE_IDS,
-  findNodeInDetached,
-  getLevelColor,
-  getHandlesForDirection,
-  shouldHideVirtualRoot,
   treeToNodesAndEdges,
   type FlowNodeData,
 } from '@/lib/flow-helpers'
@@ -47,6 +40,7 @@ import { useThemeStore } from '@/stores/themeStore'
 import { useTranslation } from '@/stores/languageStore'
 import { toast } from '@/hooks/use-toast'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
+import { syncActiveDocumentToActiveSource } from '@/lib/editor-persistence'
 
 type ThemeConfig = ReturnType<ReturnType<typeof useThemeStore.getState>['getThemeConfig']>
 
@@ -66,7 +60,14 @@ function createNodeCallbacks(
       selectNode(id)
     },
     onMoveToPosition: (id: string, position: number) => {
-      useDocumentStore.getState().moveNodeToPosition(id, position)
+      const documentStore = useDocumentStore.getState()
+      const beforeMarkdown = documentStore.getCurrentMarkdown()
+      documentStore.moveNodeToPosition(id, position)
+      const afterMarkdown = useDocumentStore.getState().getCurrentMarkdown()
+
+      if (afterMarkdown !== beforeMarkdown) {
+        syncActiveDocumentToActiveSource({ markSaved: false })
+      }
     },
     onMetadataChange: (metadata: Record<string, string>) => {
       useDocumentStore.getState().updateMetadata(metadata)
@@ -91,16 +92,11 @@ function attachNodeCallbacks(
 
 function attachEdgeStyles(
   edges: Edge[],
-  selectedEdgeId: string | null,
-  themeConfig: ThemeConfig
+  _themeConfig: ThemeConfig
 ): Edge[] {
   return edges.map((edge) => ({
     ...edge,
-    style: {
-      stroke: selectedEdgeId === edge.id ? themeConfig.accent : themeConfig.muted,
-      strokeWidth: selectedEdgeId === edge.id ? 3 : 2,
-    },
-    animated: selectedEdgeId === edge.id,
+    animated: false,
   }))
 }
 
@@ -119,7 +115,6 @@ function toFlowNodeData(
     layoutMode,
     content: node.content,
     childrenCount: node.children.length,
-    isDetached: node.isDetached || false,
     isVirtual: node.isVirtual || false,
     orderIndex,
     siblingsCount,
@@ -129,14 +124,13 @@ function toFlowNodeData(
 
 function findNodeContext(
   root: TreeNode,
-  detachedNodes: TreeNode[],
   nodeId: string
-): { node: TreeNode; orderIndex?: number; siblingsCount?: number; detached: boolean } | null {
+): { node: TreeNode; orderIndex?: number; siblingsCount?: number } | null {
   if (root.id === nodeId) {
-    return { node: root, orderIndex: 1, siblingsCount: 1, detached: false }
+    return { node: root, orderIndex: 1, siblingsCount: 1 }
   }
 
-  const walkTree = (parent: TreeNode): { node: TreeNode; orderIndex?: number; siblingsCount?: number; detached: boolean } | null => {
+  const walkTree = (parent: TreeNode): { node: TreeNode; orderIndex?: number; siblingsCount?: number } | null => {
     const childCount = parent.children.length
     for (let index = 0; index < childCount; index += 1) {
       const child = parent.children[index]
@@ -145,7 +139,6 @@ function findNodeContext(
           node: child,
           orderIndex: index + 1,
           siblingsCount: childCount,
-          detached: false,
         }
       }
       const nested = walkTree(child)
@@ -155,93 +148,21 @@ function findNodeContext(
     }
     return null
   }
-
-  const inTree = walkTree(root)
-  if (inTree) {
-    return inTree
-  }
-
-  const walkDetached = (
-    nodes: TreeNode[],
-    parentDetached = true
-  ): { node: TreeNode; orderIndex?: number; siblingsCount?: number; detached: boolean } | null => {
-    const siblingsCount = nodes.length
-    for (let index = 0; index < nodes.length; index += 1) {
-      const child = nodes[index]
-      if (child.id === nodeId) {
-        return {
-          node: child,
-          orderIndex: index + 1,
-          siblingsCount,
-          detached: parentDetached,
-        }
-      }
-      const nested = walkDetached(child.children, true)
-      if (nested) {
-        return nested
-      }
-    }
-    return null
-  }
-
-  return walkDetached(detachedNodes)
-}
-
-function buildPatchedEdge(
-  currentEdge: Edge,
-  node: TreeNode,
-  selectedEdgeId: string | null,
-  themeConfig: ThemeConfig
-): Edge {
-  const direction = (currentEdge.sourceHandle === FLOW_HANDLE_IDS.sourceLeft
-    ? 'left'
-    : currentEdge.sourceHandle === FLOW_HANDLE_IDS.sourceBottom
-      ? 'down'
-      : 'right')
-  const { sourceHandle, targetHandle } = getHandlesForDirection(direction)
-
-  return {
-    ...currentEdge,
-    sourceHandle,
-    targetHandle,
-    style: {
-      stroke: selectedEdgeId === currentEdge.id
-        ? themeConfig.accent
-        : node.isDetached
-          ? '#9ca3af'
-          : getLevelColor(node.level),
-      strokeWidth: selectedEdgeId === currentEdge.id ? 3 : 2,
-      cursor: 'pointer',
-      ...(node.isDetached ? { strokeDasharray: '5,5' } : {}),
-    },
-    animated: selectedEdgeId === currentEdge.id,
-    ...(node.isDetached
-      ? {}
-      : {
-          markerEnd: {
-            type: 'arrowclosed',
-            width: 12,
-            height: 12,
-            color: getLevelColor(node.level),
-          },
-        }),
-  }
+  return walkTree(root)
 }
 
 function rebuildFlowGraph(
   document: NonNullable<ReturnType<typeof useDocumentStore.getState>['document']>,
   layoutMode: TreeLayoutMode,
   selectedNodeId: string | null,
-  selectedEdgeId: string | null,
   themeConfig: ThemeConfig,
   callbacks: ReturnType<typeof createNodeCallbacks>
 ) {
-  const detachedNodes = document.detachedNodes || []
-  const { nodes, edges } = treeToNodesAndEdges(document.root, detachedNodes, layoutMode)
+  const { nodes, edges } = treeToNodesAndEdges(document.root, layoutMode)
 
   return {
     nodes: attachNodeCallbacks(nodes as Node<FlowNodeData>[], callbacks, selectedNodeId),
-    edges: attachEdgeStyles(edges, selectedEdgeId, themeConfig),
+    edges: attachEdgeStyles(edges, themeConfig),
   }
 }
 
@@ -257,7 +178,7 @@ function applyVisualMutationToNodes(
     return null
   }
 
-  const context = findNodeContext(document.root, document.detachedNodes || [], mutation.nodeId)
+  const context = findNodeContext(document.root, mutation.nodeId)
   if (!context) {
     return null
   }
@@ -307,8 +228,6 @@ export function FlowCanvas() {
     selectNode,
     updateNode,
     toggleNode,
-    detachNode,
-    connectNode,
     error,
     clearError,
     markAsSaved,
@@ -323,7 +242,6 @@ export function FlowCanvas() {
     () =>
       createNodeCallbacks(updateNode, toggleNode, (nodeId) => {
         selectNode(nodeId)
-        setSelectedEdgeId(null)
       }),
     [selectNode, toggleNode, updateNode]
   )
@@ -340,8 +258,6 @@ export function FlowCanvas() {
     },
   })
 
-  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
-
   // 将树结构转换为React Flow节点和边
 
   const { nodes: initialNodes, edges: initialEdges } = useMemo(() => {
@@ -352,11 +268,10 @@ export function FlowCanvas() {
       document,
       layoutMode,
       selectedNodeId,
-      selectedEdgeId,
       themeConfig,
       nodeCallbacks
     )
-  }, [document, layoutMode, nodeCallbacks, selectedEdgeId, selectedNodeId, themeConfig])
+  }, [document, layoutMode, nodeCallbacks, selectedNodeId, themeConfig])
 
   // React Flow??
 
@@ -380,13 +295,6 @@ export function FlowCanvas() {
 
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [connectingParentNode, setConnectingParentNode] = useState<TreeNode | null>(null)
-
-  // ??????
-
-  // ??????
-  const [contextMenuEdge, setContextMenuEdge] = useState<Edge | null>(null)
-  const [contextMenuOpen, setContextMenuOpen] = useState(false)
-  const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 })
   const lastAppliedMutationId = useRef<number>(0)
   const lastGraphContextRef = useRef<{
     documentVersion: number
@@ -445,14 +353,7 @@ export function FlowCanvas() {
         setNodes(patchedNodes)
 
         if (lastMutation.type === 'update-node' && lastMutation.nodeId) {
-          const context = findNodeContext(document.root, document.detachedNodes || [], lastMutation.nodeId)
-          if (context) {
-            setEdges((currentEdges) =>
-              currentEdges.map((edge) =>
-                edge.target === lastMutation.nodeId ? buildPatchedEdge(edge, context.node, selectedEdgeId, themeConfig) : edge
-              )
-            )
-          }
+          setEdges((currentEdges) => attachEdgeStyles(currentEdges, themeConfig))
         }
 
         lastAppliedMutationId.current = lastMutation.id
@@ -469,7 +370,6 @@ export function FlowCanvas() {
       document,
       layoutMode,
       selectedNodeId,
-      selectedEdgeId,
       themeConfig,
       nodeCallbacks
     )
@@ -481,13 +381,7 @@ export function FlowCanvas() {
       layoutMode,
       themeKey,
     }
-  }, [document, lastMutation, layoutMode, nodeCallbacks, nodes, selectedEdgeId, selectedNodeId, setEdges, setNodes, themeConfig])
-
-  // 当选中的边变化时，更新已有边的样式
-  useEffect(() => {
-    setEdges((currentEdges) => attachEdgeStyles(currentEdges, selectedEdgeId, themeConfig))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedEdgeId, themeConfig])
+  }, [document, lastMutation, layoutMode, nodeCallbacks, nodes, selectedNodeId, setEdges, setNodes, themeConfig])
 
   // 选中节点变化时更新节点样式
   useEffect(() => {
@@ -536,7 +430,7 @@ export function FlowCanvas() {
 
     findChildrenInTree(document.root, nodeId)
 
-    // 从 edges 中查找子节点（包括断开的节点）
+    // 从 edges 中补充查找子节点，覆盖当前可见连线图
 
     const findChildrenInEdges = (parentId: string) => {
       const directChildren = edges
@@ -805,204 +699,19 @@ export function FlowCanvas() {
     setConnectingParentNode(null)
   }, [])
 
-  // 处理节点连接（用于连接断开的节点）
+  // 节点间拖拽连线不再执行重挂接，仅用于阻止“松手后创建子节点”的误判
 
   const onConnect: OnConnect = useCallback(
-    (connection) => {
-      const { source, target } = connection
-
-      if (!source || !target || !document) return
-
-      // 标记连接成功
+    () => {
       connectionSuccess.current = true
-
-      // 检查是否是断开节点的重新连接
-
-      const detachedNodes = (document as any).detachedNodes || []
-      const isSourceDetached = detachedNodes.some((n: TreeNode) => n.id === source)
-      const isTargetDetached = detachedNodes.some((n: TreeNode) => n.id === target)
-
-      // 获取两个节点的 level
-
-      const getNodeLevel = (id: string): number => {
-        // 先在树中查找
-        const findInTree = (root: TreeNode): number | null => {
-          if (root.id === id) return root.level
-          for (const child of root.children) {
-            const found = findInTree(child)
-            if (found !== null) return found
-          }
-          return null
-        }
-        const levelInTree = findInTree(document.root)
-        if (levelInTree !== null) return levelInTree
-
-        // 在断开节点中查找
-
-        const findInDetached = (nodes: TreeNode[]): number | null => {
-          for (const node of nodes) {
-            if (node.id === id) return node.level
-            const found = findInDetached(node.children)
-            if (found !== null) return found
-          }
-          return null
-        }
-        return findInDetached(detachedNodes) || 1
-      }
-
-      const sourceLevel = getNodeLevel(source)
-      const targetLevel = getNodeLevel(target)
-
-      // 智能连接：level 小的作为父节点，level 大的作为子节点
-      // 如果 level 相同，保持拖拽方向（source 作为子节点）
-      let childId: string, parentId: string
-      if (sourceLevel < targetLevel) {
-        // source (level小) 作为父节点，target (level大) 作为子节点
-        childId = target
-        parentId = source
-      } else if (targetLevel < sourceLevel) {
-        // target (level小) 作为父节点，source (level大) 作为子节点
-        childId = source
-        parentId = target
-      } else {
-        // level 相同，保持拖拽方向
-        childId = source
-        parentId = target
-      }
-
-      // 如果源节点是断开的，尝试连接到目标节点
-
-      if (isSourceDetached) {
-        connectNode(childId, parentId)
-        return
-      }
-
-      // 如果目标节点是断开的，尝试将目标节点连接到源节点
-
-      if (isTargetDetached) {
-        connectNode(childId, parentId)
-        return
-      }
-
-      // 如果都不是断开的节点，检查是否是合法的重新连接
-      // 获取源节点和目标节点
-      const findNode = (root: TreeNode, id: string): TreeNode | null => {
-        if (root.id === id) return root
-        for (const child of root.children) {
-          const found = findNode(child, id)
-          if (found) return found
-        }
-        return null
-      }
-
-      const sourceNode = findNode(document.root, source)
-      const targetNode = findNode(document.root, target)
-
-      if (!sourceNode || !targetNode) return
-
-      // 检查层级关系：只能连接到大一级的节点
-
-      const expectedLevel = sourceNode.level + 1
-      if (targetNode.level !== expectedLevel) {
-        toast({
-          title: t('common.error'),
-          description: t('common.levelMismatchConnect')
-            .replace('{child}', String(targetNode.level))
-            .replace('{parent}', String(sourceNode.level))
-            .replace('{expected}', String(expectedLevel)),
-          variant: 'destructive',
-        })
-        return
-      }
-
-      // 断开目标节点的现有连接，然后重新连接
-      detachNode(target)
-      // 使用 setTimeout 确保断开操作完成后再连接
-      setTimeout(() => {
-        connectNode(target, source)
-      }, 0)
     },
-    [connectNode, detachNode, document, t]
+    []
   )
-
-  // 处理边的点击（选中边）
-
-  const onEdgeClick: EdgeMouseHandler = useCallback((_, edge) => {
-    setSelectedEdgeId(edge.id)
-  }, [])
-
-  // 处理边的右键点击（显示菜单）
-
-  const onEdgeContextMenu = useCallback((event: React.MouseEvent, edge: Edge) => {
-    event.preventDefault()
-    setSelectedEdgeId(edge.id)
-    setContextMenuEdge(edge)
-    setContextMenuPosition({ x: event.clientX, y: event.clientY })
-    setContextMenuOpen(true)
-  }, [])
-
-  // 处理删除选中的边
-
-  const handleDeleteEdge = useCallback(() => {
-    if (!contextMenuEdge || !document) return
-
-    const targetId = contextMenuEdge.target
-
-    // 查找目标节点（先在树中查找，再在断开节点中查找）
-
-    const findNode = (root: TreeNode, id: string): TreeNode | null => {
-      if (root.id === id) return root
-      for (const child of root.children) {
-        const found = findNode(child, id)
-        if (found) return found
-      }
-      return null
-    }
-
-    let targetNode = findNode(document.root, targetId)
-    
-    // 如果不在树中，在断开节点中查找
-    
-    if (!targetNode && document.detachedNodes) {
-      targetNode = findNodeInDetached(document.detachedNodes, targetId)
-    }
-    
-    if (!targetNode) {
-      setContextMenuOpen(false)
-      setContextMenuEdge(null)
-      return
-    }
-
-    // 获取当前节点的位置，并计算偏移后的新位置
-
-    const currentNode = nodes.find(n => n.id === targetId)
-    const newPosition = currentNode?.position
-      ? {
-          x: currentNode.position.x + 200,
-          y: currentNode.position.y + 150,
-        }
-      : undefined
-
-    // 先更新节点位置（带偏移）
-
-    if (newPosition) {
-      updateNode(targetId, { position: newPosition })
-    }
-
-    // 断开节点
-    detachNode(targetId)
-    setSelectedEdgeId(null)
-    setContextMenuOpen(false)
-    setContextMenuEdge(null)
-  }, [contextMenuEdge, document, detachNode, nodes, updateNode])
 
   // 处理画布点击（取消选择）
 
   const onPaneClick = useCallback(() => {
     selectNode(null)
-    setSelectedEdgeId(null)
-    setContextMenuOpen(false)
-    setContextMenuEdge(null)
   }, [selectNode])
 
   useEffect(() => {
@@ -1055,8 +764,6 @@ export function FlowCanvas() {
         onConnect={onConnect}
         onConnectStart={onConnectStart}
         onConnectEnd={onConnectEnd}
-        onEdgeClick={onEdgeClick}
-        onEdgeContextMenu={onEdgeContextMenu}
         onPaneClick={onPaneClick}
         nodeTypes={nodeTypes}
         fitViewOptions={{
@@ -1067,7 +774,7 @@ export function FlowCanvas() {
         minZoom={0.05}
         maxZoom={2}
         defaultEdgeOptions={{
-          animated: true,
+          animated: false,
           style: { stroke: themeConfig.muted, strokeWidth: 2 },
           type: 'default',
         }}
@@ -1138,39 +845,6 @@ export function FlowCanvas() {
         onConfirm={handleCreateNodesConfirm}
         onCancel={handleCreateNodesCancel}
       />
-
-      {/* 边的右键菜单 */}
-      {contextMenuOpen && contextMenuEdge && (
-        <div
-          className="fixed z-50 rounded-md border shadow-lg py-1"
-          style={{
-            backgroundColor: themeConfig.card,
-            borderColor: themeConfig.border,
-            left: contextMenuPosition.x,
-            top: contextMenuPosition.y,
-          }}
-        >
-          <button
-            className="flex w-full items-center gap-2 px-4 py-2 text-sm hover:opacity-80 transition-opacity"
-            style={{ color: themeConfig.danger }}
-            onClick={handleDeleteEdge}
-          >
-            <Trash2 className="h-4 w-4" />
-            删除连线
-          </button>
-        </div>
-      )}
-
-      {/* 点击其他地方关闭菜单 */}
-      {contextMenuOpen && (
-        <div
-          className="fixed inset-0 z-40"
-          onClick={() => {
-            setContextMenuOpen(false)
-            setContextMenuEdge(null)
-          }}
-        />
-      )}
     </div>
   )
 }

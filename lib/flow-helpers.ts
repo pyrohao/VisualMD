@@ -23,7 +23,6 @@ export interface FlowNodeData extends Record<string, unknown> {
   layoutMode: TreeLayoutMode
   content?: string
   childrenCount: number
-  isDetached?: boolean
   isVirtual?: boolean
   branchDirection?: BranchDirection
   orderIndex?: number
@@ -62,12 +61,12 @@ export function getHandlesForDirection(direction: BranchDirection): {
   }
 }
 
-function getVisibleTreeLayout(root: TreeNode, detachedNodes: TreeNode[], layoutMode: TreeLayoutMode) {
+function getVisibleTreeLayout(root: TreeNode, layoutMode: TreeLayoutMode) {
   if (shouldHideVirtualRoot(root)) {
-    return calculateTreeLayoutResult(root.children[0], detachedNodes, undefined, layoutMode)
+    return calculateTreeLayoutResult(root.children[0], undefined, layoutMode)
   }
 
-  return calculateTreeLayoutResult(root, detachedNodes, undefined, layoutMode)
+  return calculateTreeLayoutResult(root, undefined, layoutMode)
 }
 
 function createNodeData(
@@ -85,7 +84,6 @@ function createNodeData(
     layoutMode,
     content: node.content,
     childrenCount: node.children.length,
-    isDetached: node.isDetached || false,
     isVirtual: node.isVirtual || false,
     branchDirection: direction,
     orderIndex,
@@ -95,7 +93,6 @@ function createNodeData(
 
 export function treeToNodesAndEdges(
   tree: TreeNode,
-  detachedNodes: TreeNode[] = [],
   layoutMode: TreeLayoutMode = 'balanced'
 ): {
   nodes: Node<FlowNodeData>[]
@@ -103,7 +100,7 @@ export function treeToNodesAndEdges(
 } {
   const nodes: Node<FlowNodeData>[] = []
   const edges: Edge[] = []
-  const { positions, directions } = getVisibleTreeLayout(tree, detachedNodes, layoutMode)
+  const { positions, directions } = getVisibleTreeLayout(tree, layoutMode)
   const hideVirtualRoot = shouldHideVirtualRoot(tree)
 
   function pushEdge(parentId: string, child: TreeNode, fallbackDirection: BranchDirection) {
@@ -119,21 +116,16 @@ export function treeToNodesAndEdges(
       targetHandle,
       animated: true,
       style: {
-        stroke: child.isDetached ? '#9ca3af' : getLevelColor(child.level),
+        stroke: getLevelColor(child.level),
         strokeWidth: 2,
         cursor: 'pointer',
-        ...(child.isDetached ? { strokeDasharray: '5,5' } : {}),
       },
-      ...(child.isDetached
-        ? {}
-        : {
-            markerEnd: {
-              type: 'arrowclosed',
-              width: 12,
-              height: 12,
-              color: getLevelColor(child.level),
-            },
-          }),
+      markerEnd: {
+        type: 'arrowclosed',
+        width: 12,
+        height: 12,
+        color: getLevelColor(child.level),
+      },
     })
   }
 
@@ -154,7 +146,7 @@ export function treeToNodesAndEdges(
       data: createNodeData(node, branchDirection, layoutMode, orderIndex, siblingsCount),
     })
 
-    if (parentId && !node.isDetached) {
+    if (parentId) {
       pushEdge(parentId, node, branchDirection)
     }
 
@@ -165,54 +157,6 @@ export function treeToNodesAndEdges(
   }
 
   traverse(tree, undefined, 1, 1)
-
-  detachedNodes.forEach((detachedNode, index) => {
-    const position = positions.get(detachedNode.id) || { x: 0, y: 0 }
-    const branchDirection = directions.get(detachedNode.id) || 'right'
-
-    nodes.push({
-      id: detachedNode.id,
-      type: 'headingNode',
-      position,
-      data: createNodeData(
-        { ...detachedNode, isDetached: true },
-        branchDirection,
-        layoutMode,
-        index + 1,
-        detachedNodes.length
-      ),
-    })
-
-    const traverseDetached = (
-      parentNode: TreeNode,
-      parentId: string,
-      parentDirection: BranchDirection
-    ) => {
-      if (!parentNode.children || parentNode.isCollapsed) {
-        return
-      }
-
-      parentNode.children.forEach((child) => {
-        const childPosition = positions.get(child.id) || { x: 0, y: 0 }
-        const childDirection = directions.get(child.id) || parentDirection
-
-        nodes.push({
-          id: child.id,
-          type: 'headingNode',
-          position: childPosition,
-          data: createNodeData({ ...child, isDetached: true }, childDirection, layoutMode),
-        })
-
-        pushEdge(parentId, { ...child, isDetached: true }, childDirection)
-        traverseDetached(child, child.id, childDirection)
-      })
-    }
-
-    if (detachedNode.children && !detachedNode.isCollapsed) {
-      traverseDetached(detachedNode, detachedNode.id, branchDirection)
-    }
-  })
-
   return { nodes, edges }
 }
 
@@ -270,34 +214,6 @@ export function findNodeInTree(tree: TreeNode, nodeId: string): TreeNode | null 
   }
 
   return null
-}
-
-export function findNodeInDetached(detachedNodes: TreeNode[], nodeId: string): TreeNode | null {
-  for (const node of detachedNodes) {
-    if (node.id === nodeId) {
-      return node
-    }
-
-    const found = findNodeInDetached(node.children, nodeId)
-    if (found) {
-      return found
-    }
-  }
-
-  return null
-}
-
-export function findNodeInTreeOrDetached(
-  tree: TreeNode,
-  detachedNodes: TreeNode[],
-  nodeId: string
-): TreeNode | null {
-  const foundInTree = findNodeInTree(tree, nodeId)
-  if (foundInTree) {
-    return foundInTree
-  }
-
-  return findNodeInDetached(detachedNodes, nodeId)
 }
 
 export function findParentInTree(tree: TreeNode, nodeId: string): TreeNode | null {

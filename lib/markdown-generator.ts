@@ -62,8 +62,7 @@ export function generateFrontMatter(metadata: DocumentMetadata): string {
  * 时间复杂度：O(n)，n为节点数量
  * 
  * 注意：
- * 1. 断开的节点（isDetached=true）不会渲染到Markdown中
- * 2. 子节点按children数组顺序渲染，用户可通过调整顺序控制MD输出
+ * 1. 子节点按children数组顺序渲染，用户可通过调整顺序控制MD输出
  * 
  * @param node 当前节点
  * @param currentLevel 当前层级（用于计算#数量）
@@ -71,11 +70,6 @@ export function generateFrontMatter(metadata: DocumentMetadata): string {
  */
 export function generateContent(node: TreeNode, currentLevel: number = 1): string {
   let result = ''
-
-  // 如果节点是断开的，跳过该节点及其所有子节点
-  if (node.isDetached) {
-    return ''
-  }
 
   // 如果节点不是虚拟根节点
   if (node.level > 0) {

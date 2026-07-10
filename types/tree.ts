@@ -26,10 +26,6 @@ export interface TreeNode {
   isVirtual?: boolean
   /** 是否收起（用于可视化） */
   isCollapsed?: boolean
-  /** 是否断开连接（悬浮状态） */
-  isDetached?: boolean
-  /** 断开连接前的父节点ID（用于恢复） */
-  detachedFrom?: string | null
   /** React Flow 需要的位置信息（由布局算法计算） */
   position?: {
     x: number
@@ -77,8 +73,6 @@ export interface DocumentMutation {
   scope: DocumentMutationScope
   /** 受影响的节点 */
   nodeId?: string | null
-  /** 是否为断开节点 */
-  detached?: boolean
   /** 发生变化的字段 */
   fields?: string[]
 }
@@ -102,8 +96,6 @@ export interface DocumentState {
   fileName?: string
   /** 文件ID（用于关联编辑器状态） */
   fileId?: string
-  /** 断开的节点数组（悬浮状态） */
-  detachedNodes?: TreeNode[]
 }
 
 /**

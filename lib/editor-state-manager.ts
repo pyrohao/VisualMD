@@ -1,13 +1,11 @@
 /**
  * 编辑器状态管理服务
  * 
- * 提供分离存储方案，将运行时状态（断开节点、节点位置等）
+ * 提供分离存储方案，将运行时状态（节点位置、展开状态等）
  * 与 Markdown 内容分开保存
  * 
  * 对应技术文档第5章 - 状态管理扩展
  */
-
-import type { TreeNode, DocumentMetadata } from '@/types/tree'
 
 /**
  * 节点位置信息
@@ -23,8 +21,6 @@ export interface NodePosition {
 export interface EditorState {
   /** 关联的 Markdown 文件路径 */
   filePath: string
-  /** 断开的节点数组 */
-  detachedNodes: TreeNode[]
   /** 节点位置映射 */
   nodePositions: Record<string, NodePosition>
   /** 展开的节点ID集合 */
@@ -84,9 +80,6 @@ export function deserializeEditorState(json: string): EditorState | null {
     }
     
     // 确保必要字段存在
-    if (!state.detachedNodes) {
-      state.detachedNodes = []
-    }
     if (!state.nodePositions) {
       state.nodePositions = {}
     }
@@ -109,7 +102,6 @@ export function deserializeEditorState(json: string): EditorState | null {
 export function createEditorState(filePath: string): EditorState {
   return {
     filePath,
-    detachedNodes: [],
     nodePositions: {},
     expandedNodeIds: ['root'],
     lastModified: Date.now(),
@@ -118,50 +110,19 @@ export function createEditorState(filePath: string): EditorState {
 }
 
 /**
- * 合并断开节点（避免重复）
- * @param existing 已有的断开节点
- * @param incoming 新传入的断开节点
- * @returns 合并后的节点数组
- */
-export function mergeDetachedNodes(
-  existing: TreeNode[],
-  incoming: TreeNode[]
-): TreeNode[] {
-  const nodeMap = new Map<string, TreeNode>()
-  
-  // 先添加已有节点
-  existing.forEach(node => {
-    nodeMap.set(node.id, node)
-  })
-  
-  // 再添加新节点（会覆盖已有节点）
-  incoming.forEach(node => {
-    nodeMap.set(node.id, {
-      ...node,
-      isDetached: true,
-    })
-  })
-  
-  return Array.from(nodeMap.values())
-}
-
-/**
  * 从文档状态提取编辑器状态
  * @param filePath 文件路径
- * @param detachedNodes 断开节点
  * @param expandedNodeIds 展开的节点ID
  * @param nodePositions 节点位置
  * @returns 编辑器状态
  */
 export function extractEditorState(
   filePath: string,
-  detachedNodes: TreeNode[],
   expandedNodeIds: Set<string>,
   nodePositions: Record<string, NodePosition>
 ): EditorState {
   return {
     filePath,
-    detachedNodes,
     nodePositions,
     expandedNodeIds: Array.from(expandedNodeIds),
     lastModified: Date.now(),

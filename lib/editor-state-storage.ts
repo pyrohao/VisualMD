@@ -1,6 +1,4 @@
 import { createIdbStore } from '@/lib/idb'
-import type { TreeNode } from '@/types/tree'
-
 export interface NodePosition {
   x: number
   y: number
@@ -8,7 +6,6 @@ export interface NodePosition {
 
 export interface EditorState {
   fileId: string
-  detachedNodes: TreeNode[]
   nodePositions: Record<string, NodePosition>
   expandedNodeIds: string[]
   lastModified: number
@@ -28,7 +25,6 @@ function normalizeEditorState(state: EditorState): EditorState {
   return {
     ...state,
     version: state.version || STATE_VERSION,
-    detachedNodes: Array.isArray(state.detachedNodes) ? state.detachedNodes : [],
     nodePositions: state.nodePositions || {},
     expandedNodeIds: Array.isArray(state.expandedNodeIds) ? state.expandedNodeIds : [],
   }
@@ -120,7 +116,6 @@ export function deleteEditorState(fileId: string): void {
 export function createEditorState(fileId: string): EditorState {
   return {
     fileId,
-    detachedNodes: [],
     nodePositions: {},
     expandedNodeIds: ['root'],
     lastModified: Date.now(),

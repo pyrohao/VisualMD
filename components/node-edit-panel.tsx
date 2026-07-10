@@ -17,7 +17,7 @@ import { useTabsStore } from '@/stores/tabsStore'
 import { useGitStore } from '@/stores/gitStore'
 import { useUnsavedChangesStore } from '@/stores/unsavedChangesStore'
 import { useTranslation } from '@/stores/languageStore'
-import { findNodeInTreeOrDetached } from '@/lib/flow-helpers'
+import { findNodeInTree } from '@/lib/flow-helpers'
 import { persistActiveTabSave, persistMarkdownToActiveSource } from '@/lib/editor-persistence'
 import { toast } from '@/hooks/use-toast'
 import type { TreeNode } from '@/types/tree'
@@ -63,7 +63,7 @@ export function NodeEditPanel() {
 
   // ========== 派生状态 ==========
   const selectedNode = selectedNodeId && document
-    ? findNodeInTreeOrDetached(document.root, document.detachedNodes || [], selectedNodeId)
+    ? findNodeInTree(document.root, selectedNodeId)
     : null
 
   const isVirtualRoot = selectedNode?.isVirtual || selectedNode?.level === 0
@@ -167,7 +167,7 @@ export function NodeEditPanel() {
       return null
     }
 
-    const liveNode = findNodeInTreeOrDetached(doc.root, doc.detachedNodes || [], selNodeId)
+    const liveNode = findNodeInTree(doc.root, selNodeId)
     if (!liveNode || liveNode.isVirtual || liveNode.level === 0) {
       return null
     }
@@ -198,7 +198,7 @@ export function NodeEditPanel() {
       return
     }
 
-    const liveNode = findNodeInTreeOrDetached(doc.root, doc.detachedNodes || [], selNodeId)
+    const liveNode = findNodeInTree(doc.root, selNodeId)
     if (!liveNode || liveNode.isVirtual || liveNode.level === 0) {
       return
     }
@@ -453,7 +453,7 @@ export function NodeEditPanel() {
           return
         }
 
-        const liveNode = findNodeInTreeOrDetached(doc.root, doc.detachedNodes || [], selNodeId)
+        const liveNode = findNodeInTree(doc.root, selNodeId)
         if (liveNode && !liveNode.isVirtual && liveNode.level !== 0) {
           setTitle(liveNode.title)
           setContent(liveNode.content || '')
@@ -577,9 +577,9 @@ export function NodeEditPanel() {
   const handleConfirmDelete = useCallback((mode: DeleteMode) => {
     if (selectedNodeId) {
       if (mode === 'current') {
-        // 仅删除当前节点，子节点变为断开节点
+        // 仅删除当前节点，子节点提升到当前层级
         deleteNodeOnly(selectedNodeId)
-        toast({ title: t('toast.deleted'), description: t('common.childrenMovedToDetached') })
+        toast({ title: t('toast.deleted') })
       } else {
         // 删除当前节点及所有子节点
         deleteNode(selectedNodeId)

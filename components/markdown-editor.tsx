@@ -501,6 +501,17 @@ export function MarkdownEditor() {
     if (isDocModified && currentTab && !currentTab.isModified) {
       useTabsStore.getState().markTabAsModified(currentTab.id, true)
     }
+
+    if (
+      isDocModified &&
+      currentTab?.sourceType !== 'git' &&
+      currentTab?.fileId
+    ) {
+      const currentFile = useFileSystemStore.getState().files.find((file) => file.id === currentTab.fileId)
+      if (currentFile && !currentFile.isModified) {
+        useFileSystemStore.getState().markFileAsModified(currentTab.fileId)
+      }
+    }
   }, [document?.isModified, templateEditMode.isActive])
 
   // 处理保存

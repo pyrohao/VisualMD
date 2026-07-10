@@ -25,7 +25,6 @@ import { parseMarkdown } from '@/lib/markdown-parser'
 import { generateFromState, generateMarkdown } from '@/lib/markdown-generator'
 import { useHistoryStore, injectGetDocumentState } from './historyStore'
 import { saveEditorState, loadEditorState, createEditorState } from '@/lib/editor-state-storage'
-import { findNodeInDetached } from '@/lib/flow-helpers'
 import { useLanguageStore } from './languageStore'
 
 /**
@@ -91,7 +90,7 @@ interface DocumentStore {
   deleteNode: (nodeId: string) => void
 
   /**
-   * 仅删除当前节点（子节点变为断开节点）
+   * 仅删除当前节点（子节点提升到当前层级）
    * @param nodeId 节点ID
    */
   deleteNodeOnly: (nodeId: string) => void
@@ -104,19 +103,6 @@ interface DocumentStore {
    * @returns 新节点ID
    */
   addChildNode: (parentId: string, title: string, insertIndex?: number) => string | null
-
-  /**
-   * 断开节点连接
-   * @param nodeId 要断开的节点ID
-   */
-  detachNode: (nodeId: string) => void
-
-  /**
-   * 连接节点到新的父节点
-   * @param nodeId 要连接的节点ID
-   * @param parentId 目标父节点ID
-   */
-  connectNode: (nodeId: string, parentId: string) => void
 
   /**
    * 移动节点顺序（上移/下移/最前/最后）
@@ -305,36 +291,31 @@ function deleteNodeFromTree(root: TreeNode, nodeId: string): TreeNode {
 
 /**
  * 从树中删除节点，但保留其子节点（子节点提升到当前层级）
- * 返回 { root: 新的根节点, orphanedChildren: 被删除节点的子节点 }
  */
-function deleteNodeOnlyFromTree(root: TreeNode, nodeId: string): { root: TreeNode; orphanedChildren: TreeNode[] } {
-  let orphanedChildren: TreeNode[] = []
-
+function deleteNodeOnlyFromTree(root: TreeNode, nodeId: string): TreeNode {
   function traverse(node: TreeNode): TreeNode {
     const newChildren: TreeNode[] = []
 
     for (const child of node.children) {
       if (child.id === nodeId) {
-        // 找到要删除的节点，收集其子节点作为孤儿节点
-        orphanedChildren = child.children.map(grandChild => ({
-          ...grandChild,
-          isDetached: true,
-          detachedFrom: nodeId,
-        }))
-        // 不添加这个节点到新的 children 中（即删除它）
+        newChildren.push(
+          ...child.children.map((grandChild) => ({
+            ...grandChild,
+            parentId: node.id,
+          }))
+        )
       } else {
-        // 递归处理子节点
         newChildren.push(traverse(child))
       }
     }
 
     return {
       ...node,
-      children: newChildren
+      children: newChildren,
     }
   }
 
-  return { root: traverse(root), orphanedChildren }
+  return traverse(root)
 }
 
 /**
@@ -417,121 +398,6 @@ function addChildNodeInTree(root: TreeNode, parentId: string, newNode: TreeNode,
 }
 
 /**
- * 从树中分离节点（保留节点但移除父子关系）
- * @param root 根节点
- * @param nodeId 要分离的节点ID
- * @returns 更新后的根节点和分离的节点
- */
-function detachNodeFromTree(root: TreeNode, nodeId: string): { root: TreeNode; detachedNode: TreeNode | null } {
-  const nodeToDetach = findNodeInTree(root, nodeId)
-  if (!nodeToDetach) return { root, detachedNode: null }
-
-  // 从原父节点中移除
-  const newRoot = deleteNodeFromTree(root, nodeId)
-
-  // 标记为断开状态
-  const detachedNode: TreeNode = {
-    ...nodeToDetach,
-    isDetached: true,
-    detachedFrom: nodeToDetach.parentId,
-    parentId: null
-  }
-
-  return { root: newRoot, detachedNode }
-}
-
-/**
- * 将断开的节点连接到新的父节点
- * @param root 根节点
- * @param detachedNode 断开的节点
- * @param parentId 新的父节点ID
- * @returns 更新后的根节点
- */
-function connectNodeToTree(root: TreeNode, detachedNode: TreeNode, parentId: string): TreeNode {
-  // 找到目标父节点
-  const parentNode = findNodeInTree(root, parentId)
-  if (!parentNode) return root
-
-  // 恢复节点状态
-  const connectedNode: TreeNode = {
-    ...detachedNode,
-    isDetached: false,
-    detachedFrom: null,
-    parentId: parentId,
-    level: parentNode.level + 1
-  }
-
-  // 递归更新所有子节点的层级
-  const updateChildrenLevel = (node: TreeNode): TreeNode => ({
-    ...node,
-    children: node.children.map(child => ({
-      ...updateChildrenLevel(child),
-      level: node.level + 1
-    }))
-  })
-
-  const finalNode = updateChildrenLevel(connectedNode)
-
-  // 添加到新父节点
-  return addChildNodeInTree(root, parentId, finalNode)
-}
-
-/**
- * 将断开的节点连接到新的父节点（保持原始层级，支持跨等级连接）
- * @param root 根节点
- * @param detachedNode 断开的节点
- * @param parentId 新的父节点ID
- * @returns 更新后的根节点
- */
-function connectNodeToTreeWithOriginalLevel(root: TreeNode, detachedNode: TreeNode, parentId: string): TreeNode {
-  // 找到目标父节点
-  const parentNode = findNodeInTree(root, parentId)
-  if (!parentNode) return root
-
-  // 恢复节点状态，保持原始层级（不强制调整为 parent.level + 1）
-  const connectedNode: TreeNode = {
-    ...detachedNode,
-    isDetached: false,
-    detachedFrom: null,
-    parentId: parentId,
-    // 保持节点原始层级，支持跨等级连接
-    level: detachedNode.level
-  }
-
-  // 不递归更新子节点层级，保持整个子树的原始层级结构
-  const preserveChildrenLevel = (node: TreeNode): TreeNode => ({
-    ...node,
-    children: node.children.map(child => preserveChildrenLevel(child))
-  })
-
-  const finalNode = preserveChildrenLevel(connectedNode)
-
-  // 添加到新父节点
-  return addChildNodeInTree(root, parentId, finalNode)
-}
-
-/**
- * 收集所有断开的节点
- * @param root 根节点
- * @returns 断开的节点数组
- */
-function collectDetachedNodes(root: TreeNode): TreeNode[] {
-  const detached: TreeNode[] = []
-
-  function traverse(node: TreeNode) {
-    if (node.isDetached) {
-      detached.push(node)
-    }
-    for (const child of node.children) {
-      traverse(child)
-    }
-  }
-
-  traverse(root)
-  return detached
-}
-
-/**
  * 深拷贝树节点
  * @param node 要拷贝的节点
  * @returns 新的节点副本
@@ -602,8 +468,6 @@ function mergeParsedNode(
     parentId,
     isVirtual: existingNode?.isVirtual ?? parsedNode.isVirtual,
     isCollapsed: existingNode?.isCollapsed ?? parsedNode.isCollapsed ?? false,
-    isDetached: existingNode?.isDetached ?? parsedNode.isDetached,
-    detachedFrom: existingNode?.detachedFrom ?? parsedNode.detachedFrom,
     position: existingNode?.position ?? parsedNode.position,
     documentOrder: existingNode?.documentOrder ?? parsedNode.documentOrder,
     children: mergeParsedChildren(parsedNode.children, existingNode?.children ?? [], nextId),
@@ -700,74 +564,6 @@ function reparseParentSubtree(parentNode: TreeNode): TreeNode[] | null {
   return mergeParsedChildren(reparsedDocument.root.children, [parentNode], parentNode.parentId)
 }
 
-/**
- * 在断开节点列表中更新节点
- * @param detachedNodes 断开节点数组
- * @param nodeId 节点ID
- * @param updates 更新的字段
- * @returns 更新后的断开节点数组
- */
-function updateNodeInDetached(
-  detachedNodes: TreeNode[],
-  nodeId: string,
-  updates: Partial<TreeNode>
-): TreeNode[] {
-  return detachedNodes.map(node => {
-    if (node.id === nodeId) {
-      return { ...node, ...updates }
-    }
-    // 递归更新子节点
-    if (node.children.length > 0) {
-      return {
-        ...node,
-        children: updateNodeInDetached(node.children, nodeId, updates)
-      }
-    }
-    return node
-  })
-}
-
-/**
- * 从断开节点列表中分离节点
- * @param detachedNodes 断开节点数组
- * @param nodeId 要分离的节点ID
- * @returns 新的断开节点数组和分离出的节点
- */
-function detachNodeFromDetached(
-  detachedNodes: TreeNode[],
-  nodeId: string
-): { newDetachedNodes: TreeNode[]; extractedNode: TreeNode | null } {
-  let extractedNode: TreeNode | null = null
-  
-  const processNodes = (nodes: TreeNode[]): TreeNode[] => {
-    return nodes.map(node => {
-      if (node.id === nodeId) {
-        // 找到要分离的节点，标记为断开并清除父节点引用
-        extractedNode = {
-          ...node,
-          isDetached: true,
-          parentId: null,
-          detachedFrom: node.parentId
-        }
-        // 从父节点的 children 中移除（通过不返回此节点实现）
-        return null as unknown as TreeNode
-      }
-      
-      // 递归处理子节点
-      if (node.children.length > 0) {
-        const newChildren = processNodes(node.children).filter(Boolean)
-        return { ...node, children: newChildren }
-      }
-      
-      return node
-    }).filter(Boolean)
-  }
-  
-  const newDetachedNodes = processNodes(detachedNodes)
-  
-  return { newDetachedNodes, extractedNode }
-}
-
 function setNodeCollapsedInTree(root: TreeNode, nodeId: string, isCollapsed: boolean): TreeNode {
   if (root.id === nodeId) {
     return { ...root, isCollapsed }
@@ -777,23 +573,6 @@ function setNodeCollapsedInTree(root: TreeNode, nodeId: string, isCollapsed: boo
     ...root,
     children: root.children.map((child) => setNodeCollapsedInTree(child, nodeId, isCollapsed)),
   }
-}
-
-function setNodeCollapsedInDetached(
-  detachedNodes: TreeNode[],
-  nodeId: string,
-  isCollapsed: boolean
-): TreeNode[] {
-  return detachedNodes.map((node) => {
-    if (node.id === nodeId) {
-      return { ...node, isCollapsed }
-    }
-
-    return {
-      ...node,
-      children: setNodeCollapsedInDetached(node.children, nodeId, isCollapsed),
-    }
-  })
 }
 
 function syncCollapseStateInTree(root: TreeNode, expandedNodeIds: Set<string>): TreeNode {
@@ -806,46 +585,11 @@ function syncCollapseStateInTree(root: TreeNode, expandedNodeIds: Set<string>): 
   }
 }
 
-function syncCollapseStateInDetached(
-  detachedNodes: TreeNode[],
-  expandedNodeIds: Set<string>
-): TreeNode[] {
-  return detachedNodes.map((node) => {
-    const isCollapsed = node.children.length > 0 ? !expandedNodeIds.has(node.id) : false
-
-    return {
-      ...node,
-      isCollapsed,
-      children: syncCollapseStateInDetached(node.children, expandedNodeIds),
-    }
-  })
-}
-
-function collectAllDetachedNodeIds(detachedNodes: TreeNode[]): string[] {
-  const ids: string[] = []
-
-  const traverse = (nodes: TreeNode[]) => {
-    for (const node of nodes) {
-      ids.push(node.id)
-      if (node.children.length > 0) {
-        traverse(node.children)
-      }
-    }
-  }
-
-  traverse(detachedNodes)
-  return ids
-}
-
 function resolveExpandedNodeIdsForDocument(
   root: TreeNode,
-  detachedNodes: TreeNode[],
   preferredExpandedNodeIds?: Iterable<string> | null
 ): Set<string> {
-  const allIds = new Set([
-    ...collectAllNodeIds(root),
-    ...collectAllDetachedNodeIds(detachedNodes),
-  ])
+  const allIds = new Set(collectAllNodeIds(root))
 
   if (!preferredExpandedNodeIds) {
     return allIds
@@ -889,7 +633,6 @@ export const useDocumentStore = create<DocumentStore>()(
         if (!document) return null
         return {
           root: document.root,
-          detachedNodes: (document as any).detachedNodes || [],
           metadata: document.metadata
         }
       })
@@ -932,10 +675,8 @@ export const useDocumentStore = create<DocumentStore>()(
                   return
                 }
 
-                const nextDetachedNodes = savedState.detachedNodes || []
                 const nextExpandedNodeIds = resolveExpandedNodeIdsForDocument(
                   currentDocument.root,
-                  nextDetachedNodes,
                   savedState.expandedNodeIds && savedState.expandedNodeIds.length > 0
                     ? savedState.expandedNodeIds
                     : undefined
@@ -945,7 +686,6 @@ export const useDocumentStore = create<DocumentStore>()(
                   document: {
                     ...currentDocument,
                     root: syncCollapseStateInTree(currentDocument.root, nextExpandedNodeIds),
-                    detachedNodes: syncCollapseStateInDetached(nextDetachedNodes, nextExpandedNodeIds),
                   },
                   expandedNodeIds: nextExpandedNodeIds,
                   selectedNodeId: null,
@@ -960,14 +700,12 @@ export const useDocumentStore = create<DocumentStore>()(
             
             // 默认展开所有节点
             const expandedNodeIds = resolveExpandedNodeIdsForDocument(
-              document.root,
-              document.detachedNodes || []
+              document.root
             )
             set({ 
               document: {
                 ...document,
                 root: syncCollapseStateInTree(document.root, expandedNodeIds),
-                detachedNodes: syncCollapseStateInDetached(document.detachedNodes || [], expandedNodeIds),
               }, 
               expandedNodeIds,
               selectedNodeId: null,
@@ -998,10 +736,9 @@ export const useDocumentStore = create<DocumentStore>()(
         markAsSaved: () => {
           const { document, expandedNodeIds } = get()
           if (document) {
-            // 保存编辑器状态（断开节点等）
+            // 保存编辑器状态
             if (document.fileId) {
               const state = createEditorState(document.fileId)
-              state.detachedNodes = document.detachedNodes || []
               state.expandedNodeIds = Array.from(expandedNodeIds)
               saveEditorState(state)
             }
@@ -1017,15 +754,8 @@ export const useDocumentStore = create<DocumentStore>()(
           const { document } = get()
           if (!document) return
 
-          // 先在树中查找节点
-          let node = findNodeInTree(document.root, nodeId)
-          let isDetached = false
-          
-          // 如果不在树中，在断开节点中查找
-          if (!node && document.detachedNodes) {
-            node = findNodeInDetached(document.detachedNodes, nodeId)
-            isDetached = true
-          }
+          const node = findNodeInTree(document.root, nodeId)
+          if (!node) return
           
           const description = updates.title 
             ? `修改标题: "${node?.title || ''}" → "${updates.title}"`
@@ -1040,40 +770,20 @@ export const useDocumentStore = create<DocumentStore>()(
             type: 'updateNode',
             description,
           })
-          
-          if (isDetached) {
-            // 更新断开节点
-            const newDetachedNodes = updateNodeInDetached(document.detachedNodes || [], nodeId, updates)
-            set({ 
-              document: { 
-                ...document, 
-                detachedNodes: newDetachedNodes, 
-                version: bumpDocumentVersion(document),
-                isModified: true 
-              },
-              lastMutation: nextMutation('update-node', isVisualOnly ? 'visual' : 'full', {
-                nodeId,
-                detached: true,
-                fields,
-              }),
-            })
-          } else {
-            // 更新树中的节点
-            const newRoot = updateNodeInTree(document.root, nodeId, updates)
-            set({ 
-              document: { 
-                ...document, 
-                root: newRoot, 
-                version: bumpDocumentVersion(document),
-                isModified: true 
-              },
-              lastMutation: nextMutation('update-node', isVisualOnly ? 'visual' : 'full', {
-                nodeId,
-                detached: false,
-                fields,
-              }),
-            })
-          }
+
+          const newRoot = updateNodeInTree(document.root, nodeId, updates)
+          set({ 
+            document: { 
+              ...document, 
+              root: newRoot, 
+              version: bumpDocumentVersion(document),
+              isModified: true 
+            },
+            lastMutation: nextMutation('update-node', isVisualOnly ? 'visual' : 'full', {
+              nodeId,
+              fields,
+            }),
+          })
         },
 
         moveNode: (nodeId: string, newParentId: string, index: number) => {
@@ -1131,7 +841,7 @@ export const useDocumentStore = create<DocumentStore>()(
         },
 
         deleteNodeOnly: (nodeId: string) => {
-          const { document, selectedNodeId, expandedNodeIds } = get()
+          const { document, selectedNodeId } = get()
           if (!document || nodeId === 'root') return
 
           // 添加历史记录
@@ -1141,31 +851,18 @@ export const useDocumentStore = create<DocumentStore>()(
             description: `删除节点（保留子节点）: "${node?.title || nodeId}"`,
           })
 
-          const { root: newRoot, orphanedChildren } = deleteNodeOnlyFromTree(document.root, nodeId)
-
-          // 将孤儿节点添加到 detachedNodes
-          const currentDetachedNodes = (document as any).detachedNodes || []
-          const newDetachedNodes = [...currentDetachedNodes, ...orphanedChildren]
+          const newRoot = deleteNodeOnlyFromTree(document.root, nodeId)
 
           set({
             document: {
               ...document,
               root: newRoot,
-              detachedNodes: newDetachedNodes,
               version: bumpDocumentVersion(document),
               isModified: true
             },
             selectedNodeId: selectedNodeId === nodeId ? null : selectedNodeId,
             lastMutation: nextMutation('structure-change', 'full', { nodeId }),
           })
-
-          // 自动保存编辑器状态
-          if (document.fileId) {
-            const state = createEditorState(document.fileId)
-            state.detachedNodes = newDetachedNodes
-            state.expandedNodeIds = Array.from(expandedNodeIds)
-            saveEditorState(state)
-          }
         },
 
         addChildNode: (parentId: string, title: string, insertIndex?: number) => {
@@ -1238,270 +935,6 @@ export const useDocumentStore = create<DocumentStore>()(
           })
 
           return newNode.id
-        },
-
-        detachNode: (nodeId: string) => {
-          const { document, expandedNodeIds } = get()
-          if (!document || nodeId === 'root') return
-
-          // 先在树中查找节点
-          let node = findNodeInTree(document.root, nodeId)
-          
-          if (node) {
-            // 断开树中的节点
-            const { root: newRoot, detachedNode } = detachNodeFromTree(document.root, nodeId)
-            
-            if (!detachedNode) {
-              const { t } = useLanguageStore.getState()
-              set({ error: t('common.detachFailed') })
-              return
-            }
-
-            // 将断开的节点存储在文档的 detachedNodes 中
-            const detachedNodes = (document as any).detachedNodes || []
-            const newDetachedNodes = [...detachedNodes, detachedNode]
-            
-            set({ 
-              document: { 
-                ...document, 
-                root: newRoot,
-                detachedNodes: newDetachedNodes,
-                version: bumpDocumentVersion(document),
-                isModified: true 
-              },
-              error: null,
-              lastMutation: nextMutation('structure-change', 'full', { nodeId, detached: true }),
-            })
-
-            // 自动保存编辑器状态
-            if (document.fileId) {
-              const state = createEditorState(document.fileId)
-              state.detachedNodes = newDetachedNodes
-              state.expandedNodeIds = Array.from(expandedNodeIds)
-              saveEditorState(state)
-            }
-          } else {
-            // 在断开节点中查找（处理断开节点内部的边删除）
-            const detachedNode = findNodeInDetached(document.detachedNodes || [], nodeId)
-            if (!detachedNode) {
-              const { t } = useLanguageStore.getState()
-              set({ error: t('common.nodeNotFound') })
-              return
-            }
-
-            // 从断开节点中分离子节点
-            const { newDetachedNodes, extractedNode } = detachNodeFromDetached(
-              document.detachedNodes || [],
-              nodeId
-            )
-            
-            if (!extractedNode) {
-              const { t } = useLanguageStore.getState()
-              set({ error: t('common.detachFailed') })
-              return
-            }
-
-            const finalDetachedNodes = [...newDetachedNodes, extractedNode]
-
-            set({ 
-              document: { 
-                ...document, 
-                detachedNodes: finalDetachedNodes,
-                version: bumpDocumentVersion(document),
-                isModified: true 
-              },
-              error: null,
-              lastMutation: nextMutation('structure-change', 'full', { nodeId, detached: true }),
-            })
-
-            // 自动保存编辑器状态
-            if (document.fileId) {
-              const state = createEditorState(document.fileId)
-              state.detachedNodes = finalDetachedNodes
-              state.expandedNodeIds = Array.from(expandedNodeIds)
-              saveEditorState(state)
-            }
-          }
-        },
-
-        connectNode: (nodeId: string, parentId: string) => {
-          const { document, expandedNodeIds } = get()
-          if (!document) return
-
-          // 从 detachedNodes 中找到要连接的节点
-          const detachedNodes = (document as any).detachedNodes || []
-          const nodeIndex = detachedNodes.findIndex((n: TreeNode) => n.id === nodeId)
-
-          if (nodeIndex === -1) {
-            const { t } = useLanguageStore.getState()
-            set({ error: t('common.detachedNodeNotFound') })
-            return
-          }
-
-          const detachedNode = detachedNodes[nodeIndex]
-
-          // 查找目标父节点（先在树中查找，再在断开节点中查找）
-          let parentNode = findNodeInTree(document.root, parentId)
-          let parentInDetached: TreeNode | null = null
-          let parentInDetachedIndex = -1
-          
-          if (!parentNode) {
-            // 在断开节点中查找父节点
-            parentInDetachedIndex = detachedNodes.findIndex((n: TreeNode) => n.id === parentId)
-            if (parentInDetachedIndex !== -1) {
-              parentNode = detachedNodes[parentInDetachedIndex]
-              parentInDetached = parentNode
-            }
-          }
-
-          if (!parentNode) {
-            const { t } = useLanguageStore.getState()
-            set({ error: t('common.parentNodeNotFound') })
-            return
-          }
-
-          // 特殊处理：连接到虚拟根节点时的层级检查
-          if (parentId === 'root') {
-            // 获取当前虚拟根节点的所有子节点的层级
-            const rootChildrenLevels = document.root.children.map(child => child.level)
-            
-            if (rootChildrenLevels.length > 0) {
-              // 虚拟根节点已有子节点，检查层级是否匹配
-              const expectedLevel = rootChildrenLevels[0]
-              if (detachedNode.level !== expectedLevel) {
-                const { t } = useLanguageStore.getState()
-                set({ error: t('common.levelMismatchRoot').replace('{expected}', String(expectedLevel)).replace('{current}', String(detachedNode.level)) })
-                return
-              }
-            }
-            // 如果虚拟根节点没有子节点，允许连接任意层级的节点（成为新的基准层级）
-          } else {
-            // 非虚拟根节点：验证层级关系，父节点层级必须小于子节点层级
-            if (parentNode.level >= detachedNode.level) {
-              const { t } = useLanguageStore.getState()
-              set({ error: t('common.levelMismatch').replace('{child}', String(detachedNode.level)).replace('{parent}', String(parentNode.level)) })
-              return
-            }
-          }
-
-          // 检查是否会导致循环引用
-          if (parentInDetached) {
-            // 父节点在断开节点中，检查断开节点内部的循环引用
-            const checkCycleInDetached = (node: TreeNode, targetId: string): boolean => {
-              if (node.id === targetId) return true
-              for (const child of node.children) {
-                if (checkCycleInDetached(child, targetId)) return true
-              }
-              return false
-            }
-            
-            if (checkCycleInDetached(detachedNode, parentId)) {
-              const { t } = useLanguageStore.getState()
-              set({ error: t('common.cycleError') })
-              return
-            }
-          } else {
-            // 父节点在树中，检查树中的循环引用
-            let currentParent = findParentInTree(document.root, parentId)
-            while (currentParent) {
-              if (currentParent.id === nodeId) {
-                const { t } = useLanguageStore.getState()
-                set({ error: t('common.cycleError') })
-                return
-              }
-              currentParent = findParentInTree(document.root, currentParent.id)
-            }
-          }
-
-          if (parentInDetached) {
-            // 两个节点都在断开节点中，直接在 detachedNodes 中连接
-            const updatedDetachedNodes = [...detachedNodes]
-            
-            // 将要连接的节点从 detachedNodes 中移除
-            updatedDetachedNodes.splice(nodeIndex, 1)
-            
-            // 更新父节点在数组中的位置（因为可能改变了）
-            const updatedParentIndex = updatedDetachedNodes.findIndex((n: TreeNode) => n.id === parentId)
-            if (updatedParentIndex === -1) {
-              const { t } = useLanguageStore.getState()
-              set({ error: t('common.parentChanged') })
-              return
-            }
-            
-            // 获取父节点的位置，计算子节点的相对位置
-            const parentNode = updatedDetachedNodes[updatedParentIndex]
-            const parentPosition = parentNode.position || { x: 0, y: 0 }
-            
-            // 计算子节点的新位置：在父节点右侧，垂直方向根据现有子节点数量偏移
-            const existingChildrenCount = parentNode.children.length
-            let horizontalDirection = 1
-            const resolveChildX = (nextChildX: number) => nextChildX + (horizontalDirection - 1) * 240
-            const firstChildPosition = parentNode.children[0]?.position
-            if (firstChildPosition) {
-              horizontalDirection = firstChildPosition.x < parentPosition.x ? -1 : 1
-            } else if (detachedNode.position) {
-              horizontalDirection = detachedNode.position.x < parentPosition.x ? -1 : 1
-            }
-            const childX = parentPosition.x + 240 // 水平间距 240px
-            const childY = parentPosition.y + existingChildrenCount * 100 // 垂直间距 100px
-            
-            // 将节点添加到父节点的 children 中，并设置相对位置
-            const updatedParent = {
-              ...parentNode,
-              children: [...parentNode.children, {
-                ...detachedNode,
-                parentId: parentId,
-                isDetached: false,
-                position: { x: resolveChildX(childX), y: childY }
-              }]
-            }
-            updatedDetachedNodes[updatedParentIndex] = updatedParent
-            
-            set({
-              document: {
-                ...document,
-                detachedNodes: updatedDetachedNodes,
-                version: bumpDocumentVersion(document),
-                isModified: true
-              },
-              error: null,
-              lastMutation: nextMutation('structure-change', 'full', { nodeId, detached: false }),
-            })
-
-            // 自动保存编辑器状态
-            if (document.fileId) {
-              const state = createEditorState(document.fileId)
-              state.detachedNodes = updatedDetachedNodes
-              state.expandedNodeIds = Array.from(expandedNodeIds)
-              saveEditorState(state)
-            }
-          } else {
-            // 父节点在树中，将节点连接到树
-            const newRoot = connectNodeToTreeWithOriginalLevel(document.root, detachedNode, parentId)
-
-            // 从 detachedNodes 中移除
-            const newDetachedNodes = detachedNodes.filter((n: TreeNode) => n.id !== nodeId)
-
-            set({
-              document: {
-                ...document,
-                root: newRoot,
-                detachedNodes: newDetachedNodes,
-                version: bumpDocumentVersion(document),
-                isModified: true
-              },
-              error: null,
-              lastMutation: nextMutation('structure-change', 'full', { nodeId, detached: false }),
-            })
-
-            // 自动保存编辑器状态
-            if (document.fileId) {
-              const state = createEditorState(document.fileId)
-              state.detachedNodes = newDetachedNodes
-              state.expandedNodeIds = Array.from(expandedNodeIds)
-              saveEditorState(state)
-            }
-          }
         },
 
         moveNodeOrder: (nodeId: string, direction: 'up' | 'down' | 'first' | 'last') => {
@@ -1632,22 +1065,16 @@ export const useDocumentStore = create<DocumentStore>()(
           }
 
           const isCollapsed = !newExpanded.has(nodeId)
-          const inTree = Boolean(findNodeInTree(document.root, nodeId))
 
           set({
             document: {
               ...document,
-              root: inTree
-                ? setNodeCollapsedInTree(document.root, nodeId, isCollapsed)
-                : document.root,
-              detachedNodes: inTree
-                ? document.detachedNodes || []
-                : setNodeCollapsedInDetached(document.detachedNodes || [], nodeId, isCollapsed),
+              root: setNodeCollapsedInTree(document.root, nodeId, isCollapsed),
               version: bumpDocumentVersion(document),
               isModified: true,
             },
             expandedNodeIds: newExpanded,
-            lastMutation: nextMutation('toggle-node', 'full', { nodeId, detached: !inTree }),
+            lastMutation: nextMutation('toggle-node', 'full', { nodeId }),
           })
         },
 
@@ -1661,7 +1088,6 @@ export const useDocumentStore = create<DocumentStore>()(
             document: {
               ...document,
               root: syncCollapseStateInTree(document.root, expandedNodeIds),
-              detachedNodes: syncCollapseStateInDetached(document.detachedNodes || [], expandedNodeIds),
               version: bumpDocumentVersion(document),
               isModified: true,
             },
@@ -1679,7 +1105,6 @@ export const useDocumentStore = create<DocumentStore>()(
             document: {
               ...document,
               root: syncCollapseStateInTree(document.root, expandedNodeIds),
-              detachedNodes: syncCollapseStateInDetached(document.detachedNodes || [], expandedNodeIds),
               version: bumpDocumentVersion(document),
               isModified: true,
             },
@@ -1746,13 +1171,11 @@ export const useDocumentStore = create<DocumentStore>()(
           
           try {
             const newDocument = parseMarkdown(markdown, document.fileName)
-            // 保留 fileId 和断开节点状态
+            // 保留 fileId
             newDocument.fileId = document.fileId
-            newDocument.detachedNodes = document.detachedNodes || []
             newDocument.version = bumpDocumentVersion(document)
             const expandedNodeIds = resolveExpandedNodeIdsForDocument(
               newDocument.root,
-              newDocument.detachedNodes || [],
               get().expandedNodeIds
             )
             
@@ -1760,7 +1183,6 @@ export const useDocumentStore = create<DocumentStore>()(
               document: {
                 ...newDocument,
                 root: syncCollapseStateInTree(newDocument.root, expandedNodeIds),
-                detachedNodes: syncCollapseStateInDetached(newDocument.detachedNodes || [], expandedNodeIds),
                 isModified: true,
               },
               expandedNodeIds,
@@ -1795,7 +1217,7 @@ export const useDocumentStore = create<DocumentStore>()(
           }
 
           const node = findNodeInTree(document.root, nodeId)
-          if (!node || node.isVirtual || node.level === 0 || node.isDetached) {
+          if (!node || node.isVirtual || node.level === 0) {
             return 'skipped'
           }
 
@@ -1893,7 +1315,7 @@ export const useDocumentStore = create<DocumentStore>()(
 
         undo: () => {
           const historyState = useHistoryStore.getState()
-          const result = historyState.undo() as { root: TreeNode; detachedNodes: TreeNode[]; metadata: DocumentMetadata } | null
+          const result = historyState.undo() as { root: TreeNode; metadata: DocumentMetadata } | null
           
           if (result) {
             const { document } = get()
@@ -1902,7 +1324,6 @@ export const useDocumentStore = create<DocumentStore>()(
                 document: {
                   ...document,
                   root: result.root,
-                  detachedNodes: result.detachedNodes,
                   metadata: result.metadata,
                   version: bumpDocumentVersion(document),
                   isModified: true
@@ -1918,7 +1339,7 @@ export const useDocumentStore = create<DocumentStore>()(
 
         redo: () => {
           const historyState = useHistoryStore.getState()
-          const result = historyState.redo() as { root: TreeNode; detachedNodes: TreeNode[]; metadata: DocumentMetadata } | null
+          const result = historyState.redo() as { root: TreeNode; metadata: DocumentMetadata } | null
           
           if (result) {
             const { document } = get()
@@ -1927,7 +1348,6 @@ export const useDocumentStore = create<DocumentStore>()(
                 document: {
                   ...document,
                   root: result.root,
-                  detachedNodes: result.detachedNodes,
                   metadata: result.metadata,
                   version: bumpDocumentVersion(document),
                   isModified: true
