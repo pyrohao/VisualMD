@@ -9,7 +9,7 @@
  * 对应技术文档6.1节
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
 import {
   ReactFlow,
   MiniMap,
@@ -19,6 +19,7 @@ import {
   type Node,
   type Edge,
   type OnConnect,
+  type OnMove,
   type NodeTypes,
   type OnConnectStart,
   type OnConnectEnd,
@@ -43,6 +44,12 @@ import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
 import { syncActiveDocumentToActiveSource } from '@/lib/editor-persistence'
 
 type ThemeConfig = ReturnType<ReturnType<typeof useThemeStore.getState>['getThemeConfig']>
+const FLOW_NODE_WIDTH = 180
+const FLOW_NODE_HEIGHT = 80
+const MINIMAP_BUFFER_RATIO = 0.35
+const MINIMAP_MIN_BUFFER_X = 160
+const MINIMAP_MIN_BUFFER_Y = 120
+const VIEWPORT_EPSILON = 0.5
 
 function createNodeCallbacks(
   updateNode: (nodeId: string, updates: Partial<TreeNode>) => void,
@@ -98,6 +105,86 @@ function attachEdgeStyles(
     ...edge,
     animated: false,
   }))
+}
+
+function resolveMiniMapMaskColor(themeConfig: ThemeConfig): string {
+  return themeConfig.card === '#161b22' ? 'rgba(15, 23, 42, 0.12)' : 'rgba(15, 23, 42, 0.05)'
+}
+
+function resolveMiniMapStrokeColor(themeConfig: ThemeConfig): string {
+  return themeConfig.card === '#161b22' ? 'rgba(255, 255, 255, 0.4)' : 'rgba(15, 23, 42, 0.2)'
+}
+
+function calculateNodeBounds(nodes: Node<FlowNodeData>[]) {
+  if (nodes.length === 0) {
+    return null
+  }
+
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+
+  for (const node of nodes) {
+    minX = Math.min(minX, node.position.x)
+    minY = Math.min(minY, node.position.y)
+    maxX = Math.max(maxX, node.position.x + FLOW_NODE_WIDTH)
+    maxY = Math.max(maxY, node.position.y + FLOW_NODE_HEIGHT)
+  }
+
+  return { minX, minY, maxX, maxY }
+}
+
+function clampValue(value: number, min: number, max: number): number {
+  if (min > max) {
+    return (min + max) / 2
+  }
+
+  return Math.min(Math.max(value, min), max)
+}
+
+function clampViewportToNodeBounds(
+  viewport: { x: number; y: number; zoom: number },
+  viewportSize: { width: number; height: number },
+  nodeBounds: ReturnType<typeof calculateNodeBounds>
+) {
+  if (!nodeBounds || viewportSize.width <= 0 || viewportSize.height <= 0 || viewport.zoom <= 0) {
+    return viewport
+  }
+
+  const visibleWidth = viewportSize.width / viewport.zoom
+  const visibleHeight = viewportSize.height / viewport.zoom
+  const halfVisibleWidth = visibleWidth / 2
+  const halfVisibleHeight = visibleHeight / 2
+  const bufferX = Math.max(visibleWidth * MINIMAP_BUFFER_RATIO, MINIMAP_MIN_BUFFER_X)
+  const bufferY = Math.max(visibleHeight * MINIMAP_BUFFER_RATIO, MINIMAP_MIN_BUFFER_Y)
+
+  const minCenterX = nodeBounds.minX - bufferX + halfVisibleWidth
+  const maxCenterX = nodeBounds.maxX + bufferX - halfVisibleWidth
+  const minCenterY = nodeBounds.minY - bufferY + halfVisibleHeight
+  const maxCenterY = nodeBounds.maxY + bufferY - halfVisibleHeight
+
+  const currentCenterX = (viewportSize.width / 2 - viewport.x) / viewport.zoom
+  const currentCenterY = (viewportSize.height / 2 - viewport.y) / viewport.zoom
+  const nextCenterX = clampValue(currentCenterX, minCenterX, maxCenterX)
+  const nextCenterY = clampValue(currentCenterY, minCenterY, maxCenterY)
+
+  return {
+    x: viewportSize.width / 2 - nextCenterX * viewport.zoom,
+    y: viewportSize.height / 2 - nextCenterY * viewport.zoom,
+    zoom: viewport.zoom,
+  }
+}
+
+function isViewportDifferent(
+  a: { x: number; y: number; zoom: number },
+  b: { x: number; y: number; zoom: number }
+): boolean {
+  return (
+    Math.abs(a.x - b.x) > VIEWPORT_EPSILON ||
+    Math.abs(a.y - b.y) > VIEWPORT_EPSILON ||
+    Math.abs(a.zoom - b.zoom) > VIEWPORT_EPSILON
+  )
 }
 
 function toFlowNodeData(
@@ -236,8 +323,15 @@ export function FlowCanvas() {
 
   const { getThemeConfig } = useThemeStore()
   const themeConfig = getThemeConfig()
+  const miniMapMaskColor = resolveMiniMapMaskColor(themeConfig)
+  const miniMapStrokeColor = resolveMiniMapStrokeColor(themeConfig)
   const { t } = useTranslation()
   const { mode: layoutMode } = useCanvasLayoutStore()
+  const fitViewPadding = layoutMode === 'down' ? 0.12 : layoutMode === 'left' ? 0.16 : 0.2
+  const miniMapSize =
+    layoutMode === 'down'
+      ? { width: 240, height: 152, offsetScale: 2.5 }
+      : { width: 196, height: 188, offsetScale: 2 }
   const nodeCallbacks = useMemo(
     () =>
       createNodeCallbacks(updateNode, toggleNode, (nodeId) => {
@@ -277,7 +371,11 @@ export function FlowCanvas() {
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes as Node<FlowNodeData>[])
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges)
-  const { fitView, screenToFlowPosition } = useReactFlow()
+  const { fitView, screenToFlowPosition, setViewport, getViewport } = useReactFlow()
+  const canvasRef = useRef<HTMLDivElement>(null)
+  const isMiniMapInteractingRef = useRef(false)
+  const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 })
+  const nodeBounds = useMemo(() => calculateNodeBounds(nodes), [nodes])
 
   // ??????????
 
@@ -301,6 +399,27 @@ export function FlowCanvas() {
     layoutMode: '',
     themeKey: '',
   })
+
+  useEffect(() => {
+    const element = canvasRef.current
+    if (!element) {
+      return
+    }
+
+    const updateViewportSize = () => {
+      setViewportSize({
+        width: element.clientWidth,
+        height: element.clientHeight,
+      })
+    }
+
+    updateViewportSize()
+
+    const observer = new ResizeObserver(updateViewportSize)
+    observer.observe(element)
+
+    return () => observer.disconnect()
+  }, [])
 
   // ????????????
   useEffect(() => {
@@ -423,7 +542,7 @@ export function FlowCanvas() {
       }
 
       if (event && 'clientX' in event) {
-        const mouseEvent = event as MouseEvent
+        const mouseEvent = event as globalThis.MouseEvent
         const flowPosition = screenToFlowPosition({
           x: mouseEvent.clientX,
           y: mouseEvent.clientY,
@@ -562,12 +681,49 @@ export function FlowCanvas() {
     selectNode(null)
   }, [selectNode])
 
+  const handleMiniMapClick = useCallback(
+    (_event: ReactMouseEvent, position: { x: number; y: number }) => {
+      const currentViewport = getViewport()
+      const targetViewport = {
+        x: viewportSize.width / 2 - position.x * currentViewport.zoom,
+        y: viewportSize.height / 2 - position.y * currentViewport.zoom,
+        zoom: currentViewport.zoom,
+      }
+      const clampedViewport = clampViewportToNodeBounds(targetViewport, viewportSize, nodeBounds)
+
+      void setViewport(clampedViewport, { duration: 220 })
+    },
+    [getViewport, nodeBounds, setViewport, viewportSize]
+  )
+
+  const handleMiniMapViewportMove = useCallback<OnMove>(
+    (_event, viewport) => {
+      if (!isMiniMapInteractingRef.current) {
+        return
+      }
+
+      const clampedViewport = clampViewportToNodeBounds(viewport, viewportSize, nodeBounds)
+      if (isViewportDifferent(viewport, clampedViewport)) {
+        void setViewport(clampedViewport)
+      }
+    },
+    [nodeBounds, setViewport, viewportSize]
+  )
+
+  const handleMiniMapInteractionStart = useCallback(() => {
+    isMiniMapInteractingRef.current = true
+  }, [])
+
+  const handleMiniMapInteractionEnd = useCallback(() => {
+    isMiniMapInteractingRef.current = false
+  }, [])
+
   useEffect(() => {
     const timer = setTimeout(() => {
-      fitView({ padding: 0.2, duration: 600 })
+      fitView({ padding: fitViewPadding, duration: 600 })
     }, 100)
     return () => clearTimeout(timer)
-  }, [fitView, layoutMode])
+  }, [fitView, fitViewPadding, layoutMode])
 
   // 监听错误并自动清除
   useEffect(() => {
@@ -603,12 +759,17 @@ export function FlowCanvas() {
   }
 
   return (
-    <div className="h-full w-full" style={{ backgroundColor: themeConfig.background }}>
+    <div
+      ref={canvasRef}
+      className="h-full w-full"
+      style={{ backgroundColor: themeConfig.background }}
+    >
       <ReactFlow
         nodes={nodes}
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
+        onMove={handleMiniMapViewportMove}
         onConnect={onConnect}
         onConnectStart={onConnectStart}
         onConnectEnd={onConnectEnd}
@@ -616,7 +777,7 @@ export function FlowCanvas() {
         nodeTypes={nodeTypes}
         nodesDraggable={false}
         fitViewOptions={{
-          padding: 0.2,
+          padding: fitViewPadding,
           minZoom: 0.1,
           maxZoom: 1.5,
         }}
@@ -655,14 +816,19 @@ export function FlowCanvas() {
             '--controls-border': themeConfig.border,
             '--controls-color': themeConfig.text,
             '--controls-hover': themeConfig.hover,
-          } as React.CSSProperties}
+          } as CSSProperties}
           showInteractive={false}
         />
 
         {/* 小地图 */}
         <MiniMap
-          className="rounded-lg border shadow-lg"
-          style={{ backgroundColor: themeConfig.card, borderColor: themeConfig.border }}
+          className="rounded-lg border shadow-lg custom-minimap"
+          style={{
+            backgroundColor: themeConfig.card,
+            borderColor: themeConfig.border,
+            width: miniMapSize.width,
+            height: miniMapSize.height,
+          }}
           nodeColor={(node) => {
             const level = (node.data?.level as number) ?? 0
             const colors = [
@@ -676,7 +842,19 @@ export function FlowCanvas() {
             ]
             return colors[level] ?? colors[0]
           }}
-          maskColor={`${themeConfig.background}80`}
+          nodeStrokeColor={themeConfig.card}
+          nodeStrokeWidth={1}
+          pannable
+          onClick={handleMiniMapClick}
+          onPointerDown={handleMiniMapInteractionStart}
+          onPointerUp={handleMiniMapInteractionEnd}
+          onPointerCancel={handleMiniMapInteractionEnd}
+          onPointerLeave={handleMiniMapInteractionEnd}
+          maskColor={miniMapMaskColor}
+          maskStrokeColor={miniMapStrokeColor}
+          maskStrokeWidth={1}
+          offsetScale={miniMapSize.offsetScale}
+          ariaLabel="画布预览导航"
         />
       </ReactFlow>
 

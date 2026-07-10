@@ -378,4 +378,36 @@
     fill: var(--controls-color) !important;
     stroke: var(--controls-color) !important;
   }
+
+  .custom-minimap {
+    overflow: hidden;
+    backdrop-filter: blur(6px);
+    box-shadow:
+      0 12px 28px rgba(15, 23, 42, 0.08),
+      inset 0 1px 0 rgba(255, 255, 255, 0.55);
+    transition:
+      box-shadow 160ms ease,
+      transform 160ms ease;
+  }
+
+  .custom-minimap:hover {
+    box-shadow:
+      0 16px 36px rgba(15, 23, 42, 0.12),
+      inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  }
+
+  .custom-minimap .react-flow__minimap-svg {
+    cursor: grab;
+  }
+
+  .custom-minimap .react-flow__minimap-svg:active {
+    cursor: grabbing;
+  }
+
+  .custom-minimap .react-flow__minimap-mask {
+    transition:
+      fill 160ms ease,
+      stroke 160ms ease,
+      stroke-width 160ms ease;
+  }
 }

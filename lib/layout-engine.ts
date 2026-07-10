@@ -17,16 +17,23 @@ export type TreeLayoutMode = 'balanced' | 'left' | 'right' | 'down'
  * 布局配置参数
  */
 export interface LayoutConfig {
-  /** 每层宽度（水平间距） */
+  /** 每层宽度（横向布局使用） */
   levelWidth: number
   /** 估算节点高度 */
   nodeHeight: number
-  /** 兄弟节点垂直间距 */
+  /** 常规兄弟节点间距 */
   siblingGap: number
   /** 左侧边距 */
   startX: number
   /** 顶部边距 */
   startY: number
+}
+
+interface ResolvedLayoutConfig extends LayoutConfig {
+  nodeWidth: number
+  rootSiblingGap: number
+  rootLevelWidth: number
+  levelHeight: number
 }
 
 export interface LayoutResult {
@@ -45,32 +52,78 @@ export const DEFAULT_LAYOUT_CONFIG: LayoutConfig = {
   startY: 40,
 }
 
-/**
- * 向下布局会复用横向布局再旋转，原先按“节点高度”估算同层间距会过小。
- * 这里按实际节点宽度提供更接近视觉占位的估算，避免同层节点挤在一起。
- */
-const DOWN_LAYOUT_NODE_SPAN = 220
-const DOWN_LAYOUT_SIBLING_GAP = 24
+const MODE_CONFIG_OVERRIDES: Record<TreeLayoutMode, Partial<ResolvedLayoutConfig>> = {
+  balanced: {
+    levelWidth: 250,
+    siblingGap: 16,
+    rootSiblingGap: 28,
+    rootLevelWidth: 270,
+    nodeWidth: 200,
+    levelHeight: 150,
+    startX: 72,
+    startY: 48,
+  },
+  left: {
+    levelWidth: 250,
+    siblingGap: 18,
+    rootSiblingGap: 34,
+    rootLevelWidth: 290,
+    nodeWidth: 200,
+    levelHeight: 150,
+    startX: 88,
+    startY: 48,
+  },
+  right: {
+    levelWidth: 250,
+    siblingGap: 18,
+    rootSiblingGap: 34,
+    rootLevelWidth: 290,
+    nodeWidth: 200,
+    levelHeight: 150,
+    startX: 88,
+    startY: 48,
+  },
+  down: {
+    siblingGap: 20,
+    rootSiblingGap: 36,
+    nodeWidth: 188,
+    nodeHeight: 80,
+    levelHeight: 152,
+    startX: 60,
+    startY: 52,
+  },
+}
 
-function resolveDownLayoutConfig(config: LayoutConfig): LayoutConfig {
+function resolveLayoutConfig(
+  baseConfig: LayoutConfig,
+  mode: TreeLayoutMode
+): ResolvedLayoutConfig {
+  const overrides = MODE_CONFIG_OVERRIDES[mode]
+
   return {
-    ...config,
-    nodeHeight: Math.max(config.nodeHeight, DOWN_LAYOUT_NODE_SPAN),
-    siblingGap: Math.max(config.siblingGap, DOWN_LAYOUT_SIBLING_GAP),
+    ...baseConfig,
+    ...overrides,
+    nodeWidth: overrides.nodeWidth ?? 200,
+    rootSiblingGap: overrides.rootSiblingGap ?? Math.max(baseConfig.siblingGap * 2, 24),
+    rootLevelWidth: overrides.rootLevelWidth ?? baseConfig.levelWidth,
+    levelHeight: overrides.levelHeight ?? Math.max(baseConfig.nodeHeight + 60, 140),
   }
 }
 
-function calculateSubtreeHeight(node: TreeNode, config: LayoutConfig): number {
-  if (node.children.length === 0 || node.isCollapsed) {
-    return config.nodeHeight + config.siblingGap
+function getSiblingGap(config: ResolvedLayoutConfig, depth: number): number {
+  return depth === 0 ? config.rootSiblingGap : config.siblingGap
+}
+
+function getHorizontalOffset(config: ResolvedLayoutConfig, depth: number): number {
+  if (depth <= 0) {
+    return 0
   }
 
-  const childrenHeight = node.children.reduce(
-    (sum, child) => sum + calculateSubtreeHeight(child, config),
-    0
-  )
+  if (depth === 1) {
+    return config.rootLevelWidth
+  }
 
-  return Math.max(config.nodeHeight + config.siblingGap, childrenHeight)
+  return config.rootLevelWidth + (depth - 1) * config.levelWidth
 }
 
 function calculateBranchDepth(node: TreeNode): number {
@@ -81,21 +134,54 @@ function calculateBranchDepth(node: TreeNode): number {
   return 1 + Math.max(...node.children.map(calculateBranchDepth))
 }
 
-function splitRootChildren(children: TreeNode[]): {
+function calculateHorizontalSubtreeSpan(
+  node: TreeNode,
+  config: ResolvedLayoutConfig,
+  depth: number
+): number {
+  if (node.children.length === 0 || node.isCollapsed) {
+    return config.nodeHeight
+  }
+
+  const childSpans = node.children.map((child) =>
+    calculateHorizontalSubtreeSpan(child, config, depth + 1)
+  )
+  const gap = getSiblingGap(config, depth)
+  const childrenTotal =
+    childSpans.reduce((sum, span) => sum + span, 0) + gap * Math.max(0, childSpans.length - 1)
+
+  return Math.max(config.nodeHeight, childrenTotal)
+}
+
+function splitRootChildrenBySpan(
+  children: TreeNode[],
+  config: ResolvedLayoutConfig
+): {
   leftChildren: TreeNode[]
   rightChildren: TreeNode[]
 } {
-  const splitIndex = Math.floor(children.length / 2)
+  const leftChildren: TreeNode[] = []
+  const rightChildren: TreeNode[] = []
+  let leftSpan = 0
+  let rightSpan = 0
 
-  return {
-    leftChildren: children.slice(0, splitIndex),
-    rightChildren: children.slice(splitIndex),
+  for (const child of children) {
+    const childSpan = calculateHorizontalSubtreeSpan(child, config, 1)
+    if (leftSpan <= rightSpan) {
+      leftChildren.push(child)
+      leftSpan += childSpan
+    } else {
+      rightChildren.push(child)
+      rightSpan += childSpan
+    }
   }
+
+  return { leftChildren, rightChildren }
 }
 
 function calculateHorizontalTreeLayoutResult(
   root: TreeNode,
-  config: LayoutConfig,
+  config: ResolvedLayoutConfig,
   rootMode: 'balanced' | 'left' | 'right'
 ): LayoutResult {
   const positions = new Map<string, Position>()
@@ -106,11 +192,11 @@ function calculateHorizontalTreeLayoutResult(
       ? { leftChildren: root.children, rightChildren: [] as TreeNode[] }
       : rootMode === 'right'
         ? { leftChildren: [] as TreeNode[], rightChildren: root.children }
-        : splitRootChildren(root.children)
+        : splitRootChildrenBySpan(root.children, config)
 
   const { leftChildren, rightChildren } = rootChildrenSplit
   const maxLeftDepth = Math.max(0, ...leftChildren.map(calculateBranchDepth))
-  const centerX = config.startX + maxLeftDepth * config.levelWidth
+  const centerX = config.startX + getHorizontalOffset(config, maxLeftDepth)
 
   const layoutBranch = (
     node: TreeNode,
@@ -122,28 +208,27 @@ function calculateHorizontalTreeLayoutResult(
 
     const x =
       direction === 'left'
-        ? centerX - depth * config.levelWidth
-        : centerX + depth * config.levelWidth
+        ? centerX - getHorizontalOffset(config, depth)
+        : centerX + getHorizontalOffset(config, depth)
+
+    const span = calculateHorizontalSubtreeSpan(node, config, depth)
+    const y = startY + Math.max(0, (span - config.nodeHeight) / 2)
+    positions.set(node.id, { x, y })
 
     if (node.children.length === 0 || node.isCollapsed) {
-      positions.set(node.id, { x, y: startY })
-      return config.nodeHeight + config.siblingGap
+      return span
     }
 
+    const gap = getSiblingGap(config, depth)
     let currentY = startY
 
     for (const child of node.children) {
-      const childHeight = calculateSubtreeHeight(child, config)
+      const childSpan = calculateHorizontalSubtreeSpan(child, config, depth + 1)
       layoutBranch(child, depth + 1, currentY, direction)
-      currentY += childHeight
+      currentY += childSpan + gap
     }
 
-    const occupiedHeight = currentY - startY
-    const totalHeight = Math.max(config.nodeHeight + config.siblingGap, occupiedHeight)
-    const y = startY + Math.max(0, (totalHeight - config.nodeHeight) / 2)
-
-    positions.set(node.id, { x, y })
-    return totalHeight
+    return span
   }
 
   const layoutGroup = (
@@ -152,68 +237,109 @@ function calculateHorizontalTreeLayoutResult(
     startY: number
   ): number => {
     let currentY = startY
+    const gap = getSiblingGap(config, 0)
 
     for (const node of nodes) {
-      const subtreeHeight = calculateSubtreeHeight(node, config)
+      const subtreeSpan = calculateHorizontalSubtreeSpan(node, config, 1)
       layoutBranch(node, 1, currentY, direction)
-      currentY += subtreeHeight
+      currentY += subtreeSpan + gap
     }
 
-    return currentY - startY
+    return currentY - startY - (nodes.length > 0 ? gap : 0)
   }
 
   directions.set(root.id, 'center')
 
   if (root.children.length === 0 || root.isCollapsed) {
     positions.set(root.id, { x: centerX, y: config.startY })
-  } else {
-    const leftHeight = leftChildren.reduce(
-      (sum, child) => sum + calculateSubtreeHeight(child, config),
-      0
-    )
-    const rightHeight = rightChildren.reduce(
-      (sum, child) => sum + calculateSubtreeHeight(child, config),
-      0
-    )
-
-    const contentHeight = Math.max(
-      config.nodeHeight + config.siblingGap,
-      leftHeight,
-      rightHeight
-    )
-
-    if (leftChildren.length > 0) {
-      layoutGroup(leftChildren, 'left', config.startY + (contentHeight - leftHeight) / 2)
-    }
-
-    if (rightChildren.length > 0) {
-      layoutGroup(rightChildren, 'right', config.startY + (contentHeight - rightHeight) / 2)
-    }
-
-    positions.set(root.id, {
-      x: centerX,
-      y: config.startY + Math.max(0, (contentHeight - config.nodeHeight) / 2),
-    })
+    return { positions, directions }
   }
+
+  const leftHeight = leftChildren.reduce(
+    (sum, child, index) =>
+      sum +
+      calculateHorizontalSubtreeSpan(child, config, 1) +
+      (index > 0 ? getSiblingGap(config, 0) : 0),
+    0
+  )
+  const rightHeight = rightChildren.reduce(
+    (sum, child, index) =>
+      sum +
+      calculateHorizontalSubtreeSpan(child, config, 1) +
+      (index > 0 ? getSiblingGap(config, 0) : 0),
+    0
+  )
+
+  const contentHeight = Math.max(config.nodeHeight, leftHeight, rightHeight)
+
+  if (leftChildren.length > 0) {
+    layoutGroup(leftChildren, 'left', config.startY + (contentHeight - leftHeight) / 2)
+  }
+
+  if (rightChildren.length > 0) {
+    layoutGroup(rightChildren, 'right', config.startY + (contentHeight - rightHeight) / 2)
+  }
+
+  positions.set(root.id, {
+    x: centerX,
+    y: config.startY + Math.max(0, (contentHeight - config.nodeHeight) / 2),
+  })
 
   return { positions, directions }
 }
 
-function rotateToDownLayout(base: LayoutResult, rootId: string): LayoutResult {
+function calculateDownSubtreeWidth(
+  node: TreeNode,
+  config: ResolvedLayoutConfig,
+  depth: number
+): number {
+  if (node.children.length === 0 || node.isCollapsed) {
+    return config.nodeWidth
+  }
+
+  const childWidths = node.children.map((child) =>
+    calculateDownSubtreeWidth(child, config, depth + 1)
+  )
+  const gap = getSiblingGap(config, depth)
+  const childrenTotal =
+    childWidths.reduce((sum, width) => sum + width, 0) +
+    gap * Math.max(0, childWidths.length - 1)
+
+  return Math.max(config.nodeWidth, childrenTotal)
+}
+
+function calculateDownTreeLayoutResult(
+  root: TreeNode,
+  config: ResolvedLayoutConfig
+): LayoutResult {
   const positions = new Map<string, Position>()
   const directions = new Map<string, BranchDirection>()
 
-  const rootPosition = base.positions.get(rootId) ?? { x: 0, y: 0 }
+  const layoutNode = (node: TreeNode, left: number, depth: number): number => {
+    const subtreeWidth = calculateDownSubtreeWidth(node, config, depth)
+    const x = left + Math.max(0, (subtreeWidth - config.nodeWidth) / 2)
+    const y = config.startY + depth * config.levelHeight
 
-  for (const [nodeId, position] of base.positions.entries()) {
-    positions.set(nodeId, {
-      x: rootPosition.x + (position.y - rootPosition.y),
-      y: rootPosition.y + (position.x - rootPosition.x),
-    })
+    positions.set(node.id, { x, y })
+    directions.set(node.id, node.id === root.id ? 'center' : 'down')
 
-    directions.set(nodeId, nodeId === rootId ? 'center' : 'down')
+    if (node.children.length === 0 || node.isCollapsed) {
+      return subtreeWidth
+    }
+
+    const gap = getSiblingGap(config, depth)
+    let currentLeft = left
+
+    for (const child of node.children) {
+      const childWidth = calculateDownSubtreeWidth(child, config, depth + 1)
+      layoutNode(child, currentLeft, depth + 1)
+      currentLeft += childWidth + gap
+    }
+
+    return subtreeWidth
   }
 
+  layoutNode(root, config.startX, 0)
   return { positions, directions }
 }
 
@@ -225,21 +351,21 @@ export function calculateTreeLayoutResult(
   config: LayoutConfig = DEFAULT_LAYOUT_CONFIG,
   mode: TreeLayoutMode = 'balanced'
 ): LayoutResult {
+  const resolvedConfig = resolveLayoutConfig(config, mode)
+
   if (mode === 'down') {
-    const downConfig = resolveDownLayoutConfig(config)
-    const rightLayout = calculateHorizontalTreeLayoutResult(root, downConfig, 'right')
-    return rotateToDownLayout(rightLayout, root.id)
+    return calculateDownTreeLayoutResult(root, resolvedConfig)
   }
 
   if (mode === 'left') {
-    return calculateHorizontalTreeLayoutResult(root, config, 'left')
+    return calculateHorizontalTreeLayoutResult(root, resolvedConfig, 'left')
   }
 
   if (mode === 'right') {
-    return calculateHorizontalTreeLayoutResult(root, config, 'right')
+    return calculateHorizontalTreeLayoutResult(root, resolvedConfig, 'right')
   }
 
-  return calculateHorizontalTreeLayoutResult(root, config, 'balanced')
+  return calculateHorizontalTreeLayoutResult(root, resolvedConfig, 'balanced')
 }
 
 /**
