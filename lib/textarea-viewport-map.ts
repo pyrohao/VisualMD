@@ -111,9 +111,16 @@ function measureTextareaOffsetTop(
 export function getTextareaSourceOffsetAtViewportRatio(
   textarea: HTMLTextAreaElement,
   value: string,
-  viewportRatio: number
+  viewportRatio: number,
+  options?: {
+    topInset?: number
+    bottomInset?: number
+  }
 ) {
-  const targetY = textarea.scrollTop + textarea.clientHeight * viewportRatio
+  const topInset = Math.max(0, options?.topInset || 0)
+  const bottomInset = Math.max(0, options?.bottomInset || 0)
+  const availableHeight = Math.max(0, textarea.clientHeight - topInset - bottomInset)
+  const targetY = textarea.scrollTop + topInset + availableHeight * viewportRatio
   let low = 0
   let high = value.length
   let bestOffset = 0
@@ -137,9 +144,16 @@ export function getTextareaScrollTopForSourceOffset(
   textarea: HTMLTextAreaElement,
   value: string,
   sourceOffset: number,
-  viewportRatio: number
+  viewportRatio: number,
+  options?: {
+    topInset?: number
+    bottomInset?: number
+  }
 ) {
+  const topInset = Math.max(0, options?.topInset || 0)
+  const bottomInset = Math.max(0, options?.bottomInset || 0)
+  const availableHeight = Math.max(0, textarea.clientHeight - topInset - bottomInset)
   const offsetTop = measureTextareaOffsetTop(textarea, value, sourceOffset)
-  const nextScrollTop = offsetTop - textarea.clientHeight * viewportRatio
+  const nextScrollTop = offsetTop - (topInset + availableHeight * viewportRatio)
   return Math.min(Math.max(0, nextScrollTop), getTextareaScrollLimit(textarea))
 }

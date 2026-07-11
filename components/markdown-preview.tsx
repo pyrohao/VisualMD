@@ -23,7 +23,16 @@ import { getGitProviderClient } from '@/lib/git/providers'
 import { inferGitFileKind, inferGitFileMimeType, isGitBinaryFileKind } from '@/lib/git/file-kind'
 import { applyMarkdownToDocument, persistMarkdownToActiveSource } from '@/lib/editor-persistence'
 import { resolveTabCurrentContent, resolveTabSavedContent } from '@/lib/tab-content'
-import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
+import {
+  memo,
+  useEffect,
+  useState,
+  useCallback,
+  useRef,
+  useMemo,
+  type RefObject,
+  type UIEventHandler,
+} from 'react'
 import type { PluggableList } from 'unified'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
@@ -128,6 +137,21 @@ function getTextareaLineHeight(textarea: HTMLTextAreaElement) {
 function getTextareaViewportAnchorOffset(textarea: HTMLTextAreaElement, layout: LivePreviewLayout) {
   const viewportRatio = PREVIEW_SYNC_TARGET_VIEWPORT_RATIO[layout]
   return textarea.clientHeight * viewportRatio
+}
+
+function getTopOverlayInset(
+  textarea: HTMLTextAreaElement | null,
+  overlay: HTMLElement | null
+) {
+  if (!textarea || !overlay) {
+    return 0
+  }
+
+  const textareaRect = textarea.getBoundingClientRect()
+  const overlayRect = overlay.getBoundingClientRect()
+  const overlap = overlayRect.bottom - textareaRect.top
+
+  return overlap > 0 ? Math.min(overlap, textarea.clientHeight) : 0
 }
 
 function getAnchoredPreviewElements(article: HTMLElement) {
@@ -465,6 +489,53 @@ function getThemeStyles(theme: ThemeMode): string {
   `
 }
 
+const RenderedMarkdownPane = memo(function RenderedMarkdownPane({
+  containerRef,
+  articleRef,
+  html,
+  theme,
+  className,
+  contentClassName,
+  borderColor,
+  onScroll,
+}: {
+  containerRef: RefObject<HTMLDivElement | null>
+  articleRef: RefObject<HTMLElement | null>
+  html: string
+  theme: ThemeMode
+  className: string
+  contentClassName: string
+  borderColor?: string
+  onScroll?: UIEventHandler<HTMLDivElement>
+}) {
+  return (
+    <div
+      ref={containerRef}
+      onScroll={onScroll}
+      className={className}
+      style={borderColor ? { borderColor } : undefined}
+    >
+      <div className={contentClassName}>
+        <style>{getThemeStyles(theme)}</style>
+        <article
+          ref={articleRef}
+          className="markdown-body max-w-none"
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      </div>
+    </div>
+  )
+}, (prevProps, nextProps) => (
+  prevProps.containerRef === nextProps.containerRef &&
+  prevProps.articleRef === nextProps.articleRef &&
+  prevProps.html === nextProps.html &&
+  prevProps.theme === nextProps.theme &&
+  prevProps.className === nextProps.className &&
+  prevProps.contentClassName === nextProps.contentClassName &&
+  prevProps.borderColor === nextProps.borderColor &&
+  prevProps.onScroll === nextProps.onScroll
+))
+
 function GitBinaryPreview({
   fileName,
   gitMeta,
@@ -668,6 +739,7 @@ export function MarkdownPreview() {
   const previewScrollRef = useRef<HTMLDivElement | null>(null)
   const previewArticleRef = useRef<HTMLElement | null>(null)
   const livePreviewArticleRef = useRef<HTMLElement | null>(null)
+  const selectionPromptRef = useRef<HTMLDivElement | null>(null)
   const selectionTimerRef = useRef<number | null>(null)
   const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const isSyncingLiveScrollRef = useRef(false)
@@ -768,6 +840,11 @@ export function MarkdownPreview() {
       textarea.scrollLeft = snapshot.scrollLeft
     })
   }, [])
+
+  const getEditorViewportInsets = useCallback((textarea: HTMLTextAreaElement | null) => ({
+    topInset: getTopOverlayInset(textarea, selectionPromptRef.current),
+    bottomInset: 0,
+  }), [])
 
   useEffect(() => {
     return () => {
@@ -1003,7 +1080,8 @@ export function MarkdownPreview() {
         textarea,
         editContentRef.current,
         offset,
-        getOutlineJumpViewportRatio()
+        getOutlineJumpViewportRatio(),
+        getEditorViewportInsets(textarea)
       )
 
       textarea.focus({ preventScroll: true })
@@ -1079,7 +1157,7 @@ export function MarkdownPreview() {
     return () => {
       window.removeEventListener('outline-jump', handleOutlineJump)
     }
-  }, [liveLayout, mode])
+  }, [getEditorViewportInsets, liveLayout, mode])
 
   const gitAssets = useMemo(
     () => collectGitAssetMap(stagedChanges, pendingAssetChanges),
@@ -1423,7 +1501,8 @@ export function MarkdownPreview() {
       getTextareaSourceOffsetAtViewportRatio(
         editor,
         editContentRef.current,
-        PREVIEW_SYNC_TARGET_VIEWPORT_RATIO[liveLayout]
+        PREVIEW_SYNC_TARGET_VIEWPORT_RATIO[liveLayout],
+        getEditorViewportInsets(editor)
       ) - previewBodyOffset
     )
     const anchor = findBestPreviewAnchor(article, sourceOffset)
@@ -1434,7 +1513,7 @@ export function MarkdownPreview() {
     }
 
     preview.scrollTop = getPreviewAnchorScrollTop(anchor, preview, liveLayout, sourceOffset)
-  }, [liveLayout, previewBodyOffset, syncLiveScrollByRatio])
+  }, [getEditorViewportInsets, liveLayout, previewBodyOffset, syncLiveScrollByRatio])
 
   const syncLiveScrollFromPreview = useCallback(() => {
     const preview = livePreviewRef.current
@@ -1464,9 +1543,10 @@ export function MarkdownPreview() {
       editor,
       editContentRef.current,
       sourceOffset,
-      PREVIEW_SYNC_TARGET_VIEWPORT_RATIO[liveLayout]
+      PREVIEW_SYNC_TARGET_VIEWPORT_RATIO[liveLayout],
+      getEditorViewportInsets(editor)
     )
-  }, [liveLayout, previewBodyOffset, syncLiveScrollByRatio])
+  }, [getEditorViewportInsets, liveLayout, previewBodyOffset, syncLiveScrollByRatio])
 
   const withLiveScrollSyncGuard = useCallback((syncAction: () => void) => {
     if (isSyncingLiveScrollRef.current) {
@@ -1537,27 +1617,6 @@ export function MarkdownPreview() {
     })
   }, [editContent, html, liveLayout, mode, syncLiveScrollFromEditor, syncLiveScrollFromPreview, withLiveScrollSyncGuard])
 
-  useEffect(() => {
-    if (!selectionCandidate) {
-      return
-    }
-
-    const applySelection = (textarea: HTMLTextAreaElement | null) => {
-      if (!textarea) return
-      textarea.focus({ preventScroll: true })
-      textarea.setSelectionRange(selectionCandidate.startOffset, selectionCandidate.endOffset)
-    }
-
-    if (mode === 'edit') {
-      applySelection(editTextareaRef.current)
-      return
-    }
-
-    if (mode === 'live') {
-      applySelection(liveEditorRef.current)
-    }
-  }, [mode, selectionCandidate])
-
   const candidatePreview = useMemo(() => {
     if (!selectionCandidate) return ''
     const normalized = selectionCandidate.expectedText
@@ -1572,6 +1631,7 @@ export function MarkdownPreview() {
 
   const selectionPrompt = selectionCandidate ? (
     <div
+      ref={selectionPromptRef}
       className="pointer-events-auto absolute left-4 right-4 top-4 z-20 flex items-center justify-between gap-3 rounded-xl border px-3 py-2 shadow-sm"
       style={{
         borderColor: themeConfig.border,
@@ -1756,19 +1816,14 @@ export function MarkdownPreview() {
       {/* 内容区域 */}
       <div className="relative flex flex-1 overflow-hidden">
         {mode === 'preview' && (
-          <div
-            ref={previewScrollRef}
+          <RenderedMarkdownPane
+            containerRef={previewScrollRef}
+            articleRef={previewArticleRef}
+            html={html}
+            theme={theme}
             className="h-full w-full overflow-y-auto overflow-x-hidden"
-          >
-            <div className="max-w-none p-8">
-              <style>{getThemeStyles(theme)}</style>
-              <article
-                ref={previewArticleRef}
-                className="markdown-body max-w-none"
-                dangerouslySetInnerHTML={{ __html: html }}
-              />
-            </div>
-          </div>
+            contentClassName="max-w-none p-8"
+          />
         )}
 
         {mode === 'edit' && (
@@ -1797,24 +1852,25 @@ export function MarkdownPreview() {
         {mode === 'live' && (
           <div className={cn('flex h-full w-full min-w-0', liveLayout === 'stacked' ? 'flex-col' : 'flex-row')}>
             <div
-              ref={livePreviewRef}
-              onScroll={handleLivePreviewScroll}
               className={cn(
-                'min-h-0 min-w-0 overflow-y-auto overflow-x-hidden',
                 liveLayout === 'stacked'
-                  ? 'h-1/2 w-full border-b'
-                  : 'h-full w-1/2 border-r'
+                  ? 'h-1/2 w-full'
+                  : 'h-full w-1/2'
               )}
-              style={{ borderColor: themeConfig.border }}
             >
-              <div className="max-w-none p-5">
-                <style>{getThemeStyles(theme)}</style>
-                <article
-                  ref={livePreviewArticleRef}
-                  className="markdown-body max-w-none"
-                  dangerouslySetInnerHTML={{ __html: html }}
-                />
-              </div>
+              <RenderedMarkdownPane
+                containerRef={livePreviewRef}
+                articleRef={livePreviewArticleRef}
+                html={html}
+                theme={theme}
+                onScroll={handleLivePreviewScroll}
+                className={cn(
+                  'min-h-0 min-w-0 h-full w-full overflow-y-auto overflow-x-hidden',
+                  liveLayout === 'stacked' ? 'border-b' : 'border-r'
+                )}
+                contentClassName="max-w-none p-5"
+                borderColor={themeConfig.border}
+              />
             </div>
             <div
               className={cn(

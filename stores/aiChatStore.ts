@@ -1443,9 +1443,6 @@ export const useAiChatStore = create<AiChatStore>((set, get) => ({
 
   clearSelectionCandidate: () => {
     set({ selectionCandidate: null })
-    if (typeof window !== 'undefined') {
-      window.getSelection()?.removeAllRanges()
-    }
   },
 
   removeReference: async (referenceId) => {
