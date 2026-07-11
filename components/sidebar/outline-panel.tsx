@@ -13,11 +13,13 @@ import { ListTree, FileText } from 'lucide-react'
 import { useThemeStore, themeConfigs } from '@/stores/themeStore'
 import { useDocumentStore } from '@/stores/documentStore'
 import { useTranslation } from '@/stores/languageStore'
+import { extractMarkdownOutlineHeadings } from '@/lib/markdown-outline'
 
 interface Heading {
   level: number
   text: string
   line: number
+  startOffset: number
 }
 
 export function OutlinePanel() {
@@ -44,17 +46,7 @@ export function OutlinePanel() {
       return
     }
 
-    const lines = markdown.split('\n')
-    const extractedHeadings: Heading[] = []
-
-    lines.forEach((line, index) => {
-      const match = line.match(/^(#{1,6})\s+(.+)$/)
-      if (match) {
-        const level = match[1].length
-        const text = match[2].trim()
-        extractedHeadings.push({ level, text, line: index })
-      }
-    })
+    const extractedHeadings = extractMarkdownOutlineHeadings(markdown)
 
     setHeadings(extractedHeadings)
     setSelectedHeadingIndex((currentIndex) =>
@@ -63,10 +55,10 @@ export function OutlinePanel() {
   }, [document, getCurrentMarkdown])
 
   // 点击标题跳转到对应位置
-  const handleHeadingClick = (line: number, index: number) => {
+  const handleHeadingClick = (line: number, index: number, startOffset: number) => {
     setSelectedHeadingIndex(index)
     // 触发事件让编辑器跳转到指定行
-    window.dispatchEvent(new CustomEvent('outline-jump', { detail: { line, index } }))
+    window.dispatchEvent(new CustomEvent('outline-jump', { detail: { line, index, sourceOffset: startOffset } }))
   }
 
   return (
@@ -103,7 +95,7 @@ export function OutlinePanel() {
             {headings.map((heading, index) => (
               <button
                 key={index}
-                onClick={() => handleHeadingClick(heading.line, index)}
+                onClick={() => handleHeadingClick(heading.line, index, heading.startOffset)}
                 className="relative w-full rounded px-2 py-1.5 text-left text-sm transition-colors hover:opacity-80"
                 style={{
                   paddingLeft: `${(heading.level - 1) * 12 + 8}px`,

@@ -79,6 +79,7 @@ type EditorSelectionSnapshot = {
 type OutlineJumpDetail = {
   line: number
   index?: number
+  sourceOffset?: number
 }
 
 const LIVE_PREVIEW_LAYOUT_STORAGE_KEY = 'visualmd-live-preview-layout'
@@ -983,14 +984,27 @@ export function MarkdownPreview() {
   }, [captureEditorSelectionSnapshot, commitDraftToDocument, document, restoreEditorSelectionSnapshot])
 
   useEffect(() => {
-    const jumpToTextareaLine = (line: number) => {
+    const getOutlineJumpViewportRatio = () => {
+      if (mode === 'live') {
+        return PREVIEW_SYNC_TARGET_VIEWPORT_RATIO[liveLayout]
+      }
+
+      return 0.16
+    }
+
+    const jumpToTextareaSourceOffset = (line: number, sourceOffset?: number) => {
       const textarea = mode === 'live' ? liveEditorRef.current : mode === 'edit' ? editTextareaRef.current : null
       if (!textarea) return false
 
-      const offset = getLineStartOffset(editContentRef.current, line)
-      const computedStyle = window.getComputedStyle(textarea)
-      const lineHeight = Number.parseFloat(computedStyle.lineHeight || '0') || 22
-      const nextScrollTop = Math.max(0, lineHeight * line - textarea.clientHeight * 0.35)
+      const offset = typeof sourceOffset === 'number'
+        ? Math.max(0, Math.min(sourceOffset, editContentRef.current.length))
+        : getLineStartOffset(editContentRef.current, line)
+      const nextScrollTop = getTextareaScrollTopForSourceOffset(
+        textarea,
+        editContentRef.current,
+        offset,
+        getOutlineJumpViewportRatio()
+      )
 
       textarea.focus({ preventScroll: true })
       textarea.setSelectionRange(offset, offset)
@@ -998,17 +1012,49 @@ export function MarkdownPreview() {
       return true
     }
 
-    const jumpToPreviewHeading = (index?: number) => {
+    const jumpToPreviewHeading = (index?: number, sourceOffset?: number) => {
       const article = mode === 'live' ? livePreviewArticleRef.current : mode === 'preview' ? previewArticleRef.current : null
       const scrollContainer = mode === 'live' ? livePreviewRef.current : mode === 'preview' ? previewScrollRef.current : null
-      if (!article || !scrollContainer || index === undefined) return false
+      if (!article || !scrollContainer) return false
 
-      const headings = article.querySelectorAll('h1, h2, h3, h4, h5, h6')
-      const targetHeading = headings[index] as HTMLElement | undefined
+      let targetHeading: HTMLElement | undefined
+
+      if (typeof sourceOffset === 'number') {
+        const previewSourceOffset = Math.max(
+          0,
+          sourceOffset - getPreviewBodyOffset(mode === 'live' ? editContentRef.current : latestMarkdownRef.current)
+        )
+        const headings = Array.from(article.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6'))
+        targetHeading = headings.find((heading) => {
+          const start = parseNodeOffset(heading.getAttribute('data-source-start'))
+          return start === previewSourceOffset
+        })
+
+        if (!targetHeading) {
+          const fallback = findBestPreviewAnchor(article, previewSourceOffset)
+          if (fallback && /^H[1-6]$/.test(fallback.tagName)) {
+            targetHeading = fallback
+          }
+        }
+      }
+
+      if (!targetHeading && index !== undefined) {
+        const headings = article.querySelectorAll('h1, h2, h3, h4, h5, h6')
+        targetHeading = headings[index] as HTMLElement | undefined
+      }
+
       if (!targetHeading) return false
 
       scrollContainer.scrollTo({
-        top: Math.max(0, targetHeading.offsetTop - 24),
+        top: getPreviewAnchorScrollTop(
+          targetHeading,
+          scrollContainer,
+          mode === 'live' ? liveLayout : 'stacked',
+          Math.max(
+            0,
+            (parseNodeOffset(targetHeading.getAttribute('data-source-start')) || 0)
+          )
+        ),
         behavior: 'smooth',
       })
       return true
@@ -1019,13 +1065,13 @@ export function MarkdownPreview() {
       if (!detail || typeof detail.line !== 'number') return
 
       if (mode === 'preview') {
-        jumpToPreviewHeading(detail.index)
+        jumpToPreviewHeading(detail.index, detail.sourceOffset)
         return
       }
 
-      const jumped = jumpToTextareaLine(detail.line)
+      const jumped = jumpToTextareaSourceOffset(detail.line, detail.sourceOffset)
       if (mode === 'live' && !jumped) {
-        jumpToPreviewHeading(detail.index)
+        jumpToPreviewHeading(detail.index, detail.sourceOffset)
       }
     }
 
@@ -1033,7 +1079,7 @@ export function MarkdownPreview() {
     return () => {
       window.removeEventListener('outline-jump', handleOutlineJump)
     }
-  }, [mode])
+  }, [liveLayout, mode])
 
   const gitAssets = useMemo(
     () => collectGitAssetMap(stagedChanges, pendingAssetChanges),
@@ -1465,7 +1511,7 @@ export function MarkdownPreview() {
     if (skipLiveSyncRef.current) {
       skipLiveSyncRef.current = false
     }
-  }, [mode])
+  }, [liveLayout, mode])
 
   useEffect(() => {
     if (mode !== 'live') {

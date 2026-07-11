@@ -44,6 +44,7 @@ import { isAiDocumentHistoryDescription } from '@/lib/ai-document-history'
 type OutlineJumpDetail = {
   line: number
   index?: number
+  sourceOffset?: number
 }
 
 type PreviewOpenDetail = {
