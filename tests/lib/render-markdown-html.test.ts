@@ -44,4 +44,16 @@ describe('renderMarkdownToSanitizedHtml', () => {
 
     expect(html).toContain('katex')
   })
+
+  it('supports remark plugins that inject data attributes for rendered blocks', async () => {
+    const { createMarkdownSourceAnchorPlugin } = await import('@/lib/markdown-preview-anchors')
+    const markdown = ['# Title', '', 'Paragraph'].join('\n')
+
+    const html = await renderMarkdownToSanitizedHtml(markdown, {
+      remarkPlugins: [createMarkdownSourceAnchorPlugin()],
+    })
+
+    expect(html).toContain('data-source-start=')
+    expect(html).toContain('<h1 data-source-start="0"')
+  })
 })

@@ -86,6 +86,14 @@ describe('sanitizeRenderedHtml', () => {
     expect(sanitized).toContain('<img src="data:image/png;base64,aaaa" alt="img">')
   })
 
+  it('preserves data attributes used by preview sync anchors', () => {
+    const html = '<p data-source-start="12" data-source-end="34">anchor</p>'
+    const sanitized = sanitizeRenderedHtml(html)
+
+    expect(sanitized).toContain('data-source-start="12"')
+    expect(sanitized).toContain('data-source-end="34"')
+  })
+
   it('removes unsafe data urls from links while keeping image data urls', () => {
     const html = [
       '<a href="data:text/html,<script>alert(1)</script>">payload</a>',

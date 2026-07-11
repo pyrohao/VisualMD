@@ -24,6 +24,7 @@ import { inferGitFileKind, inferGitFileMimeType, isGitBinaryFileKind } from '@/l
 import { applyMarkdownToDocument, persistMarkdownToActiveSource } from '@/lib/editor-persistence'
 import { resolveTabCurrentContent, resolveTabSavedContent } from '@/lib/tab-content'
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
+import type { PluggableList } from 'unified'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import { BookOpen, Columns2, Pencil, Plus, Rows2, SplitSquareHorizontal, X } from 'lucide-react'
@@ -35,6 +36,14 @@ import {
   createMarkdownReferenceHighlightPlugin,
   resolvePreviewHighlightRanges,
 } from '@/lib/markdown-preview-highlight'
+import {
+  createMarkdownSourceAnchorPlugin,
+  getPreviewBodyOffset,
+} from '@/lib/markdown-preview-anchors'
+import {
+  getTextareaScrollTopForSourceOffset,
+  getTextareaSourceOffsetAtViewportRatio,
+} from '@/lib/textarea-viewport-map'
 import {
   buildGitImageRuntimeConfig,
   collectGitAssetMap,
@@ -74,6 +83,10 @@ type OutlineJumpDetail = {
 
 const LIVE_PREVIEW_LAYOUT_STORAGE_KEY = 'visualmd-live-preview-layout'
 const PREVIEW_MODE_STORAGE_KEY = 'visualmd-preview-mode'
+const PREVIEW_SYNC_TARGET_VIEWPORT_RATIO: Record<LivePreviewLayout, number> = {
+  'side-by-side': 0.1,
+  stacked: 0.24,
+}
 
 function isLivePreviewLayout(value: string | null): value is LivePreviewLayout {
   return value === 'side-by-side' || value === 'stacked'
@@ -99,6 +112,153 @@ function getLineStartOffset(markdown: string, targetLine: number) {
   }
 
   return offset
+}
+
+function clampPreviewScrollTop(scrollTop: number, target: HTMLElement) {
+  const maxScrollTop = Math.max(0, target.scrollHeight - target.clientHeight)
+  return Math.min(Math.max(0, scrollTop), maxScrollTop)
+}
+
+function getTextareaLineHeight(textarea: HTMLTextAreaElement) {
+  const computedStyle = window.getComputedStyle(textarea)
+  return Number.parseFloat(computedStyle.lineHeight || '0') || 22
+}
+
+function getTextareaViewportAnchorOffset(textarea: HTMLTextAreaElement, layout: LivePreviewLayout) {
+  const viewportRatio = PREVIEW_SYNC_TARGET_VIEWPORT_RATIO[layout]
+  return textarea.clientHeight * viewportRatio
+}
+
+function getAnchoredPreviewElements(article: HTMLElement) {
+  return Array.from(
+    article.querySelectorAll<HTMLElement>('[data-source-start][data-source-end]')
+  )
+}
+
+function parseNodeOffset(value: string | null) {
+  if (!value) return null
+  const parsed = Number.parseInt(value, 10)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function getPreviewAnchorSourceRange(anchor: HTMLElement | null) {
+  if (!anchor) {
+    return null
+  }
+
+  const start = parseNodeOffset(anchor.getAttribute('data-source-start'))
+  const end = parseNodeOffset(anchor.getAttribute('data-source-end'))
+
+  if (start === null || end === null || end < start) {
+    return null
+  }
+
+  return { start, end }
+}
+
+function clamp01(value: number) {
+  return Math.min(Math.max(value, 0), 1)
+}
+
+function findBestPreviewAnchor(
+  article: HTMLElement,
+  sourceOffset: number
+) {
+  const anchoredElements = getAnchoredPreviewElements(article)
+  if (anchoredElements.length === 0) {
+    return null
+  }
+
+  let bestElement: HTMLElement | null = null
+  let bestScore = Number.POSITIVE_INFINITY
+
+  for (const element of anchoredElements) {
+    const start = parseNodeOffset(element.getAttribute('data-source-start'))
+    const end = parseNodeOffset(element.getAttribute('data-source-end'))
+    if (start === null || end === null || end < start) {
+      continue
+    }
+
+    const score =
+      sourceOffset < start
+        ? start - sourceOffset
+        : sourceOffset > end
+          ? sourceOffset - end
+          : 0
+
+    if (score < bestScore) {
+      bestScore = score
+      bestElement = element
+      if (score === 0) {
+        break
+      }
+    }
+  }
+
+  return bestElement
+}
+
+function getPreviewAnchorTop(anchor: HTMLElement, target: HTMLElement) {
+  const anchorRect = anchor.getBoundingClientRect()
+  const targetRect = target.getBoundingClientRect()
+  return anchorRect.top - targetRect.top + target.scrollTop
+}
+
+function getPreviewAnchorScrollTop(
+  anchor: HTMLElement,
+  target: HTMLElement,
+  layout: LivePreviewLayout,
+  sourceOffset: number
+) {
+  const viewportRatio = PREVIEW_SYNC_TARGET_VIEWPORT_RATIO[layout]
+  const anchorTop = getPreviewAnchorTop(anchor, target)
+  const sourceRange = getPreviewAnchorSourceRange(anchor)
+  const sourceLength = sourceRange ? Math.max(1, sourceRange.end - sourceRange.start) : 1
+  const sourceProgress = sourceRange
+    ? clamp01((sourceOffset - sourceRange.start) / sourceLength)
+    : 0
+  const desiredTop =
+    anchorTop + anchor.offsetHeight * sourceProgress - target.clientHeight * viewportRatio
+  return clampPreviewScrollTop(desiredTop, target)
+}
+
+function getPreviewAnchorCenterY(anchor: HTMLElement, preview: HTMLElement) {
+  const anchorRect = anchor.getBoundingClientRect()
+  const previewRect = preview.getBoundingClientRect()
+  return anchorRect.top - previewRect.top + preview.scrollTop + anchorRect.height / 2
+}
+
+function findBestPreviewAnchorByViewport(
+  article: HTMLElement,
+  preview: HTMLElement,
+  layout: LivePreviewLayout
+) {
+  const anchoredElements = getAnchoredPreviewElements(article)
+  if (anchoredElements.length === 0) {
+    return null
+  }
+
+  const targetY =
+    preview.scrollTop + preview.clientHeight * PREVIEW_SYNC_TARGET_VIEWPORT_RATIO[layout]
+  let bestElement: HTMLElement | null = null
+  let bestDistance = Number.POSITIVE_INFINITY
+
+  for (const element of anchoredElements) {
+    const elementTop = getPreviewAnchorTop(element, preview)
+    const elementBottom = elementTop + Math.max(element.offsetHeight, 1)
+
+    if (targetY >= elementTop && targetY <= elementBottom) {
+      return element
+    }
+
+    const distance = Math.abs(getPreviewAnchorCenterY(element, preview) - targetY)
+    if (distance < bestDistance) {
+      bestDistance = distance
+      bestElement = element
+    }
+  }
+
+  return bestElement
 }
 
 /**
@@ -512,6 +672,7 @@ export function MarkdownPreview() {
   const isSyncingLiveScrollRef = useRef(false)
   const previousDocumentKeyRef = useRef<string>('')
   const skipLiveSyncRef = useRef(false)
+  const lastLiveScrollDriverRef = useRef<'editor' | 'preview'>('editor')
   const isPersistingDraftRef = useRef(false)
   const gitImageCacheRef = useRef<Map<string, string>>(new Map())
   const editContentRef = useRef(editContent)
@@ -628,6 +789,7 @@ export function MarkdownPreview() {
   const latestExternalRevisionRef = useRef(externalRevision)
   const isEditingMode = mode === 'edit' || mode === 'live'
   const renderMarkdown = mode === 'live' ? editContent : markdown
+  const previewBodyOffset = useMemo(() => getPreviewBodyOffset(renderMarkdown), [renderMarkdown])
   const hasPendingEditorChanges = isEditingMode && (
     normalizeEditorComparableMarkdown(editContent) !== normalizeEditorComparableMarkdown(persistedEditContent)
   )
@@ -916,11 +1078,13 @@ export function MarkdownPreview() {
         renderMarkdown,
         activeReferences
       )
-      const remarkPlugins = [remarkMath]
+      const remarkPlugins: PluggableList = [remarkMath]
 
       if (referenceHighlightRanges.length > 0) {
         remarkPlugins.push(createMarkdownReferenceHighlightPlugin(referenceHighlightRanges))
       }
+
+      remarkPlugins.push(createMarkdownSourceAnchorPlugin())
 
       const sanitizedHtml = await renderMarkdownToSanitizedHtml(content, {
         remarkPlugins,
@@ -1199,6 +1363,65 @@ export function MarkdownPreview() {
     target.scrollTop = progress * targetScrollable
   }, [])
 
+  const syncLiveScrollFromEditor = useCallback(() => {
+    const editor = liveEditorRef.current
+    const preview = livePreviewRef.current
+    const article = livePreviewArticleRef.current
+
+    if (!editor || !preview || !article) {
+      return
+    }
+
+    const sourceOffset = Math.max(
+      0,
+      getTextareaSourceOffsetAtViewportRatio(
+        editor,
+        editContentRef.current,
+        PREVIEW_SYNC_TARGET_VIEWPORT_RATIO[liveLayout]
+      ) - previewBodyOffset
+    )
+    const anchor = findBestPreviewAnchor(article, sourceOffset)
+
+    if (!anchor) {
+      syncLiveScrollByRatio(editor, preview)
+      return
+    }
+
+    preview.scrollTop = getPreviewAnchorScrollTop(anchor, preview, liveLayout, sourceOffset)
+  }, [liveLayout, previewBodyOffset, syncLiveScrollByRatio])
+
+  const syncLiveScrollFromPreview = useCallback(() => {
+    const preview = livePreviewRef.current
+    const article = livePreviewArticleRef.current
+    const editor = liveEditorRef.current
+
+    if (!preview || !article || !editor) {
+      return
+    }
+
+    const anchor = findBestPreviewAnchorByViewport(article, preview, liveLayout)
+    const sourceRange = getPreviewAnchorSourceRange(anchor)
+    if (!anchor || !sourceRange) {
+      syncLiveScrollByRatio(preview, editor)
+      return
+    }
+
+    const viewportAnchorY =
+      preview.scrollTop + preview.clientHeight * PREVIEW_SYNC_TARGET_VIEWPORT_RATIO[liveLayout]
+    const anchorTop = getPreviewAnchorTop(anchor, preview)
+    const anchorHeight = Math.max(anchor.offsetHeight, 1)
+    const previewProgress = clamp01((viewportAnchorY - anchorTop) / anchorHeight)
+    const sourceOffset = Math.round(
+      sourceRange.start + (sourceRange.end - sourceRange.start) * previewProgress
+    ) + previewBodyOffset
+    editor.scrollTop = getTextareaScrollTopForSourceOffset(
+      editor,
+      editContentRef.current,
+      sourceOffset,
+      PREVIEW_SYNC_TARGET_VIEWPORT_RATIO[liveLayout]
+    )
+  }, [liveLayout, previewBodyOffset, syncLiveScrollByRatio])
+
   const withLiveScrollSyncGuard = useCallback((syncAction: () => void) => {
     if (isSyncingLiveScrollRef.current) {
       return
@@ -1218,10 +1441,11 @@ export function MarkdownPreview() {
       return
     }
 
+    lastLiveScrollDriverRef.current = 'editor'
     withLiveScrollSyncGuard(() => {
-      syncLiveScrollByRatio(source, target)
+      syncLiveScrollFromEditor()
     })
-  }, [mode, syncLiveScrollByRatio, withLiveScrollSyncGuard])
+  }, [mode, syncLiveScrollFromEditor, withLiveScrollSyncGuard])
 
   const handleLivePreviewScroll = useCallback(() => {
     const source = livePreviewRef.current
@@ -1230,10 +1454,11 @@ export function MarkdownPreview() {
       return
     }
 
+    lastLiveScrollDriverRef.current = 'preview'
     withLiveScrollSyncGuard(() => {
-      syncLiveScrollByRatio(source, target)
+      syncLiveScrollFromPreview()
     })
-  }, [mode, syncLiveScrollByRatio, withLiveScrollSyncGuard])
+  }, [mode, syncLiveScrollFromPreview, withLiveScrollSyncGuard])
 
   useEffect(() => {
     if (mode !== 'live') return
@@ -1241,6 +1466,30 @@ export function MarkdownPreview() {
       skipLiveSyncRef.current = false
     }
   }, [mode])
+
+  useEffect(() => {
+    if (mode !== 'live') {
+      return
+    }
+
+    if (skipLiveSyncRef.current) {
+      skipLiveSyncRef.current = false
+      return
+    }
+
+    window.requestAnimationFrame(() => {
+      if (lastLiveScrollDriverRef.current === 'preview') {
+        withLiveScrollSyncGuard(() => {
+          syncLiveScrollFromPreview()
+        })
+        return
+      }
+
+      withLiveScrollSyncGuard(() => {
+        syncLiveScrollFromEditor()
+      })
+    })
+  }, [editContent, html, liveLayout, mode, syncLiveScrollFromEditor, syncLiveScrollFromPreview, withLiveScrollSyncGuard])
 
   useEffect(() => {
     if (!selectionCandidate) {

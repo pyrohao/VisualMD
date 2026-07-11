@@ -20,14 +20,14 @@ export async function renderMarkdownToSanitizedHtml(
     .use(remarkParse)
     .use(remarkGfm)
 
-  for (const plugin of options.remarkPlugins || []) {
-    processor.use(plugin)
+  if (options.remarkPlugins && options.remarkPlugins.length > 0) {
+    processor.use(options.remarkPlugins)
   }
 
   processor.use(remarkRehype, { allowDangerousHtml: true })
 
-  for (const plugin of options.rehypePlugins || []) {
-    processor.use(plugin)
+  if (options.rehypePlugins && options.rehypePlugins.length > 0) {
+    processor.use(options.rehypePlugins)
   }
 
   const result = await processor

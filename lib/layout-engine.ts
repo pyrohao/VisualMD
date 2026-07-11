@@ -160,23 +160,38 @@ function splitRootChildrenBySpan(
   leftChildren: TreeNode[]
   rightChildren: TreeNode[]
 } {
-  const leftChildren: TreeNode[] = []
-  const rightChildren: TreeNode[] = []
-  let leftSpan = 0
-  let rightSpan = 0
-
-  for (const child of children) {
-    const childSpan = calculateHorizontalSubtreeSpan(child, config, 1)
-    if (leftSpan <= rightSpan) {
-      leftChildren.push(child)
-      leftSpan += childSpan
-    } else {
-      rightChildren.push(child)
-      rightSpan += childSpan
+  if (children.length <= 1) {
+    return {
+      leftChildren: children.slice(),
+      rightChildren: [],
     }
   }
 
-  return { leftChildren, rightChildren }
+  const spans = children.map((child) => calculateHorizontalSubtreeSpan(child, config, 1))
+  const prefixSums: number[] = [0]
+
+  for (let index = 0; index < spans.length; index += 1) {
+    prefixSums.push(prefixSums[index] + spans[index])
+  }
+
+  let bestSplitIndex = 1
+  let bestDifference = Number.POSITIVE_INFINITY
+
+  for (let splitIndex = 1; splitIndex < children.length; splitIndex += 1) {
+    const leftSpan = prefixSums[splitIndex]
+    const rightSpan = prefixSums[children.length] - leftSpan
+    const difference = Math.abs(leftSpan - rightSpan)
+
+    if (difference < bestDifference) {
+      bestDifference = difference
+      bestSplitIndex = splitIndex
+    }
+  }
+
+  return {
+    leftChildren: children.slice(0, bestSplitIndex),
+    rightChildren: children.slice(bestSplitIndex),
+  }
 }
 
 function calculateHorizontalTreeLayoutResult(
