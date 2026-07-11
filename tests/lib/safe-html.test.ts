@@ -94,6 +94,13 @@ describe('sanitizeRenderedHtml', () => {
     expect(sanitized).toContain('data-source-end="34"')
   })
 
+  it('preserves heading ids used by markdown hash links', () => {
+    const html = '<h2 id="为什么选择-visualmd">Title</h2>'
+    const sanitized = sanitizeRenderedHtml(html)
+
+    expect(sanitized).toContain('id="为什么选择-visualmd"')
+  })
+
   it('removes unsafe data urls from links while keeping image data urls', () => {
     const html = [
       '<a href="data:text/html,<script>alert(1)</script>">payload</a>',

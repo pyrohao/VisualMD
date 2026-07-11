@@ -38,7 +38,7 @@ import { inferGitFileKind, isGitBinaryFileKind } from '@/lib/git/file-kind'
 import { buildGitTabDraftState } from '@/lib/git/tab-state'
 import { resolveTabCurrentContent, syncTabContentFromSource } from '@/lib/tab-content'
 import { useHistoryStore } from '@/stores/historyStore'
-import { DEFAULT_WELCOME_DOCUMENTS } from '@/lib/default-documents'
+import { loadDefaultWelcomeDocuments } from '@/lib/default-documents'
 import { isAiDocumentHistoryDescription } from '@/lib/ai-document-history'
 
 type OutlineJumpDetail = {
@@ -203,7 +203,7 @@ export function MarkdownEditor() {
 
   // 获取Store
   const { loadDocument, clearDocument, document, selectedNodeId } = useDocumentStore()
-  const { currentFileId, openFile, files, initializeWelcomeDocs } = useFileSystemStore()
+  const { currentFileId, openFile, files, hasInitializedWelcomeDocs, initializeWelcomeDocs } = useFileSystemStore()
   const {
     setCurrentDocumentId,
     drafts,
@@ -465,14 +465,24 @@ export function MarkdownEditor() {
 
   // 仅在工作区首次加载时初始化欢迎文档，避免用户后续删除后被重新创建
   useEffect(() => {
-    if (!mounted) return
+    if (!mounted || hasInitializedWelcomeDocs) return
 
-    const timer = setTimeout(() => {
-      initializeWelcomeDocs(DEFAULT_WELCOME_DOCUMENTS)
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      void loadDefaultWelcomeDocuments().then((documents) => {
+        if (cancelled || documents.length === 0) {
+          return
+        }
+
+        initializeWelcomeDocs(documents)
+      })
     }, 100)
 
-    return () => clearTimeout(timer)
-  }, [initializeWelcomeDocs, mounted])
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [hasInitializedWelcomeDocs, initializeWelcomeDocs, mounted])
 
   // 监听文档修改状态，在模板编辑模式下标记模板和标签为已修改
   useEffect(() => {

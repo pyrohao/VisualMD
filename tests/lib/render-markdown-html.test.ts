@@ -56,4 +56,26 @@ describe('renderMarkdownToSanitizedHtml', () => {
     expect(html).toContain('data-source-start=')
     expect(html).toContain('<h1 data-source-start="0"')
   })
+
+  it('supports heading anchor ids for markdown hash links', async () => {
+    const { createMarkdownHeadingAnchorPlugin } = await import('@/lib/markdown-heading-anchors')
+    const markdown = [
+      '## 快速开始',
+      '',
+      '## 为什么选择 VisualMD',
+      '',
+      '## AI & Git',
+      '',
+      '## AI & Git',
+    ].join('\n')
+
+    const html = await renderMarkdownToSanitizedHtml(markdown, {
+      remarkPlugins: [createMarkdownHeadingAnchorPlugin()],
+    })
+
+    expect(html).toContain('id="快速开始"')
+    expect(html).toContain('id="为什么选择-visualmd"')
+    expect(html).toContain('id="ai--git"')
+    expect(html).toContain('id="ai--git-1"')
+  })
 })

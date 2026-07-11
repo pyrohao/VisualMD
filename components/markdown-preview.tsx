@@ -50,6 +50,10 @@ import {
   getPreviewBodyOffset,
 } from '@/lib/markdown-preview-anchors'
 import {
+  createMarkdownHeadingAnchorPlugin,
+  findMarkdownAnchorTarget,
+} from '@/lib/markdown-heading-anchors'
+import {
   getTextareaScrollTopForSourceOffset,
   getTextareaSourceOffsetAtViewportRatio,
 } from '@/lib/textarea-viewport-map'
@@ -244,6 +248,21 @@ function getPreviewAnchorScrollTop(
     : 0
   const desiredTop =
     anchorTop + anchor.offsetHeight * sourceProgress - target.clientHeight * viewportRatio
+  return clampPreviewScrollTop(desiredTop, target)
+}
+
+function getPreviewElementScrollTop(
+  element: HTMLElement,
+  target: HTMLElement,
+  layout: LivePreviewLayout
+) {
+  const sourceRange = getPreviewAnchorSourceRange(element)
+  if (sourceRange) {
+    return getPreviewAnchorScrollTop(element, target, layout, sourceRange.start)
+  }
+
+  const viewportRatio = PREVIEW_SYNC_TARGET_VIEWPORT_RATIO[layout]
+  const desiredTop = getPreviewAnchorTop(element, target) - target.clientHeight * viewportRatio
   return clampPreviewScrollTop(desiredTop, target)
 }
 
@@ -497,6 +516,7 @@ const RenderedMarkdownPane = memo(function RenderedMarkdownPane({
   className,
   contentClassName,
   borderColor,
+  onClick,
   onScroll,
 }: {
   containerRef: RefObject<HTMLDivElement | null>
@@ -506,11 +526,13 @@ const RenderedMarkdownPane = memo(function RenderedMarkdownPane({
   className: string
   contentClassName: string
   borderColor?: string
+  onClick?: React.MouseEventHandler<HTMLDivElement>
   onScroll?: UIEventHandler<HTMLDivElement>
 }) {
   return (
     <div
       ref={containerRef}
+      onClick={onClick}
       onScroll={onScroll}
       className={className}
       style={borderColor ? { borderColor } : undefined}
@@ -533,6 +555,7 @@ const RenderedMarkdownPane = memo(function RenderedMarkdownPane({
   prevProps.className === nextProps.className &&
   prevProps.contentClassName === nextProps.contentClassName &&
   prevProps.borderColor === nextProps.borderColor &&
+  prevProps.onClick === nextProps.onClick &&
   prevProps.onScroll === nextProps.onScroll
 ))
 
@@ -793,6 +816,68 @@ export function MarkdownPreview() {
     setLiveLayout(nextLayout)
     window.localStorage.setItem(LIVE_PREVIEW_LAYOUT_STORAGE_KEY, nextLayout)
   }, [])
+
+  const scrollPreviewTargetIntoView = useCallback((
+    target: HTMLElement,
+    scrollContainer: HTMLDivElement,
+    layout: LivePreviewLayout
+  ) => {
+    scrollContainer.scrollTo({
+      top: getPreviewElementScrollTop(target, scrollContainer, layout),
+      behavior: 'smooth',
+    })
+  }, [])
+
+  const handlePreviewHashLinkClick = useCallback((
+    event: React.MouseEvent<HTMLDivElement>,
+    article: HTMLElement | null,
+    scrollContainer: HTMLDivElement | null,
+    layout: LivePreviewLayout
+  ) => {
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey
+    ) {
+      return
+    }
+
+    const eventTarget = event.target
+    if (!(eventTarget instanceof Element)) {
+      return
+    }
+
+    const link = eventTarget.closest('a[href]')
+    const href = link?.getAttribute('href')?.trim()
+    if (!href || !href.startsWith('#')) {
+      return
+    }
+
+    event.preventDefault()
+
+    if (!article || !scrollContainer) {
+      return
+    }
+
+    const target = findMarkdownAnchorTarget(article, href)
+    if (!target) {
+      return
+    }
+
+    scrollPreviewTargetIntoView(target, scrollContainer, layout)
+  }, [scrollPreviewTargetIntoView])
+
+  const handlePreviewPaneClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    handlePreviewHashLinkClick(event, previewArticleRef.current, previewScrollRef.current, 'stacked')
+  }, [handlePreviewHashLinkClick])
+
+  const handleLivePreviewPaneClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    lastLiveScrollDriverRef.current = 'preview'
+    handlePreviewHashLinkClick(event, livePreviewArticleRef.current, livePreviewRef.current, liveLayout)
+  }, [handlePreviewHashLinkClick, liveLayout])
 
   const captureEditorSelectionSnapshot = useCallback((): EditorSelectionSnapshot | null => {
     const textarea = mode === 'live' ? liveEditorRef.current : mode === 'edit' ? editTextareaRef.current : null
@@ -1123,18 +1208,11 @@ export function MarkdownPreview() {
 
       if (!targetHeading) return false
 
-      scrollContainer.scrollTo({
-        top: getPreviewAnchorScrollTop(
-          targetHeading,
-          scrollContainer,
-          mode === 'live' ? liveLayout : 'stacked',
-          Math.max(
-            0,
-            (parseNodeOffset(targetHeading.getAttribute('data-source-start')) || 0)
-          )
-        ),
-        behavior: 'smooth',
-      })
+      scrollPreviewTargetIntoView(
+        targetHeading,
+        scrollContainer,
+        mode === 'live' ? liveLayout : 'stacked'
+      )
       return true
     }
 
@@ -1157,7 +1235,7 @@ export function MarkdownPreview() {
     return () => {
       window.removeEventListener('outline-jump', handleOutlineJump)
     }
-  }, [getEditorViewportInsets, liveLayout, mode])
+  }, [getEditorViewportInsets, liveLayout, mode, scrollPreviewTargetIntoView])
 
   const gitAssets = useMemo(
     () => collectGitAssetMap(stagedChanges, pendingAssetChanges),
@@ -1208,6 +1286,7 @@ export function MarkdownPreview() {
         remarkPlugins.push(createMarkdownReferenceHighlightPlugin(referenceHighlightRanges))
       }
 
+      remarkPlugins.push(createMarkdownHeadingAnchorPlugin())
       remarkPlugins.push(createMarkdownSourceAnchorPlugin())
 
       const sanitizedHtml = await renderMarkdownToSanitizedHtml(content, {
@@ -1821,6 +1900,7 @@ export function MarkdownPreview() {
             articleRef={previewArticleRef}
             html={html}
             theme={theme}
+            onClick={handlePreviewPaneClick}
             className="h-full w-full overflow-y-auto overflow-x-hidden"
             contentClassName="max-w-none p-8"
           />
@@ -1863,6 +1943,7 @@ export function MarkdownPreview() {
                 articleRef={livePreviewArticleRef}
                 html={html}
                 theme={theme}
+                onClick={handleLivePreviewPaneClick}
                 onScroll={handleLivePreviewScroll}
                 className={cn(
                   'min-h-0 min-w-0 h-full w-full overflow-y-auto overflow-x-hidden',
