@@ -78,4 +78,20 @@ describe('renderMarkdownToSanitizedHtml', () => {
     expect(html).toContain('id="ai--git"')
     expect(html).toContain('id="ai--git-1"')
   })
+
+  it('rewrites github file-page image urls to raw image urls', async () => {
+    const markdown = [
+      '![Theme](https://github.com/pyrohao/VisualMD/tree/main/public/assets/screenshots/Theme_Switch_Demo.gif)',
+      '![Workflow](https://github.com/pyrohao/VisualMD/blob/main/public/assets/screenshots/AI_Git_VersionControl_Demo.gif)',
+    ].join('\n\n')
+
+    const html = await renderMarkdownToSanitizedHtml(markdown)
+
+    expect(html).toContain(
+      'src="https://raw.githubusercontent.com/pyrohao/VisualMD/main/public/assets/screenshots/Theme_Switch_Demo.gif"'
+    )
+    expect(html).toContain(
+      'src="https://raw.githubusercontent.com/pyrohao/VisualMD/main/public/assets/screenshots/AI_Git_VersionControl_Demo.gif"'
+    )
+  })
 })

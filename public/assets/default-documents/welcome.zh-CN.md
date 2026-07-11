@@ -34,7 +34,7 @@ VisualMD = Markdown 编辑器 + 文档结构画布 + AI 协作面板 + Git 工�
 
 ### 1. 主题切换与阅读体验
 
-![主题切换演示](https://github.com/pyrohao/VisualMD/tree/main/public/assets/screenshots/Theme_Switch_Demo.gif)
+![主题切换演示](https://raw.githubusercontent.com/pyrohao/VisualMD/main/public/assets/screenshots/Theme_Switch_Demo.gif)
 
 > 主题切换演示：编辑、预览和阅读可以按场景切换。
 
@@ -44,7 +44,7 @@ VisualMD = Markdown 编辑器 + 文档结构画布 + AI 协作面板 + Git 工�
 
 ### 2. AI + Git 一体化工作流
 
-![AI 与 Git 版本工作流演示](https://github.com/pyrohao/VisualMD/tree/main/public/assets/screenshots/AI_Git_VersionControl_Demo.gif)
+![AI 与 Git 版本工作流演示](https://raw.githubusercontent.com/pyrohao/VisualMD/main/public/assets/screenshots/AI_Git_VersionControl_Demo.gif)
 
 > AI 与 Git 不再分散在不同工具里，而是围绕同一份文档连续工作。
 
@@ -62,7 +62,7 @@ VisualMD = Markdown 编辑器 + 文档结构画布 + AI 协作面板 + Git 工�
 
 ### 3. 实时编辑、预览与 Prototype 联动
 
-![Prototype 实时编辑演示](https://github.com/pyrohao/VisualMD/tree/main/public/assets/screenshots/Prototype_RealTime_Editing_Demo.gif)
+![Prototype 实时编辑演示](https://raw.githubusercontent.com/pyrohao/VisualMD/main/public/assets/screenshots/Prototype_RealTime_Editing_Demo.gif)
 
 > 同一份 Markdown 可以在文本、结构、预览、原型之间来回切换。
 
@@ -74,7 +74,7 @@ VisualMD = Markdown 编辑器 + 文档结构画布 + AI 协作面板 + Git 工�
 
 ### 4. 文档大纲侧边栏
 
-![文档大纲侧边栏演示](https://github.com/pyrohao/VisualMD/tree/main/public/assets/screenshots/Document_Outline_Sidebar_Demo.gif)
+![文档大纲侧边栏演示](https://raw.githubusercontent.com/pyrohao/VisualMD/main/public/assets/screenshots/Document_Outline_Sidebar_Demo.gif)
 
 > 长文档不必只靠滚动定位，可以直接按标题结构跳转。
 

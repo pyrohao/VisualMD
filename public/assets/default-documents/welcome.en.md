@@ -35,7 +35,7 @@ VisualMD = Markdown Editor + Document Structure Canvas + AI Collaboration Panel 
 
 ### 1. Theme Switching and Reading Experience
 
-![Theme Switching Demo](https://github.com/pyrohao/VisualMD/tree/main/public/assets/screenshots/Theme_Switch_Demo.gif)
+![Theme Switching Demo](https://raw.githubusercontent.com/pyrohao/VisualMD/main/public/assets/screenshots/Theme_Switch_Demo.gif)
 
 > Theme Switching Demo: Editing, previewing, and reading can be switched according to the scenario.
 
@@ -45,7 +45,7 @@ VisualMD = Markdown Editor + Document Structure Canvas + AI Collaboration Panel 
 
 ### 2. Integrated AI + Git Workflow
 
-![AI and Git Version Control Workflow Demo](https://github.com/pyrohao/VisualMD/tree/main/public/assets/screenshots/AI_Git_VersionControl_Demo.gif)
+![AI and Git Version Control Workflow Demo](https://raw.githubusercontent.com/pyrohao/VisualMD/main/public/assets/screenshots/AI_Git_VersionControl_Demo.gif)
 
 > AI and Git are no longer separated into different tools, but work continuously around the same document.
 
@@ -63,7 +63,7 @@ A typical workflow is as follows:
 
 ### 3. Real-time Editing, Preview, and Prototype Integration
 
-![Prototype Real-Time Editing Demo](https://github.com/pyrohao/VisualMD/tree/main/public/assets/screenshots/Prototype_RealTime_Editing_Demo.gif)
+![Prototype Real-Time Editing Demo](https://raw.githubusercontent.com/pyrohao/VisualMD/main/public/assets/screenshots/Prototype_RealTime_Editing_Demo.gif)
 
 > The same Markdown document can be switched between text, structure, preview, and prototype modes. - Markdown headings expand into a visual structure tree, ideal for building a framework first and then adding content chapter by chapter.
 
@@ -74,7 +74,7 @@ A typical workflow is as follows:
 
 ### 4. Document Outline Sidebar
 
-![Document Outline Sidebar Demo](https://github.com/pyrohao/VisualMD/tree/main/public/assets/screenshots/Document_Outline_Sidebar_Demo.gif)
+![Document Outline Sidebar Demo](https://raw.githubusercontent.com/pyrohao/VisualMD/main/public/assets/screenshots/Document_Outline_Sidebar_Demo.gif)
 
 > Long documents don't need to rely solely on scrolling; you can directly jump by heading structure.
 

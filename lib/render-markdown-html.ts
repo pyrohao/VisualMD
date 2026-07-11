@@ -5,6 +5,7 @@ import remarkParse from 'remark-parse'
 import remarkGfm from 'remark-gfm'
 import remarkRehype from 'remark-rehype'
 import rehypeStringify from 'rehype-stringify'
+import { normalizeRenderedHtmlImageSources } from '@/lib/remote-image-sources'
 import { sanitizeRenderedHtml } from '@/lib/safe-html'
 
 type RenderMarkdownToHtmlOptions = {
@@ -34,7 +35,7 @@ export async function renderMarkdownToSanitizedHtml(
     .use(rehypeStringify, { allowDangerousHtml: true })
     .process(markdown)
 
-  return sanitizeRenderedHtml(String(result))
+  return sanitizeRenderedHtml(normalizeRenderedHtmlImageSources(String(result)))
 }
 
 export default renderMarkdownToSanitizedHtml
