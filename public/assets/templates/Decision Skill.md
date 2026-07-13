@@ -1,23 +1,23 @@
 ---
 name: decision-skill
-description: 在给定上下文下为特定问题提供判断与打分标准（什么时候用）
+description: Provides decision criteria and scoring rules for a specific problem in a given context.
 ---
-# 说明（中文）
-## 目标
-- 描述此技能的判断目标（例如：审查架构是否满足可扩展性）
+# Decision Overview
+## Goal
+- Describe the decision objective of this skill (for example, whether an architecture meets scalability requirements)
 
-## 判定矩阵（Decision Matrix）
-| 条件 | 权重 | 通过阈值 |
-|------|------|---------|
-| 可扩展性 | 0.4 | >= 0.7 |
-| 性能 | 0.3 | >= 0.8 |
-| 可维护性 | 0.3 | >= 0.6 |
+## Decision Matrix
+| Criterion | Weight | Pass Threshold |
+|-----------|--------|----------------|
+| Scalability | 0.4 | >= 0.7 |
+| Performance | 0.3 | >= 0.8 |
+| Maintainability | 0.3 | >= 0.6 |
 
-## 流程（非顺序，判断步骤）
-1. 收集证据（logs / metrics / diagrams）
-2. 依据判定矩阵打分
-3. 输出结论：Approve / Needs Changes / Reject
-4. 建议修复策略（如果需要）
+## Process (non-linear decision steps)
+1. Collect evidence (logs / metrics / diagrams)
+2. Score the evidence against the decision matrix
+3. Produce a conclusion: Approve / Needs Changes / Reject
+4. Recommend remediation if needed
 
-## 典型用法示例
-- 给出输入示例与判定输出
+## Typical Usage Example
+- Provide a sample input and the resulting decision output

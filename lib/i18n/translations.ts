@@ -236,6 +236,12 @@ export interface Translations {
     gitConfigured: string
     gitNotConfigured: string
   }
+  themeToggle: {
+    light: string
+    dark: string
+    reading: string
+    currentThemeTitle: string
+  }
   aiPanel: {
     title: string
     customOpenAI: string
@@ -626,6 +632,12 @@ export const translations: Record<Language, Translations> = {
       gitConfigured: 'Git 配置已填写，可在这里直接连接仓库',
       gitNotConfigured: '请先填写 Git 平台、访问令牌和仓库信息',
     },
+    themeToggle: {
+      light: '明亮',
+      dark: '黑暗',
+      reading: '阅读',
+      currentThemeTitle: '当前主题: {theme}，点击切换到下一个主题',
+    },
     aiPanel: {
       title: 'AI 配置',
       customOpenAI: '自定义 OpenAI',
@@ -1011,6 +1023,12 @@ export const translations: Record<Language, Translations> = {
       openGitSettings: 'Open Git Settings',
       gitConfigured: 'Git configuration is ready. Connect to a repository from here.',
       gitNotConfigured: 'Fill in provider, token, and repository first.',
+    },
+    themeToggle: {
+      light: 'Light',
+      dark: 'Dark',
+      reading: 'Reading',
+      currentThemeTitle: 'Current theme: {theme}. Click to switch to the next theme',
     },
     aiPanel: {
       title: 'AI Configuration',

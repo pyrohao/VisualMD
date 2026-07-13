@@ -89,31 +89,31 @@ const BUILT_IN_TEMPLATES = [
   {
     id: 'template-capability',
     name: 'Capability Skill',
-    description: '能力技能模板',
+    description: 'Capability skill template',
     fileName: 'Capability Skill.md',
   },
   {
     id: 'template-constraint',
     name: 'Constraint Skill',
-    description: '约束技能模板',
+    description: 'Constraint skill template',
     fileName: 'Constraint Skill.md',
   },
   {
     id: 'template-decision',
     name: 'Decision Skill',
-    description: '决策技能模板',
+    description: 'Decision skill template',
     fileName: 'Decision Skill.md',
   },
   {
     id: 'template-procedural',
     name: 'Procedural Skill',
-    description: '程序技能模板',
+    description: 'Procedural skill template',
     fileName: 'Procedural Skill.md',
   },
   {
     id: 'template-prompt',
     name: 'Prompt Template',
-    description: '提示词模板',
+    description: 'Prompt template',
     fileName: 'Prompt Template.md',
   },
 ]

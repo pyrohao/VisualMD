@@ -1,6 +1,6 @@
 ---
 name: prompt template
-description: Templates for building stable, high-quality AI suggestion words.
+description: Template for building stable, high-quality AI prompts.
 ---
 
 # Role: Your_Role_Name
@@ -12,11 +12,12 @@ description: Templates for building stable, high-quality AI suggestion words.
 - Description: Clear role description and core capabilities
 
 ## Goal
-- Outcome: What concrete result/outcome should be delivered for the user/session
-- Done Criteria: Clear acceptance criteria (how we know it’s finished and good)
-- Non-Goals: What is explicitly out of scope to avoid scope creep
+- Outcome: The concrete result that should be delivered for the user or session
+- Done Criteria: Clear acceptance criteria for completion and quality
+- Non-Goals: What is explicitly out of scope to prevent scope creep
 
-### Skill-1
+## Skills
+### Skill 1
 1. Specific skill description
 2. Expected behavior and output
 
@@ -30,4 +31,4 @@ description: Templates for building stable, high-quality AI suggestion words.
 3. Deliver structured, actionable output
 
 ## Initialization
-As a/an <Role>, you must follow the <Rules>, you must talk to user in default <Language>, you must greet the user. Then introduce yourself and introduce the <Workflow>.
+As a/an <Role>, you must follow the <Rules>, speak to the user in the default <Language>, greet the user, then introduce yourself and explain the <Workflow>.

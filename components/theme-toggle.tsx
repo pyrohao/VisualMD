@@ -12,28 +12,27 @@
 import { Sun, Moon, BookOpen } from 'lucide-react'
 import { Button } from './ui/button'
 import { useThemeStore, type ThemeMode } from '@/stores/themeStore'
-import { useCallback, useEffect, useState } from 'react'
+import { useTranslation } from '@/stores/languageStore'
+import { type ReactNode, useCallback, useEffect, useState } from 'react'
 
 /**
  * 主题配置 - 图标和标签
  */
-const themeIcons: Record<ThemeMode, { label: string; icon: React.ReactNode }> = {
+const themeIcons: Record<ThemeMode, { icon: ReactNode }> = {
   light: {
-    label: '明亮',
     icon: <Sun className="h-4 w-4" />,
   },
   dark: {
-    label: '黑暗',
     icon: <Moon className="h-4 w-4" />,
   },
   reading: {
-    label: '阅读',
     icon: <BookOpen className="h-4 w-4" />,
   },
 }
 
 export function ThemeToggle() {
   const { theme, setTheme, getThemeConfig } = useThemeStore()
+  const { t } = useTranslation()
   const [mounted, setMounted] = useState(false)
 
   useEffect(() => {
@@ -41,7 +40,13 @@ export function ThemeToggle() {
   }, [])
 
   const themeConfig = getThemeConfig()
-  const currentTheme = themeIcons[theme]
+  const themeLabels: Record<ThemeMode, string> = {
+    light: t('themeToggle.light'),
+    dark: t('themeToggle.dark'),
+    reading: t('themeToggle.reading'),
+  }
+  const currentThemeIcon = themeIcons[theme]
+  const currentThemeLabel = themeLabels[theme]
 
   const handleClick = useCallback(() => {
     const themes: ThemeMode[] = ['light', 'dark', 'reading']
@@ -62,10 +67,10 @@ export function ThemeToggle() {
           backgroundColor: '#0969da15',
           border: '1px solid #d0d7de',
         }}
-        title="主题切换"
+        title="Theme toggle"
       >
         <span style={{ color: '#0969da' }}><Sun className="h-4 w-4" /></span>
-        <span className="text-sm font-medium">明亮</span>
+        <span className="text-sm font-medium">Light</span>
       </Button>
     )
   }
@@ -89,10 +94,10 @@ export function ThemeToggle() {
         e.currentTarget.style.backgroundColor = `${themeConfig.accent}15`
         e.currentTarget.style.borderColor = themeConfig.border
       }}
-      title={`当前主题: ${currentTheme.label}，点击切换到下一个主题`}
+      title={t('themeToggle.currentThemeTitle').replace('{theme}', currentThemeLabel)}
     >
-      <span style={{ color: themeConfig.accent }}>{currentTheme.icon}</span>
-      <span className="text-sm font-medium">{currentTheme.label}</span>
+      <span style={{ color: themeConfig.accent }}>{currentThemeIcon.icon}</span>
+      <span className="text-sm font-medium">{currentThemeLabel}</span>
     </Button>
   )
 }

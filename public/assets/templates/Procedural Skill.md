@@ -1,24 +1,24 @@
 ---
 name: your-skill-name
-description: 简要描述该 skill 的目的与何时使用（1-1024 字符）
+description: Briefly describe the purpose of this skill and when to use it (1-1024 characters).
 ---
-# 说明（中文）
-## 输入
-- 描述预期输入（文件、参数、API）
+# Overview
+## Inputs
+- Describe the expected inputs (files, parameters, APIs)
 
-## 预期输出
-- 列出输出文件/产物
+## Expected Outputs
+- List the output files or deliverables
 
-## 步骤（Implementation）
-1. 验证依赖：`scripts/check_deps.sh`
-2. 执行转换：`scripts/run.sh --input <file>`
-3. 单元/验收：`scripts/validate.py`
+## Steps (Implementation)
+1. Validate dependencies: `scripts/check_deps.sh`
+2. Run the transformation: `scripts/run.sh --input <file>`
+3. Execute unit or acceptance checks: `scripts/validate.py`
 
-## 错误处理与边界条件
-- 列出常见失败原因与恢复建议
+## Error Handling and Edge Cases
+- List common failure reasons and recovery guidance
 
-## 例子
-- 示例命令与期望输出
+## Example
+- Example command and expected output
 
-## 资源
-- references/USAGE.md
+## Resources
+- `references/USAGE.md`
