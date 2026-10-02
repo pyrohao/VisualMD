@@ -42,6 +42,15 @@ export function FileItem({ file, isActive, isModified, onClick }: FileItemProps)
   useEffect(() => {
     setMounted(true)
   }, [])
+
+  useEffect(() => {
+    if (!isEditing || !inputRef.current) return
+
+    const input = inputRef.current
+    const extensionIndex = input.value.lastIndexOf('.')
+    const cursorPosition = extensionIndex > 0 ? extensionIndex : input.value.length
+    input.setSelectionRange(cursorPosition, cursorPosition)
+  }, [isEditing])
   
   const { renameFile, deleteFile, exportFile } = useFileSystemStore()
 
