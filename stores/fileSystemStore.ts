@@ -526,13 +526,18 @@ export const useFileSystemStore = create<FileSystemStore>()(
         
         renameFile: (id: string, newName: string) => {
           const { files } = get()
+          const file = files.find((item) => item.id === id)
+          const nextName = newName.trim() || file?.name
+          if (!file || !nextName) return
+
           set({
             files: files.map(f =>
               f.id === id
-                ? { ...f, name: newName.trim() || f.name, updatedAt: Date.now() }
+                ? { ...f, name: nextName, updatedAt: Date.now() }
                 : f
             ),
           })
+          useTabsStore.getState().renameLocalFileTab(id, nextName)
         },
         
         deleteFile: (id: string) => {

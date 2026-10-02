@@ -40,6 +40,7 @@ interface TabsStore {
   openGitFileInTab: (tab: Omit<Tab, 'id'>) => string
   findTabByFileId: (fileId: string) => Tab | null
   updateTabFileId: (tabId: string, fileId: string) => void
+  renameLocalFileTab: (fileId: string, fileName: string) => void
   closeTab: (tabId: string) => void
   closeAllTabs: () => void
   activateTab: (tabId: string) => void
@@ -223,6 +224,17 @@ export const useTabsStore = create<TabsStore>()(
           set({
             tabs: tabs.map((tab) =>
               tab.id === tabId ? { ...tab, fileId } : tab
+            ),
+          })
+        },
+
+        renameLocalFileTab: (fileId: string, fileName: string) => {
+          const { tabs } = get()
+          set({
+            tabs: tabs.map((tab) =>
+              tab.sourceType !== 'git' && tab.fileId === fileId
+                ? { ...tab, fileName }
+                : tab
             ),
           })
         },
